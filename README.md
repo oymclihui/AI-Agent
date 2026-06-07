@@ -95,14 +95,10 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-# 安装依赖（若已有 requirements.txt）
+# 安装依赖
 pip install -r requirements.txt
 
-# 或从现有环境导出后安装主要包：
-# fastapi uvicorn sqlalchemy aiosqlite pydantic-settings httpx
-# langchain langchain-ollama langchain-openai langchain-chroma chromadb pymilvus
-
-# 配置环境变量（可选，复制后按需修改）
+# 配置环境变量（复制示例文件后按需修改）
 copy .env.example .env   # Windows
 # cp .env.example .env   # macOS / Linux
 
@@ -120,6 +116,11 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd frontend
 npm install
+
+# 可选：自定义后端地址
+copy .env.example .env.local   # Windows
+# cp .env.example .env.local   # macOS / Linux
+
 npm run dev
 ```
 
@@ -140,35 +141,23 @@ python smoke_test.py
 
 ## 配置说明
 
-在 `backend/.env` 中可覆盖以下常用项（均为可选，有合理默认值）：
+| 文件 | 说明 |
+|------|------|
+| `backend/.env.example` | 后端全部环境变量模板，复制为 `backend/.env` |
+| `frontend/.env.example` | 前端 API 地址，复制为 `frontend/.env.local` |
+| `backend/requirements.txt` | Python 依赖锁定列表 |
 
-```env
-# 应用
-APP_NAME=AIAGNET
-SECRET_KEY=changeme-in-production-32chars!!
+一键配置示例：
 
-# 数据库（默认本地 SQLite，无需 PostgreSQL）
-DATABASE_URL=sqlite+aiosqlite:///./aiagnet.db
+```bash
+# 后端
+cd backend && cp .env.example .env
 
-# LLM — 默认使用本地 Ollama
-OLLAMA_BASE_URL=http://localhost:11434
-DEFAULT_LLM_PROVIDER=ollama
-DEFAULT_LLM_MODEL=qwen3.6:35b
-DEFAULT_EMBEDDING_MODEL=nomic-embed-text
-
-# 可选：OpenAI / Anthropic
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-
-# 向量库：chroma（本地）或 milvus（远程）
-VECTOR_STORE_TYPE=chroma
-CHROMA_MODE=local
-CHROMA_LOCAL_PATH=./chroma_data
-MILVUS_URI=http://localhost:19530
-
-# CORS
-ALLOWED_ORIGINS=["http://localhost:3000"]
+# 前端
+cd frontend && cp .env.example .env.local
 ```
+
+常用项：`OLLAMA_BASE_URL`、`DEFAULT_LLM_MODEL`、`OPENAI_API_KEY`、`VECTOR_STORE_TYPE`（`chroma` / `milvus`）。
 
 > **注意**：请勿将 `.env` 提交到 Git。仓库已通过 `.gitignore` 排除敏感文件。
 
