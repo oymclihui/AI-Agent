@@ -4,8 +4,10 @@
 
 [![Repository](https://img.shields.io/badge/GitHub-AI--Agent-blue)](https://github.com/oymclihui/AI-Agent)
 
+**语言 / Languages：** **中文** · [English](README.en.md)
+
 <p align="center">
-  <img src="docs/screenshot.png" alt="AIAGNET 系统界面" width="900" />
+  <img src="docs/screenshot.png" alt="AIAGNET 系统界面（中文）" width="900" />
 </p>
 
 ---
@@ -62,6 +64,8 @@ AI-Agent/
 │       └── lib/          # API 客户端、i18n
 └── README.md
 ```
+
+Screenshots: [`docs/screenshot.png`](docs/screenshot.png) (中文) · [`docs/screenshot-en.png`](docs/screenshot-en.png) (English)
 
 ---
 
@@ -212,3 +216,4 @@ docker run -p 3000:3000 aiagnet-frontend
 ## 链接
 
 - 仓库：[https://github.com/oymclihui/AI-Agent](https://github.com/oymclihui/AI-Agent)
+- 英文说明：[README.en.md](README.en.md)
