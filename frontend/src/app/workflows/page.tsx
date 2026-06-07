@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Workflow, Trash2, RefreshCw, GitBranch, Bot, Zap, Code2, Globe, User, Cpu } from "lucide-react";
+import { Plus, Workflow, Trash2, RefreshCw, GitBranch, Bot, Zap, Code2, Globe, User, Cpu, Sparkles, PenLine, Loader2 } from "lucide-react";
 import { workflowsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
@@ -40,6 +40,9 @@ export default function WorkflowsPage() {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [mode, setMode] = useState<"nl" | "manual">("nl");
+  const [nlText, setNlText] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", process_type: "sequential" });
 
   const load = async () => {
@@ -54,6 +57,33 @@ export default function WorkflowsPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  const openCreate = () => {
+    setMode("nl");
+    setNlText("");
+    setForm({ name: "", description: "", process_type: "sequential" });
+    setShowCreate(true);
+  };
+
+  const generateFromNL = async () => {
+    if (nlText.trim().length < 5) return;
+    setGenerating(true);
+    try {
+      const { data } = await workflowsApi.generate({ description: nlText.trim() });
+      toast.success(w.generated[lang]);
+      setShowCreate(false);
+      setNlText("");
+      load();
+      if (data?.id) {
+        window.location.href = `/workflows/${data.id}/designer`;
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ?? w.generateFailed[lang]);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const create = async () => {
     try {
@@ -108,7 +138,7 @@ export default function WorkflowsPage() {
             <RefreshCw className="h-4 w-4" /> {w.seedTemplates[lang]}
           </button>
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={openCreate}
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition-colors"
           >
             <Plus className="h-4 w-4" /> {w.newWorkflow[lang]}
@@ -183,8 +213,43 @@ export default function WorkflowsPage() {
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
             <h2 className="mb-4 text-lg font-semibold text-white">{w.newWorkflow[lang]}</h2>
+
+            <div className="mb-4 flex rounded-lg border border-[#2d2d4e] p-0.5 text-sm">
+              <button
+                onClick={() => setMode("nl")}
+                className={`flex flex-1 items-center justify-center gap-1 rounded-md py-2 ${mode === "nl" ? "bg-blue-600 text-white" : "text-slate-400"}`}
+              >
+                <Sparkles className="h-3.5 w-3.5" /> {w.nlMode[lang]}
+              </button>
+              <button
+                onClick={() => setMode("manual")}
+                className={`flex flex-1 items-center justify-center gap-1 rounded-md py-2 ${mode === "manual" ? "bg-blue-600 text-white" : "text-slate-400"}`}
+              >
+                <PenLine className="h-3.5 w-3.5" /> {w.manualMode[lang]}
+              </button>
+            </div>
+
+            {mode === "nl" ? (
+              <div className="space-y-3">
+                <textarea
+                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none"
+                  rows={6}
+                  placeholder={w.nlPlaceholder[lang]}
+                  value={nlText}
+                  onChange={(e) => setNlText(e.target.value)}
+                />
+                <button
+                  onClick={generateFromNL}
+                  disabled={generating || nlText.trim().length < 5}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-purple-600 py-2.5 text-sm text-white hover:bg-purple-700 disabled:opacity-40"
+                >
+                  {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {generating ? w.generating[lang] : w.generate[lang]}
+                </button>
+              </div>
+            ) : (
             <div className="space-y-3">
               <div>
                 <label className="mb-1 block text-xs text-slate-400">{c.name[lang]}</label>
@@ -217,9 +282,12 @@ export default function WorkflowsPage() {
                 </select>
               </div>
             </div>
+            )}
             <div className="mt-6 flex justify-end gap-3">
               <button onClick={() => setShowCreate(false)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white">{c.cancel[lang]}</button>
-              <button onClick={create} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">{c.create[lang]}</button>
+              {mode === "manual" && (
+                <button onClick={create} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">{c.create[lang]}</button>
+              )}
             </div>
           </div>
         </div>

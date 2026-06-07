@@ -8,7 +8,24 @@ from app.db import models  # noqa: F401 - ensure all models are registered
 
 async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
+        if str(engine.url).startswith("sqlite"):
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.exec_driver_sql("PRAGMA busy_timeout=30000")
         await conn.run_sync(Base.metadata.create_all)
+    await _migrate_schema(engine)
+
+
+async def _migrate_schema(engine: AsyncEngine) -> None:
+    """Lightweight schema patches for SQLite (create_all does not alter existing tables)."""
+    if not str(engine.url).startswith("sqlite"):
+        return
+    async with engine.begin() as conn:
+        result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
+        cols = {row[1] for row in result.fetchall()}
+        if "skills_config" not in cols:
+            await conn.exec_driver_sql(
+                "ALTER TABLE agents ADD COLUMN skills_config JSON DEFAULT '[]'"
+            )
 
 
 async def seed_default_models(session) -> None:
@@ -160,6 +177,146 @@ async def seed_template_agents(session) -> None:
     await session.commit()
 
 
+async def seed_template_skills(session) -> None:
+    from sqlalchemy import select
+    from app.db.models import Skill, SkillStatus
+
+    result = await session.execute(select(Skill).limit(1))
+    if result.scalar_one_or_none():
+        return
+
+    templates = [
+        dict(
+            slug="code-review",
+            display_name="代码审查",
+            description=(
+                "Reviews code for quality, security, and maintainability following team standards. "
+                "Use when reviewing pull requests, code changes, or when the user asks for a code review."
+            ),
+            instructions_md="""## Quick Start
+
+When reviewing code:
+
+1. Check correctness and edge cases
+2. Verify security (injection, auth, secrets)
+3. Assess readability and maintainability
+4. Confirm tests cover the change
+
+## Feedback format
+
+- **Critical**: Must fix before merge
+- **Suggestion**: Consider improving
+- **Nice to have**: Optional enhancement
+""",
+            status=SkillStatus.active,
+            tags=["dev", "review"],
+        ),
+        dict(
+            slug="commit-message",
+            display_name="Git 提交信息",
+            description=(
+                "Generates descriptive commit messages by analyzing git diffs. "
+                "Use when the user asks for help writing commit messages or reviewing staged changes."
+            ),
+            instructions_md="""## Format
+
+Use Conventional Commits:
+
+```
+type(scope): short summary
+
+Optional body explaining why and what changed.
+```
+
+Types: feat, fix, docs, refactor, test, chore
+
+## Example
+
+Input: Added JWT login endpoint
+Output:
+```
+feat(auth): add JWT login endpoint
+
+Implement token issuance and validation middleware.
+```
+""",
+            status=SkillStatus.active,
+            tags=["git", "dev"],
+        ),
+    ]
+
+    for tpl in templates:
+        session.add(Skill(
+            id=generate_uuid(),
+            slug=tpl["slug"],
+            display_name=tpl["display_name"],
+            description=tpl["description"],
+            instructions_md=tpl["instructions_md"],
+            status=tpl["status"],
+            scope="global",
+            auto_invoke=False,
+            tags=tpl.get("tags", []),
+        ))
+
+    await session.commit()
+
+
+async def seed_template_employees(session) -> None:
+    from sqlalchemy import select
+    from app.db.models import (
+        Agent, DigitalEmployee, EmployeeScheduledTask,
+        EmployeeStatus, ScheduleType, EmployeeTaskType,
+    )
+    from app.core.employees.schedule import compute_next_run
+
+    result = await session.execute(select(DigitalEmployee).limit(1))
+    if result.scalar_one_or_none():
+        return
+
+    agent_result = await session.execute(
+        select(Agent).where(Agent.name == "深度研究分析师").limit(1)
+    )
+    agent = agent_result.scalar_one_or_none()
+    if not agent:
+        agent = (await session.execute(select(Agent).limit(1))).scalar_one_or_none()
+    if not agent:
+        return
+
+    emp_id = generate_uuid()
+    session.add(DigitalEmployee(
+        id=emp_id,
+        name="小研",
+        title="研究助理",
+        description="负责定时信息搜集与简报生成，绑定深度研究分析师智能体。",
+        status=EmployeeStatus.active,
+        agent_id=agent.id,
+        skills_config=[],
+        timezone="Asia/Shanghai",
+    ))
+
+    task = EmployeeScheduledTask(
+        id=generate_uuid(),
+        employee_id=emp_id,
+        name="工作日早报",
+        description="每个工作日上午 9 点生成简要行业动态摘要",
+        enabled=True,
+        schedule_type=ScheduleType.cron,
+        cron_expression="0 9 * * 1-5",
+        timezone="Asia/Shanghai",
+        task_type=EmployeeTaskType.agent,
+        task_config={
+            "prompt": "请用 3-5 条要点总结今日 AI 与自动化领域的值得关注动态，中文输出。",
+        },
+    )
+    task.next_run_at = compute_next_run(
+        "cron",
+        cron_expression=task.cron_expression,
+        timezone_name=task.timezone,
+    )
+    session.add(task)
+    await session.commit()
+
+
 async def seed_template_workflows(session) -> None:
     from sqlalchemy import select
     from app.db.models import Workflow, WorkflowStatus, ProcessType
@@ -218,3 +375,114 @@ async def seed_template_workflows(session) -> None:
         ))
 
     await session.commit()
+
+
+PLATFORM_KB_NAME = "AI-AGENT 平台文档"
+PLATFORM_ROADMAP_FILENAME = "platform-roadmap.md"
+
+
+async def seed_platform_knowledge_base(session) -> None:
+    """Seed a knowledge base with platform roadmap / future plans (idempotent)."""
+    import structlog
+    from pathlib import Path
+    from sqlalchemy import select
+    from app.db.models import KnowledgeBase, Document, KBStatus
+    from app.knowledge.pipeline import IngestionPipeline
+    from app.knowledge.storage import save_document_file
+    from app.config import settings
+
+    log = structlog.get_logger(__name__)
+
+    result = await session.execute(
+        select(KnowledgeBase).where(KnowledgeBase.name == PLATFORM_KB_NAME).limit(1)
+    )
+    kb = result.scalar_one_or_none()
+
+    data_path = (
+        Path(__file__).resolve().parent.parent
+        / "knowledge"
+        / "data"
+        / PLATFORM_ROADMAP_FILENAME
+    )
+    if not data_path.is_file():
+        log.warning("platform_kb_seed_skipped", reason="roadmap file missing", path=str(data_path))
+        return
+
+    if kb:
+        doc_result = await session.execute(
+            select(Document).where(
+                Document.knowledge_base_id == kb.id,
+                Document.filename == PLATFORM_ROADMAP_FILENAME,
+            ).limit(1)
+        )
+        existing_doc = doc_result.scalar_one_or_none()
+        if existing_doc:
+            if not existing_doc.storage_path:
+                file_bytes = data_path.read_bytes()
+                existing_doc.storage_path = save_document_file(
+                    kb.id, existing_doc.id, PLATFORM_ROADMAP_FILENAME, file_bytes
+                )
+                await session.commit()
+                log.info("platform_kb_storage_backfilled", doc_id=existing_doc.id)
+            return
+    else:
+        kb = KnowledgeBase(
+            id=generate_uuid(),
+            name=PLATFORM_KB_NAME,
+            description="AI-AGENT 产品规划、开发路线与平台说明，供检索与问答参考。",
+            status=KBStatus.processing,
+            embedding_model=settings.DEFAULT_EMBEDDING_MODEL,
+            chunk_size=1000,
+            chunk_overlap=200,
+            metadata_={"seed": "platform-docs", "category": "roadmap"},
+        )
+        session.add(kb)
+        await session.flush()
+
+    file_bytes = data_path.read_bytes()
+    doc_id = generate_uuid()
+    doc = Document(
+        id=doc_id,
+        knowledge_base_id=kb.id,
+        filename=PLATFORM_ROADMAP_FILENAME,
+        file_type="md",
+        file_size=len(file_bytes),
+        status=KBStatus.processing,
+        storage_path=save_document_file(kb.id, doc_id, PLATFORM_ROADMAP_FILENAME, file_bytes),
+        metadata_={"seed": "platform-roadmap"},
+    )
+    session.add(doc)
+    await session.flush()
+
+    try:
+        pipeline = IngestionPipeline(
+            knowledge_base_id=kb.id,
+            embedding_model=kb.embedding_model,
+            chunk_size=kb.chunk_size,
+            chunk_overlap=kb.chunk_overlap,
+        )
+        chunk_count = await pipeline.ingest_file(
+            file_bytes, PLATFORM_ROADMAP_FILENAME, doc_id
+        )
+        doc.status = KBStatus.ready
+        doc.chunk_count = chunk_count
+        kb.document_count = (kb.document_count or 0) + 1
+        kb.status = KBStatus.ready
+        await session.commit()
+        log.info(
+            "platform_kb_seeded",
+            kb_id=kb.id,
+            doc_id=doc_id,
+            chunks=chunk_count,
+        )
+    except Exception as exc:
+        doc.status = KBStatus.error
+        doc.metadata_ = {**(doc.metadata_ or {}), "error": str(exc)}
+        kb.status = KBStatus.error
+        await session.commit()
+        log.warning(
+            "platform_kb_seed_failed",
+            kb_id=kb.id,
+            error=str(exc),
+            hint="Ensure Ollama is running for embedding ingestion",
+        )

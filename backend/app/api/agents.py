@@ -10,9 +10,8 @@ from app.db.base import generate_uuid
 from pydantic import BaseModel, Field
 from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse, AgentRunRequest
 from app.config import settings
-from app.core.agents.base import AgentDefinition, Task, AgentType
-from app.core.agents.executor import AgentExecutor
-from app.core.tools.registry import ToolRegistry
+from app.core.agents.base import AgentDefinition, Task
+from app.core.skills.factory import build_agent_executor
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -62,6 +61,7 @@ async def generate_agent(payload: AgentGenerateRequest, db: AsyncSession = Depen
         temperature=float(spec.get("temperature", 0.7)),
         max_iterations=10,
         tools_config=tools_config,
+        skills_config=[],
         memory_config={},
     )
     db.add(agent)
@@ -96,6 +96,7 @@ async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db))
         temperature=payload.temperature,
         max_iterations=payload.max_iterations,
         tools_config=[t.model_dump() for t in payload.tools_config],
+        skills_config=[s.model_dump() for s in payload.skills_config],
         memory_config=payload.memory_config.model_dump(),
     )
     db.add(agent)
@@ -119,7 +120,14 @@ async def update_agent(agent_id: str, payload: AgentUpdate, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Agent not found")
 
     for field, value in payload.model_dump(exclude_none=True).items():
-        setattr(agent, field, value)
+        if field == "tools_config" and value is not None:
+            agent.tools_config = [t if isinstance(t, dict) else t for t in value]
+        elif field == "skills_config" and value is not None:
+            agent.skills_config = [s if isinstance(s, dict) else s for s in value]
+        elif field == "memory_config" and value is not None:
+            agent.memory_config = value if isinstance(value, dict) else value
+        else:
+            setattr(agent, field, value)
 
     await db.flush()
     await db.refresh(agent)
@@ -144,23 +152,7 @@ async def run_agent(
     if not agent_model:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    tool_names = [t.get("tool_name") for t in (agent_model.tools_config or [])]
-    registry = ToolRegistry.get_instance()
-    tools = registry.get_tools_for_agent(tool_names)
-
-    definition = AgentDefinition(
-        id=agent_model.id,
-        name=agent_model.name,
-        role=agent_model.role,
-        goal=agent_model.goal,
-        backstory=agent_model.backstory or "",
-        llm_provider=agent_model.llm_provider,
-        llm_model=agent_model.llm_model,
-        temperature=agent_model.temperature,
-        max_iterations=agent_model.max_iterations,
-        tools=tool_names,
-    )
-    executor = AgentExecutor(definition=definition, tools=tools)
+    executor = await build_agent_executor(db, agent_model)
     task = Task(description=payload.task)
 
     execution = AgentExecution(

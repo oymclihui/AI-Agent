@@ -10,7 +10,7 @@ import time
 import structlog
 
 from app.core.workflow.state import WorkflowState
-from app.core.workflow.nodes import BaseNode, ConditionNode, EndNode
+from app.core.workflow.nodes import BaseNode, ConditionNode, EndNode, SwitchNode
 
 logger = structlog.get_logger(__name__)
 
@@ -53,11 +53,13 @@ class WorkflowGraph:
         node = self.nodes.get(current_node_id)
 
         # Conditional routing
-        if current_node_id in self.conditional_edges and isinstance(node, ConditionNode):
-            routing_key = node.evaluate(state)
-            routing_map = self.conditional_edges[current_node_id]
-            next_id = routing_map.get(routing_key, routing_map.get("default"))
-            return [next_id] if next_id else []
+        if current_node_id in self.conditional_edges:
+            node = self.nodes.get(current_node_id)
+            if isinstance(node, (ConditionNode, SwitchNode)):
+                routing_key = node.evaluate(state)
+                routing_map = self.conditional_edges[current_node_id]
+                next_id = routing_map.get(routing_key, routing_map.get("default"))
+                return [next_id] if next_id else []
 
         # Regular edges
         return self.edges.get(current_node_id, [])
@@ -160,18 +162,35 @@ class WorkflowBuilder:
     ) -> WorkflowGraph:
         from app.core.workflow.nodes import (
             StartNode, EndNode, AgentNode, ToolNode, ConditionNode, HumanNode,
-            LLMNode, HttpNode, CodeNode, NoteNode,
+            LLMNode, HttpNode, CodeNode, NoteNode, TriggerNode, SwitchNode,
+            SetNode, MergeNode, SplitNode, FilterNode, WaitNode, TransformNode,
+            IntegrationNode, SubWorkflowNode, RespondWebhookNode, StopErrorNode,
         )
+        from app.core.workflow.node_catalog import get_node_definition, catalog_type_to_exec_type
         from app.core.agents.executor import AgentExecutor
 
         TYPE_MAP = {
             "startnode": "start", "endnode": "end", "agentnode": "agent",
             "toolnode": "tool", "conditionnode": "condition", "humannode": "human",
             "llmnode": "llm", "httpnode": "http", "codenode": "code", "notenode": "note",
+            "triggernode": "trigger", "switchnode": "switch", "setnode": "set",
+            "mergenode": "merge", "splitnode": "split", "filternode": "filter",
+            "waitnode": "wait", "transformnode": "transform", "integrationnode": "integration",
+            "subworkflownode": "subworkflow", "respondwebhooknode": "respond_webhook",
+            "stoperrornode": "stop_error", "if": "condition", "httprequest": "http",
+            "llmchain": "llm", "aiagent": "agent", "humansintheloop": "human",
+            "executeworkflow": "subworkflow", "toolcall": "tool", "stickynote": "note",
+            "noop": "note", "manualtrigger": "trigger", "webhooktrigger": "trigger",
+            "crontrigger": "trigger", "scheduletrigger": "trigger", "emailtrigger": "trigger",
+            "chattrigger": "trigger",
         }
 
-        def _normalize_type(raw: str) -> str:
-            key = (raw or "").lower().replace("_", "")
+        def _normalize_type(raw: str, catalog_id: str | None = None) -> str:
+            if catalog_id:
+                exec_type = catalog_type_to_exec_type(catalog_id)
+                if exec_type:
+                    return exec_type
+            key = (raw or "").lower().replace("_", "").replace("-", "")
             return TYPE_MAP.get(key, raw.lower().removesuffix("node") if raw.endswith("Node") else raw.lower())
 
         def _resolve_agent(config: dict):
@@ -191,8 +210,14 @@ class WorkflowBuilder:
             nid = node_def.get("id")
             if not nid:
                 continue
-            ntype = _normalize_type(node_def.get("type", ""))
-            config = node_def.get("config", {})
+            catalog_id = node_def.get("catalog_id") or node_def.get("config", {}).get("_catalog_id")
+            ntype = _normalize_type(node_def.get("type", ""), catalog_id)
+            config = dict(node_def.get("config", {}))
+            if catalog_id:
+                config["_catalog_id"] = catalog_id
+                defn = get_node_definition(catalog_id)
+                if defn and defn.get("integration"):
+                    config["_integration"] = defn["integration"]
 
             if ntype == "start":
                 node = StartNode(nid, config)
@@ -221,6 +246,30 @@ class WorkflowBuilder:
                 node = CodeNode(nid, config)
             elif ntype == "note":
                 node = NoteNode(nid, config)
+            elif ntype == "trigger":
+                node = TriggerNode(nid, config)
+            elif ntype == "switch":
+                node = SwitchNode(nid, config)
+            elif ntype == "set":
+                node = SetNode(nid, config)
+            elif ntype == "merge":
+                node = MergeNode(nid, config)
+            elif ntype == "split":
+                node = SplitNode(nid, config)
+            elif ntype == "filter":
+                node = FilterNode(nid, config)
+            elif ntype == "wait":
+                node = WaitNode(nid, config)
+            elif ntype == "transform":
+                node = TransformNode(nid, config)
+            elif ntype == "integration":
+                node = IntegrationNode(nid, config)
+            elif ntype == "subworkflow":
+                node = SubWorkflowNode(nid, config)
+            elif ntype == "respond_webhook":
+                node = RespondWebhookNode(nid, config)
+            elif ntype == "stop_error":
+                node = StopErrorNode(nid, config)
             else:
                 logger.warning("unknown_workflow_node_type", node_id=nid, type=node_def.get("type"))
                 continue

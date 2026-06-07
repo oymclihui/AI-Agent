@@ -3,7 +3,7 @@ SQLAlchemy ORM models for all AIAGNET entities.
 """
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float,
-    ForeignKey, JSON, Enum as SAEnum
+    ForeignKey, JSON, Enum as SAEnum, DateTime,
 )
 from sqlalchemy.orm import relationship
 import enum
@@ -71,6 +71,7 @@ class Agent(Base, TimestampMixin):
     temperature = Column(Float, default=0.7)
     max_iterations = Column(Integer, default=10)
     tools_config = Column(JSON, default=list)
+    skills_config = Column(JSON, default=list)
     memory_config = Column(JSON, default=dict)
     metadata_ = Column("metadata", JSON, default=dict)
 
@@ -219,6 +220,126 @@ class ModelConfig(Base, TimestampMixin):
     context_window = Column(Integer, nullable=True)
     cost_per_1k_input = Column(Float, nullable=True)
     cost_per_1k_output = Column(Float, nullable=True)
+
+
+# ──────────────────────────────────────────────
+# Skills
+# ──────────────────────────────────────────────
+
+class SkillStatus(str, enum.Enum):
+    draft = "draft"
+    active = "active"
+    archived = "archived"
+
+
+class Skill(Base, TimestampMixin):
+    __tablename__ = "skills"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    slug = Column(String(64), nullable=False, unique=True)
+    display_name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False)
+    instructions_md = Column(Text, nullable=False, default="")
+    status = Column(SAEnum(SkillStatus), default=SkillStatus.draft, nullable=False)
+    scope = Column(String(32), default="global", nullable=False)
+    auto_invoke = Column(Boolean, default=False, nullable=False)
+    version = Column(Integer, default=1, nullable=False)
+    resources = Column(JSON, default=list)
+    tools_required = Column(JSON, default=list)
+    knowledge_base_ids = Column(JSON, default=list)
+    tags = Column(JSON, default=list)
+    metadata_ = Column("metadata", JSON, default=dict)
+
+
+# ──────────────────────────────────────────────
+# Digital Employee (scheduled agents)
+# ──────────────────────────────────────────────
+
+class EmployeeStatus(str, enum.Enum):
+    active = "active"
+    paused = "paused"
+    archived = "archived"
+
+
+class ScheduleType(str, enum.Enum):
+    cron = "cron"
+    interval = "interval"
+
+
+class EmployeeTaskType(str, enum.Enum):
+    agent = "agent"
+
+
+class TaskTrigger(str, enum.Enum):
+    schedule = "schedule"
+    manual = "manual"
+
+
+class DigitalEmployee(Base, TimestampMixin):
+    __tablename__ = "digital_employees"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    name = Column(String(255), nullable=False)
+    title = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    status = Column(SAEnum(EmployeeStatus), default=EmployeeStatus.active, nullable=False)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=False)
+    skills_config = Column(JSON, default=list)
+    knowledge_base_ids = Column(JSON, default=list)
+    timezone = Column(String(64), default="Asia/Shanghai", nullable=False)
+    metadata_ = Column("metadata", JSON, default=dict)
+
+    agent = relationship("Agent", foreign_keys=[agent_id])
+    scheduled_tasks = relationship(
+        "EmployeeScheduledTask", back_populates="employee", cascade="all, delete-orphan"
+    )
+    task_runs = relationship(
+        "EmployeeTaskRun", back_populates="employee", cascade="all, delete-orphan"
+    )
+
+
+class EmployeeScheduledTask(Base, TimestampMixin):
+    __tablename__ = "employee_scheduled_tasks"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    employee_id = Column(String(36), ForeignKey("digital_employees.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    schedule_type = Column(SAEnum(ScheduleType), default=ScheduleType.cron, nullable=False)
+    cron_expression = Column(String(128), nullable=True)
+    interval_seconds = Column(Integer, nullable=True)
+    timezone = Column(String(64), default="Asia/Shanghai", nullable=False)
+    task_type = Column(SAEnum(EmployeeTaskType), default=EmployeeTaskType.agent, nullable=False)
+    task_config = Column(JSON, default=dict)
+    retry_max = Column(Integer, default=0)
+    timeout_seconds = Column(Integer, default=600)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    next_run_at = Column(DateTime(timezone=True), nullable=True)
+    last_status = Column(String(32), nullable=True)
+    metadata_ = Column("metadata", JSON, default=dict)
+
+    employee = relationship("DigitalEmployee", back_populates="scheduled_tasks")
+    runs = relationship("EmployeeTaskRun", back_populates="task", cascade="all, delete-orphan")
+
+
+class EmployeeTaskRun(Base, TimestampMixin):
+    __tablename__ = "employee_task_runs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    task_id = Column(String(36), ForeignKey("employee_scheduled_tasks.id"), nullable=False)
+    employee_id = Column(String(36), ForeignKey("digital_employees.id"), nullable=False)
+    status = Column(SAEnum(ExecutionStatus), default=ExecutionStatus.pending, nullable=False)
+    triggered_by = Column(SAEnum(TaskTrigger), default=TaskTrigger.manual, nullable=False)
+    input_data = Column(JSON, default=dict)
+    output_data = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    token_usage = Column(JSON, default=dict)
+    duration_ms = Column(Integer, nullable=True)
+    agent_execution_id = Column(String(36), ForeignKey("agent_executions.id"), nullable=True)
+
+    task = relationship("EmployeeScheduledTask", back_populates="runs")
+    employee = relationship("DigitalEmployee", back_populates="task_runs")
 
 
 # ──────────────────────────────────────────────

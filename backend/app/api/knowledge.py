@@ -1,6 +1,4 @@
-import os
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, statusfrom sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
@@ -8,10 +6,11 @@ from app.db.models import KnowledgeBase, Document, KBStatus
 from app.db.base import generate_uuid
 from app.schemas.knowledge import (
     KnowledgeBaseCreate, KnowledgeBaseResponse,
-    DocumentResponse, SearchRequest, SearchResult,
+    DocumentResponse, DocumentContentResponse, DocumentChunkResponse,
+    SearchRequest, SearchResult,
 )
 from app.knowledge.pipeline import IngestionPipeline
-from app.config import settings
+from app.knowledge.storage import save_document_file, read_document_file, delete_document_file
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
 
@@ -67,14 +66,16 @@ async def upload_document(
 
     file_bytes = await file.read()
     doc_id = generate_uuid()
+    filename = file.filename or "unknown"
 
     doc = Document(
         id=doc_id,
         knowledge_base_id=kb_id,
-        filename=file.filename or "unknown",
-        file_type=file.filename.rsplit(".", 1)[-1].lower() if file.filename else "txt",
+        filename=filename,
+        file_type=filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt",
         file_size=len(file_bytes),
         status=KBStatus.processing,
+        storage_path=save_document_file(kb_id, doc_id, filename, file_bytes),
     )
     db.add(doc)
     await db.flush()
@@ -86,7 +87,7 @@ async def upload_document(
             chunk_size=kb.chunk_size,
             chunk_overlap=kb.chunk_overlap,
         )
-        chunk_count = await pipeline.ingest_file(file_bytes, file.filename or "unknown", doc_id)
+        chunk_count = await pipeline.ingest_file(file_bytes, filename, doc_id)
 
         doc.status = KBStatus.ready
         doc.chunk_count = chunk_count
@@ -112,6 +113,53 @@ async def list_documents(kb_id: str, db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 
+@router.get("/{kb_id}/documents/{doc_id}/content", response_model=DocumentContentResponse)
+async def get_document_content(
+    kb_id: str,
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    doc = await db.get(Document, doc_id)
+    if not doc or doc.knowledge_base_id != kb_id:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    content = ""
+    source = "chunks"
+    chunks: list[DocumentChunkResponse] = []
+
+    if doc.storage_path:
+        raw = read_document_file(doc.storage_path)
+        if raw is not None:
+            content = raw.decode("utf-8", errors="replace")
+            source = "file"
+
+    if not content.strip():
+        pipeline = IngestionPipeline(
+            knowledge_base_id=kb_id,
+            embedding_model=kb.embedding_model,
+        )
+        chunk_rows = await pipeline.list_document_chunks(doc_id)
+        chunks = [DocumentChunkResponse(**row) for row in chunk_rows]
+        content = "\n\n".join(
+            row.content.strip() for row in chunks if row.content.strip()
+        )
+        source = "chunks"
+
+    return DocumentContentResponse(
+        id=doc.id,
+        filename=doc.filename,
+        file_type=doc.file_type,
+        content=content,
+        source=source,
+        chunk_count=len(chunks) or doc.chunk_count,
+        chunks=chunks,
+    )
+
+
 @router.delete("/{kb_id}/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(kb_id: str, doc_id: str, db: AsyncSession = Depends(get_db)):
     doc = await db.get(Document, doc_id)
@@ -120,6 +168,7 @@ async def delete_document(kb_id: str, doc_id: str, db: AsyncSession = Depends(ge
 
     pipeline = IngestionPipeline(knowledge_base_id=kb_id)
     await pipeline.vector_store.delete_document(doc_id)
+    delete_document_file(doc.storage_path or "")
     await db.delete(doc)
 
 

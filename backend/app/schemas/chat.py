@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Any
 from datetime import datetime
 from enum import Enum
@@ -30,11 +30,16 @@ class ConversationResponse(BaseModel):
     title: Optional[str]
     agent_id: Optional[str]
     workflow_id: Optional[str]
-    knowledge_base_ids: list[str]
+    knowledge_base_ids: list[str] = []
     memory_type: str
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("knowledge_base_ids", mode="before")
+    @classmethod
+    def _coerce_kb_ids(cls, v):
+        return v if v is not None else []
 
     class Config:
         from_attributes = True

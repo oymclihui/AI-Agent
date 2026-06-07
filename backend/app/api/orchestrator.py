@@ -11,9 +11,8 @@ import structlog
 
 from app.db.session import get_db
 from app.db.models import Agent as AgentModel
-from app.core.agents.base import AgentDefinition, Task
-from app.core.agents.executor import AgentExecutor
-from app.core.tools.registry import ToolRegistry
+from app.core.agents.base import Task
+from app.core.skills.factory import build_agent_executor
 from app.core.orchestrator.crew import Crew
 
 logger = structlog.get_logger(__name__)
@@ -41,39 +40,16 @@ async def run_crew(payload: CrewRunRequest, db: AsyncSession = Depends(get_db)):
     if missing:
         raise HTTPException(status_code=404, detail=f"Agents not found: {missing}")
 
-    registry = ToolRegistry.get_instance()
     executors = []
     for aid in payload.agent_ids:
         agent_model = agents_db[aid]
-        tool_names = [t.get("tool_name") for t in (agent_model.tools_config or [])]
-        tools = registry.get_tools_for_agent(tool_names)
-        definition = AgentDefinition(
-            id=agent_model.id,
-            name=agent_model.name,
-            role=agent_model.role,
-            goal=agent_model.goal,
-            backstory=agent_model.backstory or "",
-            llm_provider=agent_model.llm_provider,
-            llm_model=agent_model.llm_model,
-            temperature=agent_model.temperature,
-            max_iterations=agent_model.max_iterations,
-            tools=tool_names,
-        )
-        executors.append(AgentExecutor(definition=definition, tools=tools))
+        executors.append(await build_agent_executor(db, agent_model))
 
     manager_executor = None
     if payload.manager_agent_id:
         mgr = agents_db.get(payload.manager_agent_id)
         if mgr:
-            tool_names = [t.get("tool_name") for t in (mgr.tools_config or [])]
-            manager_executor = AgentExecutor(
-                definition=AgentDefinition(
-                    id=mgr.id, name=mgr.name, role=mgr.role, goal=mgr.goal,
-                    backstory=mgr.backstory or "", llm_provider=mgr.llm_provider,
-                    llm_model=mgr.llm_model, temperature=mgr.temperature,
-                ),
-                tools=registry.get_tools_for_agent(tool_names),
-            )
+            manager_executor = await build_agent_executor(db, mgr)
 
     if payload.tasks:
         tasks = [Task(description=t.description, agent_id=t.agent_id) for t in payload.tasks]

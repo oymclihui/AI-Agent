@@ -38,6 +38,7 @@ class DialogueManager:
         agent_definition=None,
         system_prompt: Optional[str] = None,
         context: Optional[dict[str, Any]] = None,
+        extra_system_messages: Optional[list[SystemMessage]] = None,
     ) -> dict[str, Any]:
         """
         Process a single user message and return the assistant's response.
@@ -60,6 +61,8 @@ class DialogueManager:
         messages = []
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
+        if extra_system_messages:
+            messages.extend(extra_system_messages)
 
         # RAG: retrieve relevant context
         rag_context = ""
@@ -109,6 +112,7 @@ class DialogueManager:
         user_message: str,
         agent_definition=None,
         system_prompt: Optional[str] = None,
+        extra_system_messages: Optional[list[SystemMessage]] = None,
     ) -> AsyncIterator[str]:
         """Stream the assistant's response token by token."""
         from app.models_hub.router import ModelRouter
@@ -126,6 +130,8 @@ class DialogueManager:
         messages = []
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
+        if extra_system_messages:
+            messages.extend(extra_system_messages)
 
         history = await self.memory.get_history(session_id)
         messages.extend(history)

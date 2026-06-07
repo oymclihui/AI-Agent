@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # Application
-    APP_NAME: str = "AIAGNET"
+    APP_NAME: str = "AI-AGENT"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
     SQL_ECHO: bool = False
@@ -53,7 +53,13 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str = "2024-02-01"
 
     # CORS
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:80"]
+    ALLOWED_ORIGINS: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:80",
+    ]
 
     class Config:
         env_file = ".env"

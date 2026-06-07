@@ -1,13 +1,8 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Any
 from datetime import datetime
-from enum import Enum
 
-
-class KBStatus(str, Enum):
-    processing = "processing"
-    ready = "ready"
-    error = "error"
+from app.db.models import KBStatus
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -46,6 +41,21 @@ class DocumentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DocumentChunkResponse(BaseModel):
+    chunk_index: int
+    content: str
+
+
+class DocumentContentResponse(BaseModel):
+    id: str
+    filename: str
+    file_type: str
+    content: str
+    source: str
+    chunk_count: int
+    chunks: list[DocumentChunkResponse] = []
 
 
 class SearchRequest(BaseModel):

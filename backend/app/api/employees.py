@@ -1,0 +1,276 @@
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
+
+from app.db.session import get_db
+from app.db.models import (
+    Agent as AgentModel,
+    DigitalEmployee,
+    EmployeeScheduledTask,
+    EmployeeTaskRun,
+    EmployeeStatus,
+)
+from app.db.base import generate_uuid
+from app.schemas.employee import (
+    EmployeeCreate,
+    EmployeeUpdate,
+    EmployeeResponse,
+    ScheduledTaskCreate,
+    ScheduledTaskUpdate,
+    ScheduledTaskResponse,
+    TaskRunResponse,
+)
+from app.core.employees.schedule import compute_next_run, validate_schedule
+from app.core.employees.runner import run_scheduled_task
+from app.core.employees.scheduler import EmployeeScheduler
+
+router = APIRouter(prefix="/employees", tags=["Digital Employees"])
+
+
+def _employee_response(emp: DigitalEmployee, task_count: int = 0) -> EmployeeResponse:
+    return EmployeeResponse(
+        id=emp.id,
+        name=emp.name,
+        title=emp.title,
+        description=emp.description,
+        status=emp.status,
+        agent_id=emp.agent_id,
+        skills_config=emp.skills_config or [],
+        knowledge_base_ids=emp.knowledge_base_ids or [],
+        timezone=emp.timezone,
+        task_count=task_count,
+        created_at=emp.created_at,
+        updated_at=emp.updated_at,
+    )
+
+
+def _apply_task_schedule(task: EmployeeScheduledTask) -> None:
+    st = task.schedule_type.value if hasattr(task.schedule_type, "value") else str(task.schedule_type)
+    validate_schedule(st, task.cron_expression, task.interval_seconds)
+    if task.enabled:
+        task.next_run_at = compute_next_run(
+            st,
+            cron_expression=task.cron_expression,
+            interval_seconds=task.interval_seconds,
+            timezone_name=task.timezone,
+        )
+    else:
+        task.next_run_at = None
+
+
+@router.get("/scheduler/status")
+async def scheduler_status():
+    return EmployeeScheduler.get_instance().status()
+
+
+@router.get("/", response_model=list[EmployeeResponse])
+async def list_employees(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(DigitalEmployee).order_by(DigitalEmployee.updated_at.desc())
+    )
+    employees = result.scalars().all()
+    counts: dict[str, int] = {}
+    if employees:
+        ids = [e.id for e in employees]
+        count_result = await db.execute(
+            select(EmployeeScheduledTask.employee_id, func.count())
+            .where(EmployeeScheduledTask.employee_id.in_(ids))
+            .group_by(EmployeeScheduledTask.employee_id)
+        )
+        counts = {row[0]: row[1] for row in count_result.all()}
+    return [_employee_response(e, counts.get(e.id, 0)) for e in employees]
+
+
+@router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
+async def create_employee(payload: EmployeeCreate, db: AsyncSession = Depends(get_db)):
+    agent = await db.get(AgentModel, payload.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    emp = DigitalEmployee(
+        id=generate_uuid(),
+        name=payload.name,
+        title=payload.title,
+        description=payload.description,
+        status=payload.status,
+        agent_id=payload.agent_id,
+        skills_config=[s.model_dump() for s in payload.skills_config],
+        knowledge_base_ids=payload.knowledge_base_ids,
+        timezone=payload.timezone,
+    )
+    db.add(emp)
+    await db.flush()
+    await db.refresh(emp)
+    return _employee_response(emp, 0)
+
+
+@router.get("/{employee_id}", response_model=EmployeeResponse)
+async def get_employee(employee_id: str, db: AsyncSession = Depends(get_db)):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    count_result = await db.execute(
+        select(func.count()).where(EmployeeScheduledTask.employee_id == employee_id)
+    )
+    return _employee_response(emp, count_result.scalar() or 0)
+
+
+@router.patch("/{employee_id}", response_model=EmployeeResponse)
+async def update_employee(
+    employee_id: str,
+    payload: EmployeeUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    data = payload.model_dump(exclude_none=True)
+    if "agent_id" in data:
+        agent = await db.get(AgentModel, data["agent_id"])
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+    if "skills_config" in data:
+        data["skills_config"] = [
+            s.model_dump() if hasattr(s, "model_dump") else s for s in data["skills_config"]
+        ]
+
+    for field, value in data.items():
+        setattr(emp, field, value)
+
+    await db.flush()
+    count_result = await db.execute(
+        select(func.count()).where(EmployeeScheduledTask.employee_id == employee_id)
+    )
+    return _employee_response(emp, count_result.scalar() or 0)
+
+
+@router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_employee(employee_id: str, db: AsyncSession = Depends(get_db)):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    await db.delete(emp)
+
+
+@router.get("/{employee_id}/tasks", response_model=list[ScheduledTaskResponse])
+async def list_tasks(employee_id: str, db: AsyncSession = Depends(get_db)):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    result = await db.execute(
+        select(EmployeeScheduledTask)
+        .where(EmployeeScheduledTask.employee_id == employee_id)
+        .order_by(EmployeeScheduledTask.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/{employee_id}/tasks", response_model=ScheduledTaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_task(
+    employee_id: str,
+    payload: ScheduledTaskCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    tz = payload.timezone or emp.timezone
+    try:
+        validate_schedule(payload.schedule_type.value, payload.cron_expression, payload.interval_seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    task = EmployeeScheduledTask(
+        id=generate_uuid(),
+        employee_id=employee_id,
+        name=payload.name,
+        description=payload.description,
+        enabled=payload.enabled,
+        schedule_type=payload.schedule_type,
+        cron_expression=payload.cron_expression,
+        interval_seconds=payload.interval_seconds,
+        timezone=tz,
+        task_type=payload.task_type,
+        task_config=payload.task_config,
+        retry_max=payload.retry_max,
+        timeout_seconds=payload.timeout_seconds,
+    )
+    _apply_task_schedule(task)
+    db.add(task)
+    await db.flush()
+    await db.refresh(task)
+    return task
+
+
+@router.patch("/{employee_id}/tasks/{task_id}", response_model=ScheduledTaskResponse)
+async def update_task(
+    employee_id: str,
+    task_id: str,
+    payload: ScheduledTaskUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    task = await _get_task(db, employee_id, task_id)
+    data = payload.model_dump(exclude_none=True)
+    for field, value in data.items():
+        setattr(task, field, value)
+
+    try:
+        st = task.schedule_type.value if hasattr(task.schedule_type, "value") else str(task.schedule_type)
+        validate_schedule(st, task.cron_expression, task.interval_seconds)
+        _apply_task_schedule(task)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    await db.flush()
+    await db.refresh(task)
+    return task
+
+
+@router.delete("/{employee_id}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(employee_id: str, task_id: str, db: AsyncSession = Depends(get_db)):
+    task = await _get_task(db, employee_id, task_id)
+    await db.delete(task)
+
+
+@router.post("/{employee_id}/tasks/{task_id}/run", response_model=TaskRunResponse)
+async def run_task_manually(employee_id: str, task_id: str, db: AsyncSession = Depends(get_db)):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    task = await _get_task(db, employee_id, task_id)
+    try:
+        run = await run_scheduled_task(db, task, emp, triggered_by="manual")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return run
+
+
+@router.get("/{employee_id}/runs", response_model=list[TaskRunResponse])
+async def list_employee_runs(
+    employee_id: str,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    result = await db.execute(
+        select(EmployeeTaskRun)
+        .where(EmployeeTaskRun.employee_id == employee_id)
+        .order_by(EmployeeTaskRun.created_at.desc())
+        .limit(min(limit, 200))
+    )
+    return result.scalars().all()
+
+
+async def _get_task(db: AsyncSession, employee_id: str, task_id: str) -> EmployeeScheduledTask:
+    task = await db.get(EmployeeScheduledTask, task_id)
+    if not task or task.employee_id != employee_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task

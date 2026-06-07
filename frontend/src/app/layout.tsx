@@ -4,7 +4,7 @@ import { Toaster } from "react-hot-toast";
 import Sidebar from "@/components/layout/Sidebar";
 
 export const metadata: Metadata = {
-  title: "AIAGNET - AI Agent Network Platform",
+  title: "AI-AGENT - AI Agent Network Platform",
   description: "Unified AI agent platform with multi-agent orchestration, visual workflow designer, and RAG knowledge base.",
 };
 

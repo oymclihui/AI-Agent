@@ -46,8 +46,9 @@ export default function ChatPage() {
       setConversations((c) => [data, ...c]);
       setActiveConv(data.id);
       setMessages([]);
-    } catch {
-      toast.error(t.createFailed[lang]);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ? `${t.createFailed[lang]}: ${detail}` : t.createFailed[lang]);
     }
   };
 
@@ -86,8 +87,9 @@ export default function ChatPage() {
         convId = data.id;
         setActiveConv(convId);
         setConversations((c) => [data, ...c]);
-      } catch {
-        toast.error(t.createFailed[lang]);
+      } catch (err: unknown) {
+        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+        toast.error(detail ? `${t.createFailed[lang]}: ${detail}` : t.createFailed[lang]);
         return;
       }
     }

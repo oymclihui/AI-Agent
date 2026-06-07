@@ -3,7 +3,7 @@ AgentExecutor: runs a single agent against a task using LangChain's agent framew
 """
 from typing import Any, AsyncIterator, Optional
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from app.core.agents.base import AgentDefinition, Task
@@ -18,10 +18,12 @@ class AgentExecutor:
         definition: AgentDefinition,
         tools: list[BaseTool],
         memory_manager: Optional[MemoryManager] = None,
+        skill_messages: Optional[list[SystemMessage]] = None,
     ):
         self.definition = definition
         self.tools = tools
         self.memory_manager = memory_manager
+        self.skill_messages = skill_messages or []
         self._llm = None
 
     async def _get_llm(self):
@@ -42,7 +44,8 @@ class AgentExecutor:
         log.info("agent_run_start")
 
         llm = await self._get_llm()
-        messages = [SystemMessage(content=self.definition.system_prompt())]
+        messages: list[BaseMessage] = [SystemMessage(content=self.definition.system_prompt())]
+        messages.extend(self.skill_messages)
 
         # Inject prior memory
         if self.memory_manager:
@@ -127,7 +130,8 @@ class AgentExecutor:
     async def stream(self, task: Task, context: Optional[dict[str, Any]] = None) -> AsyncIterator[str]:
         """Stream the agent's response token by token."""
         llm = await self._get_llm()
-        messages = [SystemMessage(content=self.definition.system_prompt())]
+        messages: list[BaseMessage] = [SystemMessage(content=self.definition.system_prompt())]
+        messages.extend(self.skill_messages)
         messages.append(HumanMessage(content=task.description))
 
         async for chunk in llm.astream(messages):

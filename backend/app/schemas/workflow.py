@@ -36,14 +36,26 @@ class NodeType(str, Enum):
     code = "code"
     note = "note"
     subworkflow = "subworkflow"
+    trigger = "trigger"
+    switch = "switch"
+    set = "set"
+    merge = "merge"
+    split = "split"
+    filter = "filter"
+    wait = "wait"
+    transform = "transform"
+    integration = "integration"
+    respond_webhook = "respond_webhook"
+    stop_error = "stop_error"
 
 
 class NodeDefinition(BaseModel):
     id: str
-    type: NodeType
+    type: str  # execution type or catalog id
+    catalog_id: Optional[str] = None  # n8n catalog node id
     label: str
     config: dict[str, Any] = {}
-    position: dict[str, float] = {"x": 0, "y": 0}  # for visual designer
+    position: dict[str, float] = {"x": 0, "y": 0}
 
 
 class EdgeDefinition(BaseModel):
@@ -122,3 +134,25 @@ class WorkflowExecutionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class NodeConfigAssistRequest(BaseModel):
+    node_id: str = Field(..., description="Catalog node id, e.g. httpRequest")
+    prompt: str = Field(..., min_length=1, description="Natural language config request")
+    current_config: dict[str, Any] = {}
+    workflow_context: dict[str, Any] = {}
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+class NodeConfigAssistResponse(BaseModel):
+    config: dict[str, Any]
+    explanation: str = ""
+    parsed: bool = True
+    node: Optional[dict[str, Any]] = None
+
+
+class WorkflowGenerateRequest(BaseModel):
+    description: str = Field(..., min_length=5, description="Natural language workflow description")
+    provider: Optional[str] = None
+    model: Optional[str] = None

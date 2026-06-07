@@ -14,6 +14,12 @@ class ToolConfig(BaseModel):
     config: dict[str, Any] = {}
 
 
+class SkillBinding(BaseModel):
+    skill_id: str
+    always_load: bool = True
+    priority: int = 0
+
+
 class MemoryConfig(BaseModel):
     type: str = "buffer"  # buffer | summary | vector
     max_tokens: int = 4000
@@ -30,6 +36,7 @@ class AgentCreate(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_iterations: int = Field(default=10, ge=1, le=50)
     tools_config: list[ToolConfig] = []
+    skills_config: list[SkillBinding] = []
     memory_config: MemoryConfig = MemoryConfig()
     metadata_: dict[str, Any] = Field(default={}, alias="metadata")
 
@@ -47,6 +54,7 @@ class AgentUpdate(BaseModel):
     temperature: Optional[float] = None
     max_iterations: Optional[int] = None
     tools_config: Optional[list[ToolConfig]] = None
+    skills_config: Optional[list[SkillBinding]] = None
     memory_config: Optional[MemoryConfig] = None
     status: Optional[AgentStatus] = None
 
@@ -63,6 +71,7 @@ class AgentResponse(BaseModel):
     temperature: float
     max_iterations: int
     tools_config: list[dict]
+    skills_config: list[dict] = []
     memory_config: dict
     created_at: datetime
     updated_at: datetime

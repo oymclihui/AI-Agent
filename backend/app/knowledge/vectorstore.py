@@ -193,6 +193,27 @@ class MilvusVectorStoreManager:
             })
         return output
 
+    async def list_document_chunks(self, document_id: str) -> list[dict]:
+        try:
+            col = self._get_collection()
+            expr = f'{_FIELD_DOC_ID} == "{document_id}"'
+            rows = col.query(
+                expr=expr,
+                output_fields=[_FIELD_TEXT, _FIELD_CHUNK],
+            )
+            chunks = [
+                {
+                    "chunk_index": int(row.get(_FIELD_CHUNK, 0)),
+                    "content": row.get(_FIELD_TEXT, "") or "",
+                }
+                for row in rows
+            ]
+            chunks.sort(key=lambda item: item["chunk_index"])
+            return chunks
+        except Exception as exc:
+            logger.warning("milvus_list_chunks_failed", document_id=document_id, error=str(exc))
+            return []
+
     async def delete_document(self, document_id: str) -> None:
         try:
             col = self._get_collection()
@@ -278,6 +299,28 @@ class ChromaVectorStoreManager:
                     "metadata": doc.metadata,
                 })
         return output
+
+    async def list_document_chunks(self, document_id: str) -> list[dict]:
+        try:
+            store = self.get_store()
+            data = store._collection.get(
+                where={"document_id": document_id},
+                include=["documents", "metadatas"],
+            )
+            documents = data.get("documents") or []
+            metadatas = data.get("metadatas") or []
+            chunks = []
+            for index, text in enumerate(documents):
+                meta = metadatas[index] if index < len(metadatas) else {}
+                chunks.append({
+                    "chunk_index": int(meta.get("chunk_index", index)),
+                    "content": text or "",
+                })
+            chunks.sort(key=lambda item: item["chunk_index"])
+            return chunks
+        except Exception as exc:
+            logger.warning("chroma_list_chunks_failed", document_id=document_id, error=str(exc))
+            return []
 
     async def delete_document(self, document_id: str) -> None:
         store = self.get_store()

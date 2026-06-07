@@ -62,3 +62,6 @@ class IngestionPipeline:
 
     async def search(self, query: str, top_k: int = 5, score_threshold: float = 0.3) -> list[dict]:
         return await self.vector_store.search(query, top_k=top_k, score_threshold=score_threshold)
+
+    async def list_document_chunks(self, document_id: str) -> list[dict]:
+        return await self.vector_store.list_document_chunks(document_id)

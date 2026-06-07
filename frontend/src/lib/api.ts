@@ -29,6 +29,21 @@ export const workflowsApi = {
   execute: (id: string, data: object) => api.post(`/workflows/${id}/execute`, data),
   executions: (id: string) => api.get(`/workflows/${id}/executions`),
   seedTemplates: () => api.post("/workflows/seed-templates"),
+  generate: (data: object) => api.post("/workflows/generate", data),
+  nodeCatalog: () => api.get("/workflows/node-catalog"),
+  nodeDefinition: (nodeId: string) => api.get(`/workflows/node-catalog/${nodeId}`),
+  configureNode: (data: object) => api.post("/workflows/configure-node", data),
+  /** Load catalog from API, fall back to bundled static JSON when backend is outdated */
+  loadNodeCatalog: async () => {
+    try {
+      const { data } = await api.get("/workflows/node-catalog");
+      return data;
+    } catch {
+      const res = await fetch("/node-catalog.json");
+      if (!res.ok) throw new Error("Node catalog unavailable");
+      return res.json();
+    }
+  },
 };
 
 // ── Chat ─────────────────────────────────────────────
@@ -54,6 +69,10 @@ export const knowledgeApi = {
     });
   },
   listDocuments: (kbId: string) => api.get(`/knowledge/${kbId}/documents`),
+  getDocumentContent: (kbId: string, docId: string) =>
+    api.get(`/knowledge/${kbId}/documents/${docId}/content`),
+  deleteDocument: (kbId: string, docId: string) =>
+    api.delete(`/knowledge/${kbId}/documents/${docId}`),
   search: (kbId: string, data: object) => api.post(`/knowledge/${kbId}/search`, data),
 };
 
@@ -66,6 +85,42 @@ export const modelsApi = {
 // ── Tools ─────────────────────────────────────────────
 export const toolsApi = {
   list: () => api.get("/tools/"),
+};
+
+// ── Skills ────────────────────────────────────────────
+export const skillsApi = {
+  list: () => api.get("/skills/"),
+  create: (data: object) => api.post("/skills/", data),
+  get: (id: string) => api.get(`/skills/${id}`),
+  update: (id: string, data: object) => api.patch(`/skills/${id}`, data),
+  delete: (id: string) => api.delete(`/skills/${id}`),
+  seedTemplates: () => api.post("/skills/seed-templates"),
+  librarySources: () => api.get("/skills/library/sources"),
+  libraryCatalog: (params?: { source?: string; category?: string; q?: string }) =>
+    api.get("/skills/library/catalog", { params }),
+  libraryCategories: (source?: string) =>
+    api.get("/skills/library/categories", { params: source ? { source } : {} }),
+  librarySync: (source = "skills-hub") =>
+    api.post("/skills/library/sync", null, { params: { source } }),
+  libraryImport: (data: { items: { source: string; slug: string }[]; overwrite?: boolean }) =>
+    api.post("/skills/library/import", data),
+};
+
+// ── Digital Employees ───────────────────────────────
+export const employeesApi = {
+  list: () => api.get("/employees/"),
+  create: (data: object) => api.post("/employees/", data),
+  get: (id: string) => api.get(`/employees/${id}`),
+  update: (id: string, data: object) => api.patch(`/employees/${id}`, data),
+  delete: (id: string) => api.delete(`/employees/${id}`),
+  listTasks: (id: string) => api.get(`/employees/${id}/tasks`),
+  createTask: (id: string, data: object) => api.post(`/employees/${id}/tasks`, data),
+  updateTask: (id: string, taskId: string, data: object) =>
+    api.patch(`/employees/${id}/tasks/${taskId}`, data),
+  deleteTask: (id: string, taskId: string) => api.delete(`/employees/${id}/tasks/${taskId}`),
+  runTask: (id: string, taskId: string) => api.post(`/employees/${id}/tasks/${taskId}/run`),
+  listRuns: (id: string) => api.get(`/employees/${id}/runs`),
+  schedulerStatus: () => api.get("/employees/scheduler/status"),
 };
 
 // ── Streaming helper ──────────────────────────────────

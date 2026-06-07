@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Zap, Globe, Calculator, Link2, Clock } from "lucide-react";
 import { toolsApi } from "@/lib/api";
+import { useLangStore } from "@/lib/langStore";
+import { translations } from "@/lib/i18n";
 
 interface Tool { name: string; description: string; }
 
@@ -14,6 +16,8 @@ const toolIcons: Record<string, React.FC<{ className?: string }>> = {
 };
 
 export default function ToolsPage() {
+  const { lang } = useLangStore();
+  const t = translations.tools;
   const [tools, setTools] = useState<Tool[]>([]);
 
   useEffect(() => {
@@ -23,8 +27,8 @@ export default function ToolsPage() {
   return (
     <div className="p-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Tool Registry</h1>
-        <p className="text-slate-400">All available tools that agents can use. Assign tools to agents when creating them.</p>
+        <h1 className="text-2xl font-bold text-white">{t.title[lang]}</h1>
+        <p className="text-slate-400">{t.subtitle[lang]}</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -38,7 +42,7 @@ export default function ToolsPage() {
                 </div>
                 <div>
                   <h3 className="font-semibold text-white">{tool.name}</h3>
-                  <span className="rounded bg-slate-700/50 px-1.5 py-0.5 text-[10px] text-slate-500">builtin</span>
+                  <span className="rounded bg-slate-700/50 px-1.5 py-0.5 text-[10px] text-slate-500">{t.builtin[lang]}</span>
                 </div>
               </div>
               <p className="text-sm text-slate-400 leading-relaxed">{tool.description}</p>
@@ -49,8 +53,8 @@ export default function ToolsPage() {
 
       <div className="mt-8 rounded-xl border border-dashed border-[#2d2d4e] p-6 text-center">
         <Zap className="mx-auto mb-3 h-8 w-8 text-slate-600" />
-        <p className="text-slate-400 font-medium">Custom Tools</p>
-        <p className="text-slate-500 text-sm mt-1">Custom HTTP-based and Python tools can be registered via the API at <code className="text-blue-400">/api/v1/tools/</code>.</p>
+        <p className="text-slate-400 font-medium">{t.customTitle[lang]}</p>
+        <p className="text-slate-500 text-sm mt-1">{t.customDesc[lang]}</p>
       </div>
     </div>
   );

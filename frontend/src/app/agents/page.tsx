@@ -5,7 +5,7 @@ import {
   Plus, Bot, Trash2, Sparkles, PenLine, Loader2, RefreshCw,
   Search, Code2, Megaphone, BarChart2, ShieldCheck, Layers, Globe, Server,
 } from "lucide-react";
-import { agentsApi, modelsApi } from "@/lib/api";
+import { agentsApi, modelsApi, skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
@@ -14,7 +14,10 @@ interface Agent {
   id: string; name: string; role: string; goal: string;
   status: string; llm_provider: string | null; llm_model: string | null;
   temperature: number; tools_config: Array<{ tool_name: string }> | null;
+  skills_config?: Array<{ skill_id: string }> | null;
 }
+
+interface SkillOption { id: string; display_name: string; slug: string; status: string; }
 
 interface ModelOption { provider: string; model_id: string; is_default?: boolean; }
 
@@ -44,9 +47,13 @@ export default function AgentsPage() {
   const c = translations.common;
 
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [skills, setSkills] = useState<SkillOption[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showSkillEdit, setShowSkillEdit] = useState<string | null>(null);
+  const [skillEditIds, setSkillEditIds] = useState<string[]>([]);
+  const [savingSkills, setSavingSkills] = useState(false);
   const [mode, setMode] = useState<"nl" | "manual">("nl");
   const [nlText, setNlText] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -55,6 +62,7 @@ export default function AgentsPage() {
     llm_provider: "ollama", llm_model: "qwen3.6:35b",
     temperature: 0.7, max_iterations: 10,
     tools_config: [] as string[],
+    skills_config: [] as string[],
   });
 
   const load = async () => {
@@ -77,7 +85,14 @@ export default function AgentsPage() {
     } catch { /* keep defaults */ }
   };
 
-  useEffect(() => { load(); loadModels(); }, []);
+  const loadSkills = async () => {
+    try {
+      const { data } = await skillsApi.list();
+      setSkills(data.filter((s: SkillOption) => s.status === "active"));
+    } catch { /* optional */ }
+  };
+
+  useEffect(() => { load(); loadModels(); loadSkills(); }, []);
 
   const openCreate = () => {
     setMode("nl");
@@ -107,6 +122,7 @@ export default function AgentsPage() {
       await agentsApi.create({
         ...form,
         tools_config: form.tools_config.map((t) => ({ tool_name: t })),
+        skills_config: form.skills_config.map((skill_id) => ({ skill_id, always_load: true, priority: 0 })),
       });
       toast.success(lang === "zh" ? "创建成功" : "Agent created");
       setShowCreate(false);
@@ -126,6 +142,30 @@ export default function AgentsPage() {
       toast.error(lang === "zh" ? "删除失败" : "Delete failed");
     }
   };
+
+  const openSkillEdit = (agent: Agent) => {
+    setShowSkillEdit(agent.id);
+    setSkillEditIds((agent.skills_config ?? []).map((s) => s.skill_id));
+  };
+
+  const saveSkillEdit = async () => {
+    if (!showSkillEdit) return;
+    setSavingSkills(true);
+    try {
+      await agentsApi.update(showSkillEdit, {
+        skills_config: skillEditIds.map((skill_id) => ({ skill_id, always_load: true, priority: 0 })),
+      });
+      toast.success(lang === "zh" ? "技能已更新" : "Skills updated");
+      setShowSkillEdit(null);
+      load();
+    } catch {
+      toast.error(lang === "zh" ? "更新失败" : "Update failed");
+    } finally {
+      setSavingSkills(false);
+    }
+  };
+
+  const skillName = (id: string) => skills.find((s) => s.id === id)?.display_name ?? id.slice(0, 8);
 
   const seedTemplates = async () => {
     try {
@@ -193,13 +233,24 @@ export default function AgentsPage() {
                   {(agent.tools_config ?? []).map((t) => (
                     <span key={t.tool_name} className="rounded bg-purple-500/10 px-2 py-0.5 text-purple-400">{t.tool_name}</span>
                   ))}
+                  {(agent.skills_config ?? []).map((sk) => (
+                    <span key={sk.skill_id} className="rounded bg-teal-500/10 px-2 py-0.5 text-teal-400">{skillName(sk.skill_id)}</span>
+                  ))}
                 </div>
-                <button
-                  onClick={() => deleteAgent(agent.id)}
-                  className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  <Trash2 className="h-3 w-3" /> {c.delete[lang]}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => openSkillEdit(agent)}
+                    className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-teal-400 hover:bg-teal-500/10 transition-colors"
+                  >
+                    {a.editSkills[lang]}
+                  </button>
+                  <button
+                    onClick={() => deleteAgent(agent.id)}
+                    className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    <Trash2 className="h-3 w-3" /> {c.delete[lang]}
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -310,6 +361,31 @@ export default function AgentsPage() {
                     ))}
                   </div>
                 </div>
+                <div>
+                  <label className="mb-1 block text-xs text-slate-400">{a.skills[lang]}</label>
+                  <p className="mb-2 text-[11px] text-slate-600">{a.skillsHint[lang]}</p>
+                  {skills.length === 0 ? (
+                    <p className="text-xs text-slate-500">{lang === "zh" ? "请先在「技能」页创建并发布技能" : "Create and publish skills first"}</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {skills.map((skill) => (
+                        <label key={skill.id} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#2d2d4e] px-2 py-1 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={form.skills_config.includes(skill.id)}
+                            onChange={(e) => setForm((f) => ({
+                              ...f,
+                              skills_config: e.target.checked
+                                ? [...f.skills_config, skill.id]
+                                : f.skills_config.filter((id) => id !== skill.id),
+                            }))}
+                          />
+                          {skill.display_name}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={create}
                   className="w-full rounded-lg bg-blue-600 py-2.5 text-sm text-white hover:bg-blue-700"
@@ -325,6 +401,33 @@ export default function AgentsPage() {
             >
               {c.cancel[lang]}
             </button>
+          </div>
+        </div>
+      )}
+
+      {showSkillEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
+            <h2 className="mb-2 text-lg font-semibold text-white">{a.editSkills[lang]}</h2>
+            <p className="mb-4 text-xs text-slate-500">{a.skillsHint[lang]}</p>
+            <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
+              {skills.map((skill) => (
+                <label key={skill.id} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#2d2d4e] px-2 py-1 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={skillEditIds.includes(skill.id)}
+                    onChange={(e) => setSkillEditIds((ids) =>
+                      e.target.checked ? [...ids, skill.id] : ids.filter((id) => id !== skill.id)
+                    )}
+                  />
+                  {skill.display_name}
+                </label>
+              ))}
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setShowSkillEdit(null)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white">{c.cancel[lang]}</button>
+              <button onClick={saveSkillEdit} disabled={savingSkills} className="rounded-lg bg-teal-600 px-4 py-2 text-sm text-white hover:bg-teal-700 disabled:opacity-40">{c.save[lang]}</button>
+            </div>
           </div>
         </div>
       )}

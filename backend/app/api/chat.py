@@ -16,6 +16,7 @@ from app.schemas.chat import (
 from app.core.agents.base import AgentDefinition
 from app.core.dialogue.manager import DialogueManager
 from app.core.memory.manager import MemoryManager
+from app.core.skills.injector import SkillInjector
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -55,12 +56,22 @@ async def _ensure_memory_loaded(conv_id: str, memory_type: str, db: AsyncSession
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
 async def create_conversation(payload: ConversationCreate, db: AsyncSession = Depends(get_db)):
+    if payload.agent_id:
+        agent = await db.get(AgentModel, payload.agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent not found: {payload.agent_id}")
+    if payload.workflow_id:
+        from app.db.models import Workflow as WorkflowModel
+        wf = await db.get(WorkflowModel, payload.workflow_id)
+        if not wf:
+            raise HTTPException(status_code=404, detail=f"Workflow not found: {payload.workflow_id}")
+
     conv = Conversation(
         id=generate_uuid(),
         title=payload.title,
-        agent_id=payload.agent_id,
-        workflow_id=payload.workflow_id,
-        knowledge_base_ids=payload.knowledge_base_ids,
+        agent_id=payload.agent_id or None,
+        workflow_id=payload.workflow_id or None,
+        knowledge_base_ids=payload.knowledge_base_ids or [],
         memory_type=payload.memory_type,
     )
     db.add(conv)
@@ -99,6 +110,7 @@ async def send_message(
 
     # Load agent if assigned
     agent_definition = None
+    skill_messages = []
     if conv.agent_id:
         agent_model = await db.get(AgentModel, conv.agent_id)
         if agent_model:
@@ -112,6 +124,7 @@ async def send_message(
                 llm_model=agent_model.llm_model,
                 temperature=agent_model.temperature,
             )
+            skill_messages = await SkillInjector.build_messages(db, agent_model.skills_config)
 
     memory = await _ensure_memory_loaded(conv_id, conv.memory_type, db)
     dialogue = DialogueManager(memory_manager=memory)
@@ -132,6 +145,7 @@ async def send_message(
                 session_id=conv_id,
                 user_message=payload.message,
                 agent_definition=agent_definition,
+                extra_system_messages=skill_messages,
             ):
                 yield f"data: {json.dumps({'token': token})}\n\n"
             yield "data: [DONE]\n\n"
@@ -142,6 +156,7 @@ async def send_message(
         session_id=conv_id,
         user_message=payload.message,
         agent_definition=agent_definition,
+        extra_system_messages=skill_messages,
     )
 
     # Save assistant message
