@@ -4,6 +4,10 @@
 
 [![Repository](https://img.shields.io/badge/GitHub-AI--Agent-blue)](https://github.com/oymclihui/AI-Agent)
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="AIAGNET 系统界面" width="900" />
+</p>
+
 ---
 
 ## 功能概览
