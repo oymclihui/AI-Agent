@@ -12,6 +12,7 @@ __pycache__/
 .venv/
 venv/
 *.db
+*.db-journal
 *.sqlite3
 
 # Node / Next.js
