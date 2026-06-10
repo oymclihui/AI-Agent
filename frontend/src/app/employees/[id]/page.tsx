@@ -4,10 +4,11 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
-  ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History,
+  ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History, Eye, Download, BookOpen,
 } from "lucide-react";
-import { employeesApi } from "@/lib/api";
-import { resolveRunArtifacts, type RunArtifact } from "@/lib/artifacts";
+import { employeesApi, knowledgeApi } from "@/lib/api";
+import { resolveRunArtifacts, downloadAuthed, type RunArtifact } from "@/lib/artifacts";
+import { getAuthToken } from "@/lib/authStore";
 import { ArtifactDownloadButton } from "@/components/ArtifactDownloadButton";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
@@ -26,14 +27,17 @@ interface Task {
 }
 
 interface Run {
-  id: string; status: string; triggered_by: string;
+  id: string; status: string; triggered_by: string; task_name?: string | null;
   output_data: {
     output?: string;
     artifacts?: Array<{ filename: string; download_url: string }>;
+    saved_to_kb_id?: string;
   } | null;
   error_message: string | null;
   duration_ms: number | null; created_at: string;
 }
+
+interface KnowledgeOption { id: string; name: string; }
 
 const CRON_PRESETS = [
   { key: "5min", cron: null, interval: 300, labelKey: "preset5min" as const },
@@ -57,6 +61,12 @@ export default function EmployeeDetailPage() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [readyArtifacts, setReadyArtifacts] = useState<RunArtifact[]>([]);
+  const [viewRun, setViewRun] = useState<Run | null>(null);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeOption[]>([]);
+  const [saveKbId, setSaveKbId] = useState("");
+  const [saveKbName, setSaveKbName] = useState("");
+  const [savingKbRunId, setSavingKbRunId] = useState<string | null>(null);
+  const [downloadingRunId, setDownloadingRunId] = useState<string | null>(null);
   const [taskForm, setTaskForm] = useState({
     name: "",
     description: "",
@@ -86,6 +96,12 @@ export default function EmployeeDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    knowledgeApi.list().then(({ data }) => {
+      setKnowledgeBases((data as KnowledgeOption[]).filter((kb) => kb.id));
+    }).catch(() => { /* optional */ });
+  }, []);
+
   const createTask = async () => {
     if (!taskForm.name.trim() || !taskForm.prompt.trim()) return;
     try {
@@ -106,8 +122,50 @@ export default function EmployeeDetailPage() {
     }
   };
 
-  const artifactLabel = (a: RunArtifact) =>
-    a.filename.toLowerCase().endsWith(".pptx") ? e.downloadPptx[lang] : e.downloadFile[lang];
+  const artifactLabel = (a: RunArtifact) => {
+    const lower = a.filename.toLowerCase();
+    if (lower.endsWith(".pptx")) return e.downloadPptx[lang];
+    if (lower.endsWith(".md")) return e.downloadMd[lang];
+    return e.downloadFile[lang];
+  };
+
+  const downloadRunReport = async (run: Run) => {
+    setDownloadingRunId(run.id);
+    try {
+      const filename = run.output_data?.report_filename
+        ?? `employee_report_${run.id.slice(0, 8)}.md`;
+      await downloadAuthed(
+        employeesApi.downloadRunUrl(id, run.id),
+        filename,
+        getAuthToken(),
+      );
+    } catch {
+      toast.error(lang === "zh" ? "下载失败" : "Download failed");
+    } finally {
+      setDownloadingRunId(null);
+    }
+  };
+
+  const saveRunToKb = async (run: Run) => {
+    if (!saveKbId && !saveKbName.trim()) {
+      toast.error(lang === "zh" ? "请选择或填写知识库" : "Select or name a knowledge base");
+      return;
+    }
+    setSavingKbRunId(run.id);
+    try {
+      const { data } = await employeesApi.saveRunToKnowledge(id, run.id, {
+        kb_id: saveKbId || undefined,
+        kb_name: saveKbName.trim() || undefined,
+      });
+      toast.success(`${e.saveToKbOk[lang]} · ${data.knowledge_base_name}`);
+      load();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ?? e.saveToKbFail[lang]);
+    } finally {
+      setSavingKbRunId(null);
+    }
+  };
 
   const runTask = async (taskId: string) => {
     setRunningId(taskId);
@@ -190,6 +248,9 @@ export default function EmployeeDetailPage() {
 
       {tab === "tasks" && (
         <>
+          <div className="mb-4 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-100">
+            {e.runsHint[lang]}
+          </div>
           <div className="mb-4 flex justify-end">
             <button
               onClick={() => setShowTaskModal(true)}
@@ -251,6 +312,32 @@ export default function EmployeeDetailPage() {
               </div>
             </div>
           )}
+          <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-4">
+            <div className="min-w-[200px] flex-1">
+              <label className="mb-1 block text-xs text-slate-500">{e.selectKb[lang]}</label>
+              <select
+                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                value={saveKbId}
+                onChange={(ev) => setSaveKbId(ev.target.value)}
+              >
+                <option value="">{lang === "zh" ? "（新建知识库）" : "(Create new KB)"}</option>
+                {knowledgeBases.map((kb) => (
+                  <option key={kb.id} value={kb.id}>{kb.name}</option>
+                ))}
+              </select>
+            </div>
+            {!saveKbId && (
+              <div className="min-w-[200px] flex-1">
+                <label className="mb-1 block text-xs text-slate-500">{e.newKbName[lang]}</label>
+                <input
+                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  value={saveKbName}
+                  onChange={(ev) => setSaveKbName(ev.target.value)}
+                  placeholder={lang === "zh" ? "数字员工报告" : "Employee reports"}
+                />
+              </div>
+            )}
+          </div>
         {runs.length === 0 ? (
           <p className="text-slate-500">{e.noRuns[lang]}</p>
         ) : (
@@ -261,6 +348,9 @@ export default function EmployeeDetailPage() {
               <div key={run.id} className="rounded-lg border border-[#2d2d4e] bg-[#1a1a2e] p-3 text-sm">
                 <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
+                  {run.task_name && (
+                    <span className="text-xs font-medium text-white">{run.task_name}</span>
+                  )}
                   <span className={`rounded px-1.5 py-0.5 text-xs ${
                     run.status === "completed" ? "bg-green-500/20 text-green-400" :
                     run.status === "failed" ? "bg-red-500/20 text-red-400" : "bg-slate-500/20 text-slate-400"
@@ -268,10 +358,47 @@ export default function EmployeeDetailPage() {
                   <span className="text-xs text-slate-500">{run.triggered_by}</span>
                   <span className="text-xs text-slate-500">{fmtTime(run.created_at)}</span>
                   {run.duration_ms != null && <span className="text-xs text-slate-500">{run.duration_ms}ms</span>}
+                  {run.output_data?.saved_to_kb_id && (
+                    <span className="rounded bg-purple-500/20 px-1.5 py-0.5 text-xs text-purple-300">
+                      {lang === "zh" ? "已入库" : "In KB"}
+                    </span>
+                  )}
                   </div>
-                  {artifacts.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {artifacts.map((a) => (
+                  <div className="flex flex-wrap gap-2">
+                  {run.output_data?.output && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setViewRun(run)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs text-blue-300 hover:bg-blue-600/30"
+                      >
+                        <Eye className="h-3.5 w-3.5" /> {e.viewReport[lang]}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadRunReport(run)}
+                        disabled={downloadingRunId === run.id}
+                        className="inline-flex items-center gap-1 rounded-lg bg-slate-600/20 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-600/30 disabled:opacity-50"
+                      >
+                        {downloadingRunId === run.id
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Download className="h-3.5 w-3.5" />}
+                        {e.downloadReport[lang]}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => saveRunToKb(run)}
+                        disabled={savingKbRunId === run.id}
+                        className="inline-flex items-center gap-1 rounded-lg bg-purple-600/20 px-3 py-1.5 text-xs text-purple-200 hover:bg-purple-600/30 disabled:opacity-50"
+                      >
+                        {savingKbRunId === run.id
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <BookOpen className="h-3.5 w-3.5" />}
+                        {e.saveToKb[lang]}
+                      </button>
+                    </>
+                  )}
+                  {artifacts.length > 0 && artifacts.map((a) => (
                         <ArtifactDownloadButton
                           key={a.download_url}
                           artifact={a}
@@ -279,8 +406,7 @@ export default function EmployeeDetailPage() {
                           variant="compact"
                         />
                       ))}
-                    </div>
-                  )}
+                  </div>
                 </div>
                 {run.output_data?.output && (
                   <p className="line-clamp-4 whitespace-pre-wrap text-slate-300">{run.output_data.output}</p>
@@ -291,6 +417,41 @@ export default function EmployeeDetailPage() {
           </div>
         )}
         </>
+      )}
+
+      {viewRun && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-xl border border-[#2d2d4e] bg-[#1a1a2e]">
+            <div className="flex items-center justify-between border-b border-[#2d2d4e] px-6 py-4">
+              <h2 className="text-lg font-semibold text-white">
+                {e.reportTitle[lang]}
+                {viewRun.task_name ? ` · ${viewRun.task_name}` : ""}
+              </h2>
+              <button onClick={() => setViewRun(null)} className="text-sm text-slate-400 hover:text-white">
+                {c.cancel[lang]}
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <pre className="whitespace-pre-wrap text-sm text-slate-200">
+                {viewRun.output_data?.output}
+              </pre>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#2d2d4e] px-6 py-4">
+              <button
+                onClick={() => downloadRunReport(viewRun)}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-600"
+              >
+                {e.downloadReport[lang]}
+              </button>
+              <button
+                onClick={() => { saveRunToKb(viewRun); setViewRun(null); }}
+                className="rounded-lg bg-purple-600 px-4 py-2 text-sm text-white hover:bg-purple-500"
+              >
+                {e.saveToKb[lang]}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showTaskModal && (

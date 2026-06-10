@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Search, Plus, Minus } from "lucide-react";
+import { clsx } from "clsx";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 
@@ -80,14 +81,23 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
   const catMeta = (id: string) => categories.find((c) => c.id === id);
   const catName = (id: string) => catMeta(id)?.name || id;
 
+  const chipStyle = (color: string, active: boolean): CSSProperties | undefined => {
+    if (!active) return undefined;
+    return {
+      ["--cat-fg" as string]: color,
+      ["--cat-bg" as string]: `color-mix(in srgb, ${color} 34%, var(--surface))`,
+      ["--cat-border" as string]: `color-mix(in srgb, ${color} 62%, var(--border))`,
+    };
+  };
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b border-[#2d2d4e] p-3">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{d.nodeLibrary[lang]}</p>
+    <div className="flex h-full flex-col designer-panel">
+      <div className="border-b theme-border p-3">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider designer-panel-muted">{d.nodeLibrary[lang]}</p>
         <div className="relative">
-          <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
+          <Search className="absolute left-2 top-2 h-3.5 w-3.5 designer-panel-muted" />
           <input
-            className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] py-1.5 pl-7 pr-2 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none"
+            className="theme-input w-full rounded-lg border py-1.5 pl-7 pr-2 text-xs outline-none focus:border-blue-400"
             placeholder={d.searchNodes[lang]}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -96,7 +106,10 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
         <div className="mt-2 flex flex-wrap gap-1">
           <button
             onClick={() => setActiveCategory("all")}
-            className={`rounded px-2 py-0.5 text-[10px] ${activeCategory === "all" ? "bg-blue-600 text-white" : "bg-[#0d0d1a] text-slate-400"}`}
+            className={clsx(
+              "rounded px-2 py-0.5 text-[10px] transition-colors",
+              activeCategory === "all" ? "palette-cat-active palette-cat-all" : "palette-cat-idle",
+            )}
           >
             {d.all[lang]} ({nodes.length})
           </button>
@@ -104,8 +117,11 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
             <button
               key={c.id}
               onClick={() => setActiveCategory(c.id)}
-              className={`rounded px-2 py-0.5 text-[10px] ${activeCategory === c.id ? "text-white" : "text-slate-400 bg-[#0d0d1a]"}`}
-              style={activeCategory === c.id ? { background: c.color } : undefined}
+              className={clsx(
+                "rounded px-2 py-0.5 text-[10px] transition-colors",
+                activeCategory === c.id ? "palette-cat-active" : "palette-cat-idle",
+              )}
+              style={chipStyle(c.color, activeCategory === c.id)}
             >
               {c.name}
             </button>
@@ -118,29 +134,29 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
           const isOpen = expanded.has(catId);
           const meta = catMeta(catId);
           return (
-          <div key={catId} className="rounded-lg border border-[#2d2d4e]/60 bg-[#0d0d1a]/40">
+          <div key={catId} className="rounded-lg border theme-border bg-[color-mix(in_srgb,var(--surface)_88%,transparent)]">
             <button
               type="button"
               onClick={() => toggleCategory(catId)}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-[#0d0d1a] transition-colors rounded-lg"
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors rounded-lg hover:bg-[var(--hover)]"
             >
               <span
-                className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-[#2d2d4e] text-slate-400"
-                style={meta?.color ? { borderColor: `${meta.color}66`, color: meta.color } : undefined}
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded border theme-border designer-panel-muted"
+                style={meta?.color ? { borderColor: `${meta.color}88`, color: meta.color } : undefined}
               >
                 {isOpen ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
               </span>
-              <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase text-slate-400">
+              <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase theme-text">
                 {catName(catId)}
               </span>
-              <span className="shrink-0 text-[10px] text-slate-600">{catNodes.length}</span>
+              <span className="shrink-0 text-[10px] designer-panel-muted">{catNodes.length}</span>
             </button>
             {isOpen && (
             <div className="space-y-1 px-1 pb-1.5">
               {catNodes.map((n) => (
                 <div
                   key={n.id}
-                  className="flex items-stretch gap-1 rounded-lg border border-transparent hover:border-[#2d2d4e] hover:bg-[#0d0d1a] transition-colors"
+                  className="flex items-stretch gap-1 rounded-lg border border-transparent transition-colors hover:border-[color-mix(in_srgb,var(--border)_80%,transparent)] hover:bg-[var(--hover)]"
                 >
                   <div
                     draggable
@@ -152,8 +168,8 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
                   >
                     <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full" style={{ background: n.color }} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs text-white">{n.name}</span>
-                      <span className="block truncate text-[10px] text-slate-500">{n.description}</span>
+                      <span className="block truncate text-xs theme-text">{n.name}</span>
+                      <span className="block truncate text-[10px] designer-panel-muted">{n.description}</span>
                     </span>
                   </div>
                   <button
@@ -164,7 +180,7 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
                       onAddNode(n);
                     }}
                     onMouseDown={(e) => e.stopPropagation()}
-                    className="flex shrink-0 items-center gap-0.5 self-center rounded-md border border-[#2d2d4e] px-1.5 py-1 text-[10px] text-blue-400 hover:border-blue-500/50 hover:bg-blue-500/10 transition-colors mr-1"
+                    className="mr-1 flex shrink-0 items-center gap-0.5 self-center rounded-md border theme-border px-1.5 py-1 text-[10px] text-blue-500 transition-colors hover:border-blue-400 hover:bg-blue-500/10"
                   >
                     <Plus className="h-3 w-3" />
                     {d.addNode[lang]}
@@ -176,7 +192,7 @@ export default function NodePalette({ categories, nodes, onAddNode }: NodePalett
           </div>
           );
         })}
-        <p className="px-1 pt-2 text-[10px] text-slate-600">{d.dragHint[lang]}</p>
+        <p className="px-1 pt-2 text-[10px] designer-panel-muted">{d.dragHint[lang]}</p>
       </div>
     </div>
   );

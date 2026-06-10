@@ -1,0 +1,28 @@
+{
+  "template_id": "agency-data-weekly",
+  "name_zh": "Agency 数据工程周报",
+  "name_en": "Agency Data Engineer Weekly",
+  "description_zh": "每周数据管道健康与指标解读（Agency Data Engineer 角色）。",
+  "description_en": "Weekly data pipeline health brief from Agency Data Engineer.",
+  "category": "data",
+  "agent": { "agency_slug": "engineering-data-engineer" },
+  "skills": [{ "ref": "agency-data-engineer", "always_load": true }],
+  "knowledge": [],
+  "employee": {
+    "name": "小数",
+    "title": "数据工程助理",
+    "description": "每周输出数据质量与管道运维建议。",
+    "timezone": "Asia/Shanghai"
+  },
+  "tasks": [
+    {
+      "name": "每周数据健康报告",
+      "schedule_type": "cron",
+      "cron_expression": "0 10 * * 1",
+      "task_config": {
+        "prompt": "作为数据工程师，撰写本周数据平台健康报告：1）管道 SLA 与失败模式；2）数据质量维度（完整性/一致性/时效性）；3）成本与性能优化建议；4）下周行动项。中文 Markdown 结构化输出。"
+      },
+      "enabled": true
+    }
+  ]
+}

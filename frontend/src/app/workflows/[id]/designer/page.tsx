@@ -397,9 +397,13 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
             fitView
             deleteKeyCode={["Backspace", "Delete"]}
           >
-            <Background variant={BackgroundVariant.Dots} color="#2d2d4e" gap={20} />
+            <Background variant={BackgroundVariant.Dots} color="var(--flow-dots)" gap={20} />
             <Controls />
-            <MiniMap nodeColor="#3b82f6" maskColor="#0d0d1a88" style={{ background: "#1a1a2e" }} />
+            <MiniMap
+              nodeColor="var(--flow-minimap-node)"
+              maskColor="var(--flow-minimap-mask)"
+              style={{ background: "var(--flow-minimap-bg)" }}
+            />
           </ReactFlow>
         </div>
 

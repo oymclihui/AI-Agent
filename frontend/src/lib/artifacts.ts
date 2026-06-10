@@ -32,6 +32,20 @@ export async function downloadArtifact(url: string, filename: string): Promise<v
   if (!res.ok) {
     throw new Error(`Download failed (${res.status})`);
   }
+  await saveBlobResponse(res, filename);
+}
+
+export async function downloadAuthed(url: string, filename: string, token?: string | null): Promise<void> {
+  const headers: HeadersInit = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(url, { credentials: "same-origin", headers });
+  if (!res.ok) {
+    throw new Error(`Download failed (${res.status})`);
+  }
+  await saveBlobResponse(res, filename);
+}
+
+async function saveBlobResponse(res: Response, filename: string): Promise<void> {
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");

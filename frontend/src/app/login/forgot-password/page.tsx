@@ -31,15 +31,15 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0d0d1a] p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-[#2d2d4e] bg-[#1a1a2e] p-8">
-        <Link href="/login" className="mb-6 inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white">
+    <div className="fixed inset-0 flex items-center justify-center theme-bg p-4">
+      <div className="w-full max-w-lg rounded-2xl border theme-border theme-surface p-8 shadow-lg">
+        <Link href="/login" className="mb-6 inline-flex items-center gap-2 text-sm theme-muted hover:text-[var(--foreground)]">
           <ArrowLeft className="h-4 w-4" />
           {f.backToLogin[lang]}
         </Link>
 
-        <h1 className="mb-2 text-xl font-bold text-white">{f.title[lang]}</h1>
-        <p className="mb-6 text-sm text-slate-400">{f.emailSubtitle[lang]}</p>
+        <h1 className="mb-2 text-xl font-bold theme-text">{f.title[lang]}</h1>
+        <p className="mb-6 text-sm theme-muted">{f.emailSubtitle[lang]}</p>
 
         {sent ? (
           <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-300">
@@ -50,7 +50,7 @@ export default function ForgotPasswordPage() {
             <input
               type="text"
               placeholder={f.loginPlaceholder[lang]}
-              className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-4 py-3 text-sm text-white"
+              className="theme-input w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-blue-500"
               value={login}
               onChange={(e) => setLogin(e.target.value)}
             />

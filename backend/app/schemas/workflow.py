@@ -83,7 +83,7 @@ class WorkflowCreate(BaseModel):
     graph_definition: GraphDefinition = GraphDefinition()
     agents_config: list[dict[str, Any]] = []
     triggers_config: list[TriggerConfig] = []
-    metadata_: dict[str, Any] = Field(default={}, alias="metadata")
+    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
     class Config:
         populate_by_name = True
@@ -108,7 +108,11 @@ class WorkflowResponse(BaseModel):
     graph_definition: dict
     agents_config: list
     triggers_config: list
-    metadata_: dict[str, Any] = Field(default={}, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias="metadata_",
+        serialization_alias="metadata",
+    )
     created_at: datetime
     updated_at: datetime
 

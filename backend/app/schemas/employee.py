@@ -116,10 +116,16 @@ class ScheduledTaskResponse(BaseModel):
         from_attributes = True
 
 
+class SaveRunToKnowledgeRequest(BaseModel):
+    kb_id: Optional[str] = None
+    kb_name: Optional[str] = Field(None, max_length=255)
+
+
 class TaskRunResponse(BaseModel):
     id: str
     task_id: str
     employee_id: str
+    task_name: Optional[str] = None
     status: str
     triggered_by: str
     input_data: dict
@@ -140,6 +146,7 @@ class EmployeeTemplateSummary(BaseModel):
     description_zh: str
     description_en: str
     category: str
+    status: str = "draft"
     employee_name: str
     employee_title: Optional[str] = None
     task_count: int

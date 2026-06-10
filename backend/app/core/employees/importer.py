@@ -23,20 +23,41 @@ from app.db.models import (
     ScheduleType,
     Skill,
     SkillStatus,
+    User,
 )
 
 logger = structlog.get_logger(__name__)
 
 TEMPLATES_DIR = Path(__file__).with_name("templates")
+TEMPLATE_STATUS_ACTIVE = "active"
+TEMPLATE_STATUS_DRAFT = "draft"
 
 
-def list_templates() -> list[dict[str, Any]]:
+def _template_publish_status(data: dict[str, Any]) -> str:
+    return str(data.get("status") or TEMPLATE_STATUS_DRAFT).lower()
+
+
+def template_visible_to_user(data: dict[str, Any], user: User | None) -> bool:
+    """Admin sees all; others only see published templates in allowed categories."""
+    if user is None:
+        return False
+    if user.is_admin:
+        return True
+    if _template_publish_status(data) != TEMPLATE_STATUS_ACTIVE:
+        return False
+    category = str(data.get("category") or "general").lower()
+    return category in settings.employee_template_user_categories
+
+
+def list_templates(user: User | None = None) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     if not TEMPLATES_DIR.exists():
         return items
     for path in sorted(TEMPLATES_DIR.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if user is not None and not template_visible_to_user(data, user):
+                continue
             items.append(_template_summary(data))
         except Exception as exc:
             logger.warning("employee_template_load_failed", path=str(path), error=str(exc))
@@ -60,6 +81,7 @@ def _template_summary(data: dict[str, Any]) -> dict[str, Any]:
         "description_zh": data.get("description_zh", ""),
         "description_en": data.get("description_en", ""),
         "category": data.get("category", "general"),
+        "status": _template_publish_status(data),
         "employee_name": employee.get("name", ""),
         "employee_title": employee.get("title"),
         "task_count": len(tasks),
@@ -69,6 +91,13 @@ def _template_summary(data: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _resolve_agent(db: AsyncSession, agent_spec: dict[str, Any]) -> Agent:
+    if agency_slug := str(agent_spec.get("agency_slug") or "").strip():
+        result = await db.execute(select(Agent))
+        for agent in result.scalars().all():
+            if (agent.metadata_ or {}).get("agency_slug") == agency_slug:
+                return agent
+        raise ValueError(f"Agency agent not imported yet: {agency_slug}. Import from Agent library first.")
+
     if ref := str(agent_spec.get("ref") or "").strip():
         result = await db.execute(select(Agent).where(Agent.name == ref).limit(1))
         agent = result.scalar_one_or_none()
@@ -162,8 +191,11 @@ async def import_template(
     template_id: str,
     *,
     employee_name_override: str | None = None,
+    user: User | None = None,
 ) -> tuple[DigitalEmployee, int]:
     data = get_template(template_id)
+    if user is not None and not template_visible_to_user(data, user):
+        raise ValueError(f"Template not available: {template_id}")
     agent = await _resolve_agent(db, data.get("agent") or {})
     skills_config = await _resolve_skills(db, data.get("skills") or [])
     knowledge_base_ids = await _resolve_knowledge_ids(db, data.get("knowledge") or [])

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 import json
+import structlog
 
 from app.db.session import get_db
 from app.db.models import (
@@ -11,8 +12,8 @@ from app.db.models import (
 from app.db.base import generate_uuid
 from app.schemas.chat import (
     ConversationCreate, ConversationResponse,
-    MessageResponse, ChatRequest, SuggestQuestionsResponse,
-    SaveAsSkillRequest, SaveToKnowledgeRequest,
+    MessageResponse, ChatRequest, SuggestQuestionsResponse, TranscribeResponse,
+    SaveAsSkillRequest, SaveToKnowledgeRequest, DeleteOkResponse,
 )
 from app.core.auth.deps import get_current_user
 from app.core.auth.scoping import scope_owned_only, assert_mutable_by_user
@@ -25,8 +26,21 @@ from app.core.skills.injector import SkillInjector
 from app.core.chat.attachments import build_attachment_context
 from app.core.chat.storage import save_attachment_bytes, delete_conversation_uploads
 from app.core.chat.suggestions import generate_attachment_questions
+from app.core.speech.transcriber import transcribe_audio
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+logger = structlog.get_logger(__name__)
+
+
+def _friendly_llm_error(exc: Exception) -> str:
+    msg = str(exc).strip() or exc.__class__.__name__
+    lower = msg.lower()
+    if "getaddrinfo failed" in lower or "connection error" in lower or "connecterror" in lower:
+        return (
+            "无法连接大模型服务（请确认已接入公司内网/VPN，或在「模型配置」中将默认模型切换为 Ollama）。"
+            f" 详情: {msg}"
+        )
+    return f"大模型调用失败: {msg}"
 
 _memory_managers: dict[str, MemoryManager] = {}
 
@@ -81,9 +95,23 @@ async def _resolve_agent_context(db: AsyncSession, conv: Conversation):
 
 async def _get_user_conversation(db: AsyncSession, conv_id: str, user: User) -> Conversation:
     conv = await db.get(Conversation, conv_id)
-    if not conv or not conv.is_active or conv.owner_id != user.id:
+    if not conv or not conv.is_active:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conv
+
+
+async def _remove_conversation(db: AsyncSession, conv: Conversation) -> None:
+    conv_id = conv.id
+    _memory_managers.pop(conv_id, None)
+    try:
+        delete_conversation_uploads(conv_id)
+    except Exception as exc:
+        logger.warning("conversation_upload_cleanup_failed", conversation_id=conv_id, error=str(exc))
+    await db.execute(delete(Message).where(Message.conversation_id == conv_id))
+    await db.delete(conv)
+    await db.flush()
 
 
 async def _parse_request_body(request: Request) -> tuple[str, bool, list[tuple[str, bytes]]]:
@@ -171,6 +199,42 @@ async def suggest_questions(
     return SuggestQuestionsResponse(**result)
 
 
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_voice(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    """Convert recorded speech to text (Ollama Whisper / OpenAI STT)."""
+    del user
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(status_code=400, detail="multipart/form-data with audio file required")
+
+    form = await request.form()
+    lang = str(form.get("lang") or "").strip().lower()
+    if lang not in ("zh", "en"):
+        lang = "zh"
+
+    audio_item = form.get("file")
+    if audio_item is None or not hasattr(audio_item, "read"):
+        raise HTTPException(status_code=400, detail="file required")
+
+    data = await audio_item.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty audio file")
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="audio file too large (max 25MB)")
+
+    filename = getattr(audio_item, "filename", None) or "recording.webm"
+    try:
+        text, source = await transcribe_audio(data, filename=filename, lang=lang)
+    except Exception as exc:
+        logger.exception("transcribe_failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return TranscribeResponse(text=text, source=source)
+
+
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
 async def create_conversation(
     payload: ConversationCreate,
@@ -231,20 +295,18 @@ async def get_messages(
     return result.scalars().all()
 
 
-@router.delete("/conversations/{conv_id}", status_code=204)
+@router.delete("/conversations/{conv_id}", response_model=DeleteOkResponse)
 async def delete_conversation(
     conv_id: str,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     conv = await _get_user_conversation(db, conv_id, user)
-    _memory_managers.pop(conv_id, None)
-    delete_conversation_uploads(conv_id)
-    await db.delete(conv)
-    await db.flush()
+    await _remove_conversation(db, conv)
+    return DeleteOkResponse(ok=True, deleted=1)
 
 
-@router.delete("/conversations", status_code=204)
+@router.delete("/conversations", response_model=DeleteOkResponse)
 async def delete_all_conversations(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -257,10 +319,8 @@ async def delete_all_conversations(
     )
     convs = result.scalars().all()
     for conv in convs:
-        _memory_managers.pop(conv.id, None)
-        delete_conversation_uploads(conv.id)
-        await db.delete(conv)
-    await db.flush()
+        await _remove_conversation(db, conv)
+    return DeleteOkResponse(ok=True, deleted=len(convs))
 
 
 @router.post("/conversations/{conv_id}/messages")
@@ -309,17 +369,24 @@ async def send_message(
     if stream:
         async def sse_stream():
             full = ""
-            async for token in dialogue.stream(
-                session_id=conv_id,
-                user_message=message,
-                agent_definition=agent_definition,
-                extra_system_messages=skill_messages,
-                attachment_context=attachment_context or None,
-                db=db,
-                user_id=user.id,
-            ):
-                full += token
-                yield f"data: {json.dumps({'token': token})}\n\n"
+            try:
+                async for token in dialogue.stream(
+                    session_id=conv_id,
+                    user_message=message,
+                    agent_definition=agent_definition,
+                    extra_system_messages=skill_messages,
+                    attachment_context=attachment_context or None,
+                    db=db,
+                    user_id=user.id,
+                ):
+                    full += token
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+            except Exception as exc:
+                detail = _friendly_llm_error(exc)
+                logger.exception("chat_stream_failed", conversation_id=conv_id)
+                yield f"data: {json.dumps({'error': detail})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
             from app.db.session import AsyncSessionLocal
             async with AsyncSessionLocal() as session:
@@ -336,15 +403,19 @@ async def send_message(
 
         return StreamingResponse(sse_stream(), media_type="text/event-stream")
 
-    result = await dialogue.chat(
-        session_id=conv_id,
-        user_message=message,
-        agent_definition=agent_definition,
-        extra_system_messages=skill_messages,
-        attachment_context=attachment_context or None,
-        db=db,
-        user_id=user.id,
-    )
+    try:
+        result = await dialogue.chat(
+            session_id=conv_id,
+            user_message=message,
+            agent_definition=agent_definition,
+            extra_system_messages=skill_messages,
+            attachment_context=attachment_context or None,
+            db=db,
+            user_id=user.id,
+        )
+    except Exception as exc:
+        logger.exception("chat_failed", conversation_id=conv_id)
+        raise HTTPException(status_code=502, detail=_friendly_llm_error(exc)) from exc
 
     assistant_msg = Message(
         id=generate_uuid(),

@@ -74,7 +74,7 @@ export const authApi = {
 
 // ── Agents ──────────────────────────────────────────
 export const agentsApi = {
-  list: () => api.get("/agents"),
+  list: (lang?: string) => api.get("/agents/", { params: lang ? { lang } : {} }),
   create: (data: object) => api.post("/agents", data),
   get: (id: string) => api.get(`/agents/${id}`),
   update: (id: string, data: object) => api.patch(`/agents/${id}`, data),
@@ -82,6 +82,19 @@ export const agentsApi = {
   run: (id: string, data: object) => api.post(`/agents/${id}/run`, data),
   generate: (description: string) => api.post("/agents/generate", { description }),
   seedTemplates: () => api.post("/agents/seed-templates"),
+  librarySources: () => api.get("/agents/library/sources"),
+  libraryCatalog: (params?: { source?: string; division?: string; q?: string }) =>
+    api.get("/agents/library/catalog", { params }),
+  libraryDivisions: (source?: string) =>
+    api.get("/agents/library/divisions", { params: source ? { source } : {} }),
+  librarySync: () => api.post("/agents/library/sync"),
+  libraryImport: (data: {
+    items?: { source: string; slug: string }[];
+    import_all?: boolean;
+    overwrite?: boolean;
+    import_skills?: boolean;
+  }) => api.post("/agents/library/import", data),
+  libraryI18nBackfill: () => api.post("/agents/library/i18n-backfill"),
 };
 
 // ── Workflows ────────────────────────────────────────
@@ -130,6 +143,28 @@ export const chatApi = {
     }
     return form;
   },
+  transcribe: async (audio: Blob, lang: string) => {
+    const form = new FormData();
+    form.append("file", audio, "recording.webm");
+    form.append("lang", lang);
+    const response = await fetch(`${API_BASE}/chat/transcribe`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: form,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      let detail = text;
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.detail ?? text;
+      } catch {
+        /* keep raw */
+      }
+      throw new Error(typeof detail === "string" ? detail : "transcribe failed");
+    }
+    return response.json() as Promise<{ text: string; source: string }>;
+  },
   suggestQuestions: async (files: File[], lang: string, agentId?: string, signal?: AbortSignal) => {
     const form = new FormData();
     form.append("lang", lang);
@@ -171,6 +206,9 @@ export const knowledgeApi = {
   deleteDocument: (kbId: string, docId: string) =>
     api.delete(`/knowledge/${kbId}/documents/${docId}`),
   search: (kbId: string, data: object) => api.post(`/knowledge/${kbId}/search`, data),
+  update: (id: string, data: object) => api.patch(`/knowledge/${id}`, data),
+  testBydKms: (data: object) => api.post("/knowledge/test-byd-kms", data),
+  testConnection: (kbId: string) => api.post(`/knowledge/${kbId}/test-connection`),
 };
 
 // ── Models ────────────────────────────────────────────
@@ -232,6 +270,10 @@ export const employeesApi = {
   deleteTask: (id: string, taskId: string) => api.delete(`/employees/${id}/tasks/${taskId}`),
   runTask: (id: string, taskId: string) => api.post(`/employees/${id}/tasks/${taskId}/run`),
   listRuns: (id: string) => api.get(`/employees/${id}/runs`),
+  getRun: (id: string, runId: string) => api.get(`/employees/${id}/runs/${runId}`),
+  downloadRunUrl: (id: string, runId: string) => `${API_BASE}/employees/${id}/runs/${runId}/download`,
+  saveRunToKnowledge: (id: string, runId: string, data: { kb_id?: string; kb_name?: string }) =>
+    api.post(`/employees/${id}/runs/${runId}/save-to-knowledge`, data),
   schedulerStatus: () => api.get("/employees/scheduler/status"),
 };
 

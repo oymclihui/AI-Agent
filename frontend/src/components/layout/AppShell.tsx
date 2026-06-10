@@ -42,6 +42,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, [hydrated, isPublic, token, router, logout]);
 
+  // Skip auth guard until persist has rehydrated token from localStorage.
+  if (!hydrated && !isPublic) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center theme-bg theme-muted">
+        Loading…
+      </div>
+    );
+  }
+
   if (pathname === "/login" || pathname.startsWith("/login/")) {
     return <>{children}</>;
   }
@@ -52,7 +61,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!hydrated || !token) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-[#0d0d1a] text-slate-400">
+      <div className="flex h-screen w-full items-center justify-center theme-bg theme-muted">
         Loading…
       </div>
     );

@@ -18,11 +18,26 @@ def artifacts_root() -> Path:
     return root
 
 
-def sanitize_filename(name: str, default: str = "artifact") -> str:
+def sanitize_filename(name: str, default: str = "artifact", *, ext: str = ".pptx") -> str:
     base = _SAFE_NAME.sub("_", (name or "").strip()) or default
-    if not base.lower().endswith(".pptx"):
-        base = f"{base}.pptx"
+    if not base.lower().endswith(ext.lower()):
+        base = f"{base}{ext}"
     return base[:120]
+
+
+def save_text_artifact(content: str, filename: str = "report.md") -> dict:
+    """Persist plain-text/markdown output and return artifact metadata."""
+    safe = sanitize_filename(filename, default="report", ext=".md")
+    storage_key = f"{_ARTIFACT_DIR_NAME}/{uuid4().hex}_{safe}"
+    full = Path(settings.LOCAL_UPLOADS_DIR) / storage_key
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content, encoding="utf-8")
+    return {
+        "filename": safe,
+        "storage_key": storage_key,
+        "download_url": artifact_download_url(storage_key, filename=safe),
+        "mime_type": "text/markdown; charset=utf-8",
+    }
 
 
 def new_artifact_path(filename: str) -> tuple[Path, str]:
@@ -67,6 +82,8 @@ def collect_artifacts_from_output(text: str | None) -> list[dict]:
         mime = "application/octet-stream"
         if filename.lower().endswith(".pptx"):
             mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        elif filename.lower().endswith(".md"):
+            mime = "text/markdown; charset=utf-8"
         found.append({
             "filename": filename,
             "download_url": f"/api/v1/artifacts/{filename}",

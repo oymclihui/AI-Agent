@@ -46,7 +46,7 @@ function KpiCard({ label, value, sub }: { label: string; value: string | number;
   return (
     <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
       <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 text-3xl font-bold tabular-nums text-white">{value}</p>
+      <p className="mt-1 text-3xl font-bold tabular-nums theme-text">{value}</p>
       {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
     </div>
   );
@@ -84,12 +84,12 @@ function EmployeeCard({
   return (
     <Link
       href={`/employees/${emp.id}`}
-      className="block rounded-lg border border-[#2d2d4e] bg-[#12121f] p-3 transition-colors hover:border-cyan-500/40"
+      className="block rounded-lg border theme-border ops-card p-3 transition-colors hover:border-cyan-500/40"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`h-2 w-2 shrink-0 rounded-full ${dot} ${emp.operational_status === "running" ? "animate-pulse" : ""}`} />
-          <span className="truncate font-medium text-white">{emp.name}</span>
+          <span className="truncate font-medium theme-text">{emp.name}</span>
         </div>
         <span className="shrink-0 text-xs text-slate-500">{statusLabel(emp.operational_status, s, lang)}</span>
       </div>
@@ -112,9 +112,9 @@ function EmployeeCard({
 function TaskFeedItem({ run, lang }: { run: DashboardRecentRun; lang: "zh" | "en" }) {
   const ok = run.status === "completed";
   return (
-    <div className="flex shrink-0 items-center gap-4 border-r border-[#2d2d4e] px-6 py-2 text-sm">
+    <div className="flex shrink-0 items-center gap-4 border-r theme-border px-6 py-2 text-sm">
       <span className="text-slate-500 tabular-nums">{format(new Date(run.created_at), "HH:mm:ss")}</span>
-      <span className="font-medium text-white">{run.employee_name}</span>
+      <span className="font-medium theme-text">{run.employee_name}</span>
       <span className="text-slate-400">· {run.task_name || run.task_id.slice(0, 8)}</span>
       <span className={ok ? "text-green-400" : run.status === "failed" ? "text-red-400" : "text-blue-400"}>
         {ok ? "✓" : run.status === "failed" ? "✗" : "…"}
@@ -208,14 +208,14 @@ export default function ScreenPage() {
   const nowStr = format(new Date(), lang === "zh" ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd HH:mm:ss");
 
   return (
-    <div id="ops-screen" className="fixed inset-0 z-40 flex flex-col overflow-hidden bg-[#050510] text-slate-200 print:static print:min-h-screen">
+    <div id="ops-screen" className="ops-bg fixed inset-0 z-40 flex flex-col overflow-hidden theme-text print:static print:min-h-screen">
       {/* Header */}
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-cyan-500/20 bg-[#0a0a18]/90 px-6 py-3 print:hidden">
+      <header className="ops-header flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-cyan-500/20 px-6 py-3 print:hidden">
         <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-1 text-sm text-slate-400 hover:text-white">
+          <Link href="/" className="flex items-center gap-1 text-sm theme-muted hover-theme-text">
             <ArrowLeft className="h-4 w-4" /> {s.back[lang]}
           </Link>
-          <h1 className="text-lg font-bold text-white md:text-xl">{s.title[lang]}</h1>
+          <h1 className="text-lg font-bold theme-text md:text-xl">{s.title[lang]}</h1>
           <span className="hidden text-sm text-slate-500 md:inline tabular-nums">{nowStr}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -229,7 +229,7 @@ export default function ScreenPage() {
             {liveMode === "sse" ? s.live[lang] : s.polling[lang]}
           </span>
           <select
-            className="rounded-lg border border-[#2d2d4e] bg-[#12121f] px-2 py-1 text-xs"
+            className="theme-input rounded-lg border px-2 py-1 text-xs"
             value={employeeFilter}
             onChange={(e) => setEmployeeFilter(e.target.value)}
           >
@@ -256,15 +256,15 @@ export default function ScreenPage() {
           </label>
           <button
             onClick={() => setCarouselPaused((p) => !p)}
-            className="rounded-lg border border-[#2d2d4e] p-2 hover:bg-white/5"
+            className="rounded-lg border theme-border p-2 hover:bg-white/5"
             title={carouselPaused ? s.resumeCarousel[lang] : s.pauseCarousel[lang]}
           >
             {carouselPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
           </button>
-          <button onClick={refresh} className="rounded-lg border border-[#2d2d4e] p-2 hover:bg-white/5">
+          <button onClick={refresh} className="rounded-lg border theme-border p-2 hover:bg-white/5">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </button>
-          <button onClick={() => window.print()} className="rounded-lg border border-[#2d2d4e] p-2 hover:bg-white/5">
+          <button onClick={() => window.print()} className="rounded-lg border theme-border p-2 hover:bg-white/5">
             <Printer className="h-4 w-4" />
           </button>
           <button onClick={toggleFullscreen} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-2 text-cyan-300 hover:bg-cyan-500/20">
@@ -289,7 +289,7 @@ export default function ScreenPage() {
         </div>
 
         {/* Carousel */}
-        <div className="relative overflow-hidden rounded-xl border border-[#2d2d4e] bg-[#0a0a18] xl:col-span-8 xl:row-span-1">
+        <div className="ops-surface relative overflow-hidden rounded-xl border theme-border xl:col-span-8 xl:row-span-1">
           <div className="absolute right-4 top-4 z-10 flex gap-1">
             {slides.map((_, i) => (
               <button
@@ -305,14 +305,14 @@ export default function ScreenPage() {
               key={sl.content}
               className={`absolute inset-0 p-6 transition-opacity duration-700 ${slide === i ? "opacity-100" : "pointer-events-none opacity-0"}`}
             >
-              <h2 className="mb-4 text-xl font-semibold text-white">{sl.title}</h2>
+              <h2 className="mb-4 text-xl font-semibold theme-text">{sl.title}</h2>
 
               {sl.content === "features" && data && (
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                   {featureItems.map(({ icon: Icon, title, desc, color }) => (
-                    <div key={title[lang]} className="rounded-lg border border-[#2d2d4e] bg-[#12121f] p-3">
+                    <div key={title[lang]} className="rounded-lg border theme-border ops-card p-3">
                       <Icon className={`mb-2 h-5 w-5 ${color}`} />
-                      <p className="text-sm font-medium text-white">{title[lang]}</p>
+                      <p className="text-sm font-medium theme-text">{title[lang]}</p>
                       <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">{desc[lang]}</p>
                     </div>
                   ))}
@@ -332,7 +332,7 @@ export default function ScreenPage() {
               {sl.content === "pipeline" && (
                 <ol className="space-y-3 text-sm">
                   {[d.step1, d.step2, d.step3, d.step4, d.step5].map((step, idx) => (
-                    <li key={idx} className="flex gap-3 rounded-lg border border-[#2d2d4e] bg-[#12121f] p-3">
+                    <li key={idx} className="flex gap-3 rounded-lg border theme-border ops-card p-3">
                       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-sm font-bold text-cyan-400">
                         {idx + 1}
                       </span>
@@ -354,9 +354,9 @@ export default function ScreenPage() {
               {sl.content === "ranking" && data && (
                 <div className="space-y-2">
                   {rankedEmployees.map((emp, idx) => (
-                    <div key={emp.id} className="flex items-center gap-3 rounded-lg border border-[#2d2d4e] bg-[#12121f] px-4 py-2">
+                    <div key={emp.id} className="flex items-center gap-3 rounded-lg border theme-border ops-card px-4 py-2">
                       <span className="w-6 text-lg font-bold text-cyan-400">{idx + 1}</span>
-                      <span className="min-w-[80px] font-medium text-white">{emp.name}</span>
+                      <span className="min-w-[80px] font-medium theme-text">{emp.name}</span>
                       <div className="flex-1">
                         <div className="h-3 overflow-hidden rounded-full bg-slate-800">
                           <div
@@ -377,7 +377,7 @@ export default function ScreenPage() {
               {sl.content === "outputs" && data && (
                 <div className="space-y-2 overflow-y-auto max-h-[280px]">
                   {filteredRuns.slice(0, 8).map((run) => (
-                    <div key={run.id} className="rounded-lg border border-[#2d2d4e] bg-[#12121f] p-3">
+                    <div key={run.id} className="rounded-lg border theme-border ops-card p-3">
                       <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
                         <span>{run.employee_name} · {run.task_name}</span>
                         <span>{format(new Date(run.created_at), "HH:mm")}</span>
@@ -391,7 +391,7 @@ export default function ScreenPage() {
                       >
                         {expandedRun === run.id ? (lang === "zh" ? "收起" : "Collapse") : (lang === "zh" ? "展开" : "Expand")}
                       </button>
-                      <Link href={`/employees/${run.employee_id}`} className="ml-3 text-xs text-slate-500 hover:text-white">
+                      <Link href={`/employees/${run.employee_id}`} className="ml-3 text-xs text-slate-500 hover-theme-text">
                         →
                       </Link>
                     </div>
@@ -405,8 +405,8 @@ export default function ScreenPage() {
         </div>
 
         {/* Employee wall */}
-        <div className="flex flex-col overflow-hidden rounded-xl border border-[#2d2d4e] bg-[#0a0a18] xl:col-span-4">
-          <h3 className="border-b border-[#2d2d4e] px-4 py-3 text-sm font-semibold text-white">{s.employeeWall[lang]}</h3>
+        <div className="ops-surface flex flex-col overflow-hidden rounded-xl border theme-border xl:col-span-4">
+          <h3 className="border-b theme-border px-4 py-3 text-sm font-semibold theme-text">{s.employeeWall[lang]}</h3>
           <div className="flex-1 space-y-2 overflow-y-auto p-3">
             {filteredEmployees.length === 0 ? (
               <p className="py-8 text-center text-sm text-slate-500">
@@ -422,8 +422,8 @@ export default function ScreenPage() {
         </div>
 
         {/* Task ticker */}
-        <div className="overflow-hidden rounded-xl border border-[#2d2d4e] bg-[#0a0a18] xl:col-span-12">
-          <h3 className="border-b border-[#2d2d4e] px-4 py-2 text-sm font-semibold text-white">{s.taskFeed[lang]}</h3>
+        <div className="ops-surface overflow-hidden rounded-xl border theme-border xl:col-span-12">
+          <h3 className="border-b theme-border px-4 py-2 text-sm font-semibold theme-text">{s.taskFeed[lang]}</h3>
           <div className="flex animate-[scroll_40s_linear_infinite] hover:[animation-play-state:paused]">
             {[...filteredRuns, ...filteredRuns].map((run, i) => (
               <TaskFeedItem key={`${run.id}-${i}`} run={run} lang={lang} />

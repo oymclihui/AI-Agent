@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -14,7 +15,7 @@ from app.db.models import (
     User,
 )
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_readable
+from app.core.auth.scoping import scope_list_visible
 from app.db.base import generate_uuid
 from app.schemas.employee import (
     EmployeeCreate,
@@ -27,7 +28,9 @@ from app.schemas.employee import (
     EmployeeTemplateSummary,
     EmployeeTemplateImportRequest,
     EmployeeTemplateImportResponse,
+    SaveRunToKnowledgeRequest,
 )
+from app.core.employees.export import _run_markdown, export_run_to_knowledge
 from app.core.employees.schedule import compute_next_run, validate_schedule
 from app.core.employees.runner import run_scheduled_task
 from app.core.employees.scheduler import EmployeeScheduler
@@ -66,6 +69,23 @@ def _apply_task_schedule(task: EmployeeScheduledTask) -> None:
         task.next_run_at = None
 
 
+def _task_run_response(run: EmployeeTaskRun, task_name: str | None = None) -> TaskRunResponse:
+    return TaskRunResponse(
+        id=run.id,
+        task_id=run.task_id,
+        employee_id=run.employee_id,
+        task_name=task_name,
+        status=run.status.value if hasattr(run.status, "value") else str(run.status),
+        triggered_by=run.triggered_by.value if hasattr(run.triggered_by, "value") else str(run.triggered_by),
+        input_data=run.input_data or {},
+        output_data=run.output_data,
+        error_message=run.error_message,
+        token_usage=run.token_usage or {},
+        duration_ms=run.duration_ms,
+        created_at=run.created_at,
+    )
+
+
 @router.get("/scheduler/status")
 async def scheduler_status():
     return EmployeeScheduler.get_instance().status()
@@ -78,7 +98,7 @@ async def list_employees(
 ):
     result = await db.execute(
         select(DigitalEmployee)
-        .where(scope_readable(DigitalEmployee, user.id))
+        .where(scope_list_visible(DigitalEmployee, user))
         .order_by(DigitalEmployee.updated_at.desc())
     )
     employees = result.scalars().all()
@@ -95,15 +115,16 @@ async def list_employees(
 
 
 @router.get("/templates", response_model=list[EmployeeTemplateSummary])
-async def list_employee_templates():
+async def list_employee_templates(user: User = Depends(get_current_user)):
     from app.core.employees.importer import list_templates
-    return list_templates()
+    return list_templates(user)
 
 
 @router.post("/import-template", response_model=EmployeeTemplateImportResponse, status_code=status.HTTP_201_CREATED)
 async def import_employee_template(
     payload: EmployeeTemplateImportRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     from app.core.employees.importer import import_template
 
@@ -112,6 +133,7 @@ async def import_employee_template(
             db,
             payload.template_id,
             employee_name_override=payload.employee_name,
+            user=user,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -290,7 +312,8 @@ async def run_task_manually(employee_id: str, task_id: str, db: AsyncSession = D
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    return run
+    await db.commit()
+    return _task_run_response(run, task.name)
 
 
 @router.get("/{employee_id}/runs", response_model=list[TaskRunResponse])
@@ -303,12 +326,85 @@ async def list_employee_runs(
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
     result = await db.execute(
-        select(EmployeeTaskRun)
+        select(EmployeeTaskRun, EmployeeScheduledTask.name)
+        .join(EmployeeScheduledTask, EmployeeTaskRun.task_id == EmployeeScheduledTask.id)
         .where(EmployeeTaskRun.employee_id == employee_id)
         .order_by(EmployeeTaskRun.created_at.desc())
         .limit(min(limit, 200))
     )
-    return result.scalars().all()
+    return [_task_run_response(run, task_name) for run, task_name in result.all()]
+
+
+@router.get("/{employee_id}/runs/{run_id}", response_model=TaskRunResponse)
+async def get_employee_run(employee_id: str, run_id: str, db: AsyncSession = Depends(get_db)):
+    run, task = await _get_run_with_task(db, employee_id, run_id)
+    return _task_run_response(run, task.name if task else None)
+
+
+@router.get("/{employee_id}/runs/{run_id}/download")
+async def download_employee_run(
+    employee_id: str,
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    run, task = await _get_run_with_task(db, employee_id, run_id)
+    markdown = _run_markdown(run, task, emp.name)
+    filename = (run.output_data or {}).get("report_filename") or f"run_{run.id[:8]}.md"
+    return PlainTextResponse(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{employee_id}/runs/{run_id}/save-to-knowledge")
+async def save_employee_run_to_knowledge(
+    employee_id: str,
+    run_id: str,
+    payload: SaveRunToKnowledgeRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    emp = await db.get(DigitalEmployee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    run, task = await _get_run_with_task(db, employee_id, run_id)
+    try:
+        kb, doc = await export_run_to_knowledge(
+            db,
+            run,
+            task,
+            emp.name,
+            user.id,
+            kb_id=payload.kb_id,
+            kb_name=payload.kb_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    await db.commit()
+    return {
+        "knowledge_base_id": kb.id,
+        "knowledge_base_name": kb.name,
+        "document_id": doc.id,
+        "filename": doc.filename,
+    }
+
+
+async def _get_run_with_task(
+    db: AsyncSession,
+    employee_id: str,
+    run_id: str,
+) -> tuple[EmployeeTaskRun, EmployeeScheduledTask | None]:
+    run = await db.get(EmployeeTaskRun, run_id)
+    if not run or run.employee_id != employee_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    task = await db.get(EmployeeScheduledTask, run.task_id)
+    return run, task
 
 
 async def _get_task(db: AsyncSession, employee_id: str, task_id: str) -> EmployeeScheduledTask:

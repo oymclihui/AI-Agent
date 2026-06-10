@@ -80,6 +80,22 @@ class AgentResponse(BaseModel):
         from_attributes = True
 
 
+class AgentLibraryImportRequest(BaseModel):
+    items: list[dict[str, str]] = Field(default_factory=list)
+    overwrite: bool = False
+    import_all: bool = False
+    import_skills: bool = True
+
+
+class AgentLibraryTemplate(BaseModel):
+    source: str
+    slug: str
+    name: str
+    description: str = ""
+    division: str = "general"
+    tags: list[str] = []
+
+
 class AgentRunRequest(BaseModel):
     task: str = Field(..., min_length=1)
     context: Optional[dict[str, Any]] = None

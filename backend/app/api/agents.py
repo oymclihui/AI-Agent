@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import json
@@ -8,12 +8,19 @@ from app.db.session import get_db
 from app.db.models import Agent as AgentModel, AgentExecution, ExecutionStatus, User
 from app.db.base import generate_uuid
 from pydantic import BaseModel, Field
-from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse, AgentRunRequest
+from app.schemas.agent import (
+    AgentCreate,
+    AgentUpdate,
+    AgentResponse,
+    AgentRunRequest,
+    AgentLibraryImportRequest,
+    AgentLibraryTemplate,
+)
 from app.config import settings
 from app.core.agents.base import AgentDefinition, Task
 from app.core.skills.factory import build_agent_executor
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_readable, assert_mutable_by_user
+from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -84,14 +91,80 @@ async def seed_agent_templates(db: AsyncSession = Depends(get_db)):
     return {"message": "Template agents seeded (skipped if already exist)"}
 
 
+@router.get("/library/sources")
+async def agent_library_sources():
+    from app.core.agents.agency_library import AgencyAgentLibrary
+    return AgencyAgentLibrary.get_sources()
+
+
+@router.get("/library/catalog", response_model=list[AgentLibraryTemplate])
+async def agent_library_catalog(
+    source: str | None = None,
+    division: str | None = None,
+    q: str | None = None,
+    lang: str | None = Query(None, description="UI language: zh | en"),
+):
+    from app.core.agents.agency_library import AgencyAgentLibrary
+    return AgencyAgentLibrary.list_catalog(source=source, division=division, query=q, lang=lang)
+
+
+@router.get("/library/divisions")
+async def agent_library_divisions(source: str | None = None):
+    from app.core.agents.agency_library import AgencyAgentLibrary
+    return AgencyAgentLibrary.list_divisions(source=source)
+
+
+@router.post("/library/sync")
+async def agent_library_sync():
+    from app.core.agents.agency_library import AgencyAgentLibrary
+    try:
+        return await AgencyAgentLibrary.sync_catalog()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to sync agent library: {exc}")
+
+
+@router.post("/library/i18n-backfill")
+async def agent_i18n_backfill(db: AsyncSession = Depends(get_db)):
+    """Refresh metadata.i18n for seed and Agency agents already in the database."""
+    from app.core.agents.i18n_backfill import backfill_all_agent_i18n
+
+    try:
+        stats = await backfill_all_agent_i18n(db)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return stats
+
+
+@router.post("/library/import")
+async def agent_library_import(payload: AgentLibraryImportRequest, db: AsyncSession = Depends(get_db)):
+    from app.core.agents.agency_library import AgencyAgentLibrary
+    try:
+        if payload.import_all:
+            return await AgencyAgentLibrary.import_all(db, overwrite=payload.overwrite)
+        return await AgencyAgentLibrary.import_templates(
+            db,
+            payload.items,
+            overwrite=payload.overwrite,
+            import_skills=payload.import_skills,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/", response_model=list[AgentResponse])
-async def list_agents(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def list_agents(
+    lang: str | None = Query(None, description="UI language: zh | en"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.core.agents.i18n import agent_to_response_dict
+
     result = await db.execute(
         select(AgentModel)
-        .where(scope_readable(AgentModel, user.id))
+        .where(scope_list_visible(AgentModel, user))
         .order_by(AgentModel.created_at.desc())
     )
-    return result.scalars().all()
+    return [agent_to_response_dict(a, lang) for a in result.scalars().all()]
 
 
 @router.post("/", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
@@ -124,13 +197,16 @@ async def create_agent(
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(
     agent_id: str,
+    lang: str | None = Query(None, description="UI language: zh | en"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    from app.core.agents.i18n import agent_to_response_dict
+
     agent = await db.get(AgentModel, agent_id)
-    if not agent or not (agent.owner_id == user.id or agent.owner_id is None):
+    if not agent or not can_read_record(agent, user):
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
+    return agent_to_response_dict(agent, lang)
 
 
 @router.patch("/{agent_id}", response_model=AgentResponse)

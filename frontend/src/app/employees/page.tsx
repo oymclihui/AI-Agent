@@ -7,6 +7,7 @@ import { Plus, Briefcase, Trash2, ChevronRight, Loader2, LayoutTemplate } from "
 import { agentsApi, employeesApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
+import { useAuthStore } from "@/lib/authStore";
 import toast from "react-hot-toast";
 
 interface Employee {
@@ -29,6 +30,7 @@ interface EmployeeTemplate {
   description_zh: string;
   description_en: string;
   category: string;
+  status?: string;
   employee_name: string;
   employee_title: string | null;
   task_count: number;
@@ -38,7 +40,9 @@ interface EmployeeTemplate {
 export default function EmployeesPage() {
   const router = useRouter();
   const { lang } = useLangStore();
+  const user = useAuthStore((s) => s.user);
   const e = translations.employees;
+  const s = translations.skills;
   const c = translations.common;
 
   const [items, setItems] = useState<Employee[]>([]);
@@ -69,11 +73,11 @@ export default function EmployeesPage() {
 
   useEffect(() => {
     load();
-    agentsApi.list().then(({ data }) => {
+    agentsApi.list(lang).then(({ data }) => {
       setAgents(data);
       if (data[0]) setForm((f) => ({ ...f, agent_id: data[0].id }));
     }).catch(() => {});
-  }, []);
+  }, [lang]);
 
   const openTemplates = async () => {
     setShowTemplates(true);
@@ -256,9 +260,20 @@ export default function EmployeesPage() {
                       >
                         <div className="mb-1 flex items-center justify-between gap-2">
                           <span className="font-medium text-white">{tplName(tpl)}</span>
-                          <span className="shrink-0 rounded bg-slate-700/50 px-2 py-0.5 text-xs text-slate-400">
-                            {tpl.category}
-                          </span>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {user?.is_admin && (
+                              <span className={`rounded px-2 py-0.5 text-xs ${
+                                tpl.status === "active"
+                                  ? "bg-green-500/20 text-green-400"
+                                  : "bg-amber-500/20 text-amber-400"
+                              }`}>
+                                {tpl.status === "active" ? s.statusActive[lang] : s.statusDraft[lang]}
+                              </span>
+                            )}
+                            <span className="rounded bg-slate-700/50 px-2 py-0.5 text-xs text-slate-400">
+                              {tpl.category}
+                            </span>
+                          </div>
                         </div>
                         <p className="mb-2 line-clamp-2 text-sm text-slate-400">{tplDesc(tpl)}</p>
                         <div className="flex flex-wrap gap-2 text-xs text-slate-500">

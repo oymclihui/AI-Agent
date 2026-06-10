@@ -4,7 +4,7 @@ import { GitBranch } from "lucide-react";
 export default function ConditionNode({ data, selected }: NodeProps) {
   return (
     <div
-      className={`min-w-[140px] rotate-0 rounded-xl border bg-[#1a1a2e] px-4 py-3 shadow-lg transition-colors ${
+      className={`flow-node-card min-w-[140px] rotate-0 rounded-xl border bg-[#1a1a2e] px-4 py-3 shadow-lg transition-colors ${
         selected ? "border-yellow-400" : "border-yellow-500/40"
       }`}
     >

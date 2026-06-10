@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2 } from "lucide-react";
+import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { chatApi, agentsApi, streamResponse, streamResponseForm } from "@/lib/api";
@@ -10,6 +10,7 @@ import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 import { clsx } from "clsx";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
 
 interface AttachmentMeta {
   filename: string;
@@ -53,10 +54,34 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const appendVoiceText = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setInput((prev) => (prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
+  }, []);
+
+  const { isRecording, isProcessing, toggle: toggleVoice } = useVoiceInput(
+    lang,
+    streaming,
+  );
+
+  const handleVoiceClick = async () => {
+    try {
+      await toggleVoice(appendVoiceText);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("notallowed")) {
+        toast.error(t.voiceDenied[lang]);
+      } else {
+        toast.error(msg ? `${t.voiceFailed[lang]}: ${msg}` : t.voiceFailed[lang]);
+      }
+    }
+  };
+
   useEffect(() => {
     chatApi.listConversations().then(({ data }) => setConversations(data)).catch(() => {});
-    agentsApi.list().then(({ data }) => setAgents(data)).catch(() => {});
-  }, []);
+    agentsApi.list(lang).then(({ data }) => setAgents(data)).catch(() => {});
+  }, [lang]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -140,8 +165,9 @@ export default function ChatPage() {
         setMessages([]);
       }
       toast.success(t.deleteOk[lang]);
-    } catch {
-      toast.error(t.deleteFailed[lang]);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ? `${t.deleteFailed[lang]}: ${detail}` : t.deleteFailed[lang]);
     }
   };
 
@@ -154,8 +180,9 @@ export default function ChatPage() {
       setActiveConv(null);
       setMessages([]);
       toast.success(t.deleteOk[lang]);
-    } catch {
-      toast.error(t.deleteFailed[lang]);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ? `${t.deleteFailed[lang]}: ${detail}` : t.deleteFailed[lang]);
     }
   };
 
@@ -259,6 +286,7 @@ export default function ChatPage() {
     setStreamingContent("");
 
     let full = "";
+    let streamError = "";
     try {
       if (filesToSend.length > 0) {
         const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true);
@@ -275,7 +303,17 @@ export default function ChatPage() {
           setStreamingContent(full);
         }
       }
-    } catch {
+    } catch (err: unknown) {
+      streamError = err instanceof Error ? err.message : "";
+    }
+
+    if (!full) {
+      if (streamError) {
+        toast.error(`${t.replyFailed[lang]}: ${streamError}`);
+        setStreaming(false);
+        setStreamingContent("");
+        return;
+      }
       try {
         if (filesToSend.length > 0) {
           const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, false);
@@ -284,7 +322,16 @@ export default function ChatPage() {
             body: form,
             headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
           });
-          if (!response.ok) throw new Error(await response.text());
+          if (!response.ok) {
+            const text = await response.text();
+            let detail = text;
+            try {
+              detail = JSON.parse(text)?.detail ?? text;
+            } catch {
+              /* keep raw text */
+            }
+            throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+          }
           const data = await response.json();
           full = data?.content ?? "";
         } else {
@@ -292,7 +339,10 @@ export default function ChatPage() {
           full = data?.content ?? "";
         }
       } catch (err: unknown) {
-        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+        const detail =
+          (err instanceof Error ? err.message : "") ||
+          (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+          streamError;
         toast.error(detail ? `${t.replyFailed[lang]}: ${detail}` : t.replyFailed[lang]);
         setStreaming(false);
         setStreamingContent("");
@@ -309,7 +359,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen">
-      <div className="flex w-56 flex-col border-r border-[#2d2d4e] bg-[#1a1a2e]">
+      <div className="theme-surface flex w-56 flex-col border-r theme-border">
         <div className="p-3">
           <div className="mb-3 flex gap-2">
             <select
@@ -342,15 +392,12 @@ export default function ChatPage() {
               key={conv.id}
               className={clsx(
                 "group mb-1 flex items-center gap-1 rounded-lg transition-colors",
-                activeConv === conv.id ? "bg-blue-600/20" : "hover:bg-white/5",
+                activeConv === conv.id ? "panel-list-item-active" : "panel-list-item-idle hover:bg-[var(--hover)]",
               )}
             >
               <button
                 onClick={() => loadMessages(conv.id)}
-                className={clsx(
-                  "min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                  activeConv === conv.id ? "text-blue-300" : "text-slate-400 group-hover:text-slate-200",
-                )}
+                className="min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm text-inherit transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <MessageSquare className="h-3.5 w-3.5 shrink-0" />
@@ -516,11 +563,33 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={streaming}
+              disabled={streaming || isRecording || isProcessing}
               className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-blue-400 disabled:opacity-40"
               title={t.attachFiles[lang]}
             >
               <Paperclip className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleVoiceClick}
+              disabled={streaming || isProcessing}
+              className={clsx(
+                "rounded-lg p-2 transition-colors disabled:opacity-40",
+                isRecording
+                  ? "bg-red-500/20 text-red-400 animate-pulse"
+                  : isProcessing
+                    ? "text-blue-400"
+                    : "text-slate-400 hover:bg-white/5 hover:text-blue-400",
+              )}
+              title={
+                isRecording
+                  ? t.voiceRecording[lang]
+                  : isProcessing
+                    ? t.voiceProcessing[lang]
+                    : t.voiceInput[lang]
+              }
+            >
+              <Mic className="h-4 w-4" />
             </button>
             <textarea
               className="flex-1 resize-none bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
@@ -537,14 +606,18 @@ export default function ChatPage() {
             />
             <button
               onClick={send}
-              disabled={!canSend}
+              disabled={!canSend || isRecording || isProcessing}
               className="rounded-lg bg-blue-600 p-2 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
               <Send className="h-4 w-4" />
             </button>
           </div>
           <p className="mt-1.5 text-center text-xs text-slate-600">
-            {t.hint[lang]} · {t.fileTypesHint[lang]}
+            {isRecording
+              ? t.voiceRecording[lang]
+              : isProcessing
+                ? t.voiceProcessing[lang]
+                : `${t.hint[lang]} · ${t.fileTypesHint[lang]}`}
           </p>
         </div>
       </div>

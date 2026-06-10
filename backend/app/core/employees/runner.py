@@ -8,9 +8,16 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agents.base import Task
-from app.core.artifacts import collect_artifacts_from_output, collect_artifacts_from_steps, merge_artifacts
+from app.core.artifacts import (
+    collect_artifacts_from_output,
+    collect_artifacts_from_steps,
+    merge_artifacts,
+    save_text_artifact,
+)
+from app.core.employees.export import run_report_filename
 from app.core.skills.factory import build_agent_executor
 from app.core.employees.schedule import compute_next_run
+from app.models_hub.connectivity import check_llm_reachable, format_llm_task_error
 from app.db.base import generate_uuid
 from app.db.models import (
     Agent as AgentModel,
@@ -77,6 +84,14 @@ async def run_scheduled_task(
 
     start = time.monotonic()
     try:
+        ok, detail = await check_llm_reachable(
+            agent_model.llm_provider,
+            agent_model.llm_model,
+            db,
+        )
+        if not ok:
+            raise ConnectionError(detail)
+
         executor = await build_agent_executor(db, agent_model)
         result = await executor.run(
             Task(description=prompt),
@@ -99,11 +114,22 @@ async def run_scheduled_task(
             collect_artifacts_from_steps(result.get("steps")),
             collect_artifacts_from_output(result.get("output")),
         )
+        output_text = str(result.get("output") or "").strip()
+        report_name: str | None = None
+        if output_text:
+            report_name = run_report_filename(run, task)
+            report_md = (
+                f"# {employee.name} · {task.name}\n\n"
+                f"## Task\n\n{prompt}\n\n"
+                f"## Output\n\n{output_text}\n"
+            )
+            artifacts = merge_artifacts(artifacts, [save_text_artifact(report_md, report_name)])
         run.status = ExecutionStatus.completed
         run.output_data = {
             "output": result.get("output"),
             "steps_count": len(result.get("steps") or []),
             "artifacts": artifacts,
+            "report_filename": report_name if output_text else None,
         }
         run.token_usage = result.get("token_usage", {})
         run.duration_ms = duration_ms
@@ -111,7 +137,7 @@ async def run_scheduled_task(
         task.last_status = "completed"
     except Exception as exc:
         run.status = ExecutionStatus.failed
-        run.error_message = str(exc)[:4000]
+        run.error_message = format_llm_task_error(exc, agent_model)
         run.duration_ms = int((time.monotonic() - start) * 1000)
         task.last_status = "failed"
         logger.error("employee_task_failed", task_id=task.id, error=str(exc))

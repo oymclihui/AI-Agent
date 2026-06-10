@@ -10,7 +10,7 @@ from app.db.base import generate_uuid
 from app.schemas.skill import SkillCreate, SkillUpdate, SkillResponse, SkillLibraryImportRequest, SkillLibraryTemplate
 from app.core.skills.i18n import skill_to_response_dict
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_readable, assert_mutable_by_user
+from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user
 
 router = APIRouter(prefix="/skills", tags=["Skills"])
 
@@ -45,7 +45,9 @@ async def list_skills(
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Skill).where(scope_readable(Skill, user.id)).order_by(Skill.updated_at.desc())
+        select(Skill)
+        .where(scope_list_visible(Skill, user))
+        .order_by(Skill.updated_at.desc())
     )
     return [_serialize_skill(s, lang) for s in result.scalars().all()]
 
@@ -149,7 +151,7 @@ async def get_skill(
     user: User = Depends(get_current_user),
 ):
     skill = await db.get(Skill, skill_id)
-    if not skill or not (skill.owner_id == user.id or skill.owner_id is None):
+    if not skill or not can_read_record(skill, user):
         raise HTTPException(status_code=404, detail="Skill not found")
     return _serialize_skill(skill, lang, localize=not raw)
 

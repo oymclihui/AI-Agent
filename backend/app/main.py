@@ -91,17 +91,17 @@ async def database_operational_error_handler(_request, exc: OperationalError):
             "然后重新执行 start_backend.ps1；或改用 PostgreSQL（配置 DB_HOST / DATABASE_URL）。"
         )
     else:
-        detail = "数据库连接异常，请检查 PostgreSQL 是否可达以及 DATABASE_URL / DB_* 配置是否正确。"
+        detail = "数据库连接异常，请检查 PostgreSQL / VastBase 是否可达以及 DATABASE_URL / DB_* 配置是否正确。"
     return JSONResponse(status_code=503, content={"detail": detail})
 
 
 @app.get("/health")
 async def health_check():
-    from app.database_url import database_label
+    from app.config import settings as app_settings
     from sqlalchemy import text
 
     db_status = "unknown"
-    db_backend = database_label(settings.DATABASE_URL)
+    db_backend = app_settings.resolved_db_driver
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))

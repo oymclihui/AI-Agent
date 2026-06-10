@@ -1,0 +1,29 @@
+{
+  "template_id": "agency-code-review-weekly",
+  "name_zh": "Agency 代码审查员",
+  "name_en": "Agency Code Reviewer",
+  "description_zh": "每周自动输出代码质量与安全审查清单（基于 Agency Code Reviewer 角色）。",
+  "description_en": "Weekly code quality and security review checklist from Agency Code Reviewer.",
+  "category": "engineering",
+  "agent": { "agency_slug": "engineering-code-reviewer" },
+  "skills": [{ "ref": "agency-code-reviewer", "always_load": true }],
+  "knowledge": [],
+  "employee": {
+    "name": "小审",
+    "title": "代码审查助理",
+    "description": "每周汇总待审查要点与风险项，输出 Markdown 报告。",
+    "timezone": "Asia/Shanghai"
+  },
+  "tasks": [
+    {
+      "name": "每周代码审查清单",
+      "description": "周一上午生成本周代码审查关注清单",
+      "schedule_type": "cron",
+      "cron_expression": "0 9 * * 1",
+      "task_config": {
+        "prompt": "作为资深代码审查专家，生成本周代码审查清单：1）常见缺陷模式 Top 5；2）安全关注点（OWASP）；3）可维护性检查项；4）建议的 PR 审查流程。中文 Markdown 输出，可直接作为团队周报附件。"
+      },
+      "enabled": true
+    }
+  ]
+}

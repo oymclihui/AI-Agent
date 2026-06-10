@@ -43,7 +43,7 @@ export default function GenericWorkflowNode({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={`min-w-[170px] rounded-xl border bg-[#1a1a2e] px-3 py-2.5 shadow-lg transition-all ${
+      className={`flow-node-card min-w-[170px] rounded-xl border bg-[#1a1a2e] px-3 py-2.5 shadow-lg transition-all ${
         selected ? "ring-2 ring-offset-1 ring-offset-[#0d0d1a]" : ""
       } ${isNote ? "border-dashed opacity-80" : ""}`}
       style={{ borderColor: selected ? color : `${color}66` }}

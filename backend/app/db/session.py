@@ -5,9 +5,10 @@ from sqlalchemy import event
 from sqlalchemy.pool import NullPool
 from typing import AsyncGenerator
 from app.config import settings
-from app.database_url import is_sqlite_url
+from app.database_url import is_sqlite_url, DB_DRIVER_VASTBASE
 
 _is_sqlite = is_sqlite_url(settings.DATABASE_URL)
+_is_vastbase = settings.resolved_db_driver == DB_DRIVER_VASTBASE
 
 _engine_kwargs: dict = {
     "echo": settings.SQL_ECHO,
@@ -17,10 +18,15 @@ if _is_sqlite:
     _engine_kwargs["poolclass"] = NullPool
 else:
     _engine_kwargs.update({"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20})
+    connect_args: dict = {}
     if settings.DB_SSL == "disable":
-        _engine_kwargs["connect_args"] = {"ssl": False}
+        connect_args["ssl"] = False
     elif settings.DB_SSL == "require":
-        _engine_kwargs["connect_args"] = {"ssl": ssl.create_default_context()}
+        connect_args["ssl"] = ssl.create_default_context()
+    if _is_vastbase:
+        connect_args.setdefault("server_settings", {})["application_name"] = "aiagnet"
+    if connect_args:
+        _engine_kwargs["connect_args"] = connect_args
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 

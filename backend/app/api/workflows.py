@@ -14,7 +14,7 @@ from app.db.models import (
     User,
 )
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_readable
+from app.core.auth.scoping import scope_list_visible, can_read_record
 from app.db.base import generate_uuid
 from app.schemas.workflow import (
     WorkflowCreate, WorkflowUpdate, WorkflowResponse,
@@ -113,7 +113,7 @@ async def list_workflows(
 ):
     result = await db.execute(
         select(WorkflowModel)
-        .where(scope_readable(WorkflowModel, user.id))
+        .where(scope_list_visible(WorkflowModel, user))
         .order_by(WorkflowModel.created_at.desc())
     )
     return result.scalars().all()
@@ -142,9 +142,13 @@ async def create_workflow(
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
-async def get_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
+async def get_workflow(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     workflow = await db.get(WorkflowModel, workflow_id)
-    if not workflow:
+    if not workflow or not can_read_record(workflow, user):
         raise HTTPException(status_code=404, detail="Workflow not found")
     return workflow
 

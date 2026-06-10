@@ -57,6 +57,7 @@ export default function AgentsPage() {
   const [mode, setMode] = useState<"nl" | "manual">("nl");
   const [nlText, setNlText] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [agencyLoading, setAgencyLoading] = useState(false);
   const [form, setForm] = useState({
     name: "", role: "", goal: "", backstory: "",
     llm_provider: "ollama", llm_model: "qwen3.6:35b",
@@ -67,7 +68,7 @@ export default function AgentsPage() {
 
   const load = async () => {
     try {
-      const { data } = await agentsApi.list();
+      const { data } = await agentsApi.list(lang);
       setAgents(data);
     } catch {
       toast.error(lang === "zh" ? "加载失败" : "Failed to load agents");
@@ -92,7 +93,7 @@ export default function AgentsPage() {
     } catch { /* optional */ }
   };
 
-  useEffect(() => { load(); loadModels(); }, []);
+  useEffect(() => { load(); loadModels(); }, [lang]);
   useEffect(() => { loadSkills(); }, [lang]);
 
   const openCreate = () => {
@@ -178,6 +179,28 @@ export default function AgentsPage() {
     }
   };
 
+  const importAgencyLibrary = async () => {
+    setAgencyLoading(true);
+    try {
+      await agentsApi.librarySync();
+      const { data } = await agentsApi.libraryImport({ import_all: true, import_skills: true, overwrite: true });
+      await agentsApi.libraryI18nBackfill();
+      const count = (data.imported_agents as string[] | undefined)?.length ?? 0;
+      const skills = (data.imported_skills as string[] | undefined)?.length ?? 0;
+      toast.success(
+        lang === "zh"
+          ? `已导入 ${count} 个 Agency 角色${skills ? `、${skills} 个 SOP 技能` : ""}`
+          : `Imported ${count} Agency roles${skills ? ` and ${skills} SOP skills` : ""}`,
+      );
+      load();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ?? a.agencyImportFail[lang]);
+    } finally {
+      setAgencyLoading(false);
+    }
+  };
+
   return (
     <div className="p-8">
       <div className="mb-6 flex items-center justify-between">
@@ -186,6 +209,14 @@ export default function AgentsPage() {
           <p className="text-slate-400">{a.subtitle[lang]}</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={importAgencyLibrary}
+            disabled={agencyLoading}
+            className="flex items-center gap-2 rounded-lg border border-purple-500/40 px-4 py-2 text-sm text-purple-300 hover:bg-purple-500/10 transition-colors disabled:opacity-50"
+          >
+            {agencyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {a.agencyImportAll[lang]}
+          </button>
           <button
             onClick={seedTemplates}
             className="flex items-center gap-2 rounded-lg border border-[#2d2d4e] px-4 py-2 text-sm text-slate-300 hover:bg-white/5 transition-colors"

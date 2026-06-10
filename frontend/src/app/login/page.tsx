@@ -38,15 +38,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0d0d1a] p-4">
-      <div className="w-full max-w-md rounded-2xl border border-[#2d2d4e] bg-[#1a1a2e] p-8">
+    <div className="fixed inset-0 flex items-center justify-center theme-bg p-4">
+      <div className="w-full max-w-md rounded-2xl border theme-border theme-surface p-8 shadow-lg">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white font-bold">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 font-bold text-white">
             AI
           </div>
           <div>
-            <h1 className="text-xl font-bold text-white">{a.title[lang]}</h1>
-            <p className="text-sm text-slate-400">{a.subtitle[lang]}</p>
+            <h1 className="text-xl font-bold theme-text">{a.title[lang]}</h1>
+            <p className="text-sm theme-muted">{a.subtitle[lang]}</p>
           </div>
         </div>
 
@@ -54,7 +54,7 @@ export default function LoginPage() {
           <input
             type="text"
             placeholder={a.loginPlaceholder[lang]}
-            className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-4 py-3 text-sm text-white"
+            className="theme-input w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-blue-500"
             value={login}
             onChange={(e) => setLogin(e.target.value)}
             autoComplete="username"
@@ -62,13 +62,13 @@ export default function LoginPage() {
           <input
             type="password"
             placeholder={a.passwordPlaceholder[lang]}
-            className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-4 py-3 text-sm text-white"
+            className="theme-input w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-blue-500"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
           />
           <div className="text-right">
-            <Link href="/login/forgot-password" className="text-xs text-blue-400 hover:underline">
+            <Link href="/login/forgot-password" className="text-xs text-blue-500 hover:underline">
               {a.forgotPassword[lang]}
             </Link>
           </div>
@@ -81,8 +81,6 @@ export default function LoginPage() {
             {loading ? a.loggingIn[lang] : a.login[lang]}
           </button>
         </form>
-
-        <p className="mt-4 text-center text-xs text-slate-500">{a.defaultHint[lang]}</p>
       </div>
     </div>
   );

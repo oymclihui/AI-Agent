@@ -4,7 +4,7 @@ import { Bot } from "lucide-react";
 export default function AgentNode({ data, selected }: NodeProps) {
   return (
     <div
-      className={`min-w-[160px] rounded-xl border bg-[#1a1a2e] px-4 py-3 shadow-lg transition-colors ${
+      className={`flow-node-card min-w-[160px] rounded-xl border bg-[#1a1a2e] px-4 py-3 shadow-lg transition-colors ${
         selected ? "border-blue-500" : "border-[#2d2d4e]"
       }`}
     >

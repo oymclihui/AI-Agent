@@ -34,6 +34,20 @@ def get_skill_i18n(skill: Skill) -> dict[str, Any]:
     return meta.get("i18n") if isinstance(meta.get("i18n"), dict) else {}
 
 
+def localize_skill_instructions(skill: Skill, lang: str | None) -> str:
+    code = normalize_lang(lang)
+    meta = skill.metadata_ or {}
+    block = meta.get("instructions_i18n")
+    if isinstance(block, dict):
+        other = "en" if code == "zh" else "zh"
+        return (
+            (block.get(code) or "").strip()
+            or (block.get(other) or "").strip()
+            or skill.instructions_md
+        )
+    return skill.instructions_md
+
+
 def localize_skill_text(skill: Skill, lang: str | None) -> tuple[str, str]:
     code = normalize_lang(lang)
     i18n = get_skill_i18n(skill)
@@ -81,15 +95,18 @@ def localize_catalog_template(item: dict[str, Any], lang: str | None) -> dict[st
 
 
 def skill_to_response_dict(skill: Skill, lang: str | None = None, *, localize: bool = True) -> dict[str, Any]:
-    display_name, description = (
-        localize_skill_text(skill, lang) if localize else (skill.display_name, skill.description)
-    )
+    if localize:
+        display_name, description = localize_skill_text(skill, lang)
+        instructions_md = localize_skill_instructions(skill, lang)
+    else:
+        display_name, description = skill.display_name, skill.description
+        instructions_md = skill.instructions_md
     return {
         "id": skill.id,
         "slug": skill.slug,
         "display_name": display_name,
         "description": description,
-        "instructions_md": skill.instructions_md,
+        "instructions_md": instructions_md,
         "status": skill.status,
         "scope": skill.scope,
         "auto_invoke": skill.auto_invoke,

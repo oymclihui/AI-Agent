@@ -57,7 +57,11 @@ class MessageResponse(BaseModel):
     content: str
     tool_calls: Optional[list[dict]] = None
     token_usage: Optional[dict] = None
-    metadata_: dict[str, Any] = Field(default={}, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias="metadata_",
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     class Config:
@@ -78,6 +82,11 @@ class SuggestQuestionsResponse(BaseModel):
     source: str = "llm"
 
 
+class TranscribeResponse(BaseModel):
+    text: str
+    source: str = "ollama"
+
+
 class SaveAsSkillRequest(BaseModel):
     title: Optional[str] = None
 
@@ -85,3 +94,8 @@ class SaveAsSkillRequest(BaseModel):
 class SaveToKnowledgeRequest(BaseModel):
     kb_id: Optional[str] = None
     kb_name: Optional[str] = None
+
+
+class DeleteOkResponse(BaseModel):
+    ok: bool = True
+    deleted: int = 1

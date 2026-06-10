@@ -275,6 +275,10 @@ async def seed_template_agents(session) -> None:
     ]
 
     for tpl in templates:
+        from app.core.agents.i18n import merge_agent_metadata_i18n
+        from app.core.agents.seed_i18n import seed_agent_i18n
+
+        i18n = seed_agent_i18n(tpl["name"])
         session.add(Agent(
             id=generate_uuid(),
             name=tpl["name"],
@@ -288,6 +292,7 @@ async def seed_template_agents(session) -> None:
             tools_config=tpl.get("tools_config", []),
             memory_config={},
             status=AgentStatus.active,
+            metadata_=merge_agent_metadata_i18n({"template": "seed"}, i18n) if i18n else {},
         ))
 
     await session.commit()

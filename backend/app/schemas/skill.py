@@ -82,7 +82,11 @@ class SkillResponse(BaseModel):
     tools_required: list[str]
     knowledge_base_ids: list[str]
     tags: list[str]
-    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias="metadata_",
+        serialization_alias="metadata",
+    )
     created_at: datetime
     updated_at: datetime
 
