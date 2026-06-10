@@ -17,6 +17,8 @@ import "reactflow/dist/style.css";
 import { Save, Play, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { workflowsApi } from "@/lib/api";
+import { resolveRunArtifacts, type RunArtifact } from "@/lib/artifacts";
+import { ArtifactDownloadButton } from "@/components/ArtifactDownloadButton";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { localizeCatalog, resolveCatalogNode, normalizeGraphCatalogId, type RawCatalogCategory, type RawCatalogNode } from "@/lib/catalogLocale";
@@ -38,6 +40,31 @@ interface GraphNode {
 
 interface PageProps {
   params: { id: string };
+}
+
+interface WorkflowMeta {
+  name: string;
+  description?: string | null;
+  metadata?: {
+    template_id?: string;
+    input_example?: Record<string, string>;
+  };
+}
+
+function buildExecutePayload(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      /* use plain text fallback */
+    }
+  }
+  return {
+    input: trimmed,
+    filename: "deck.pptx",
+    deck_title: trimmed.slice(0, 48) || "Presentation",
+  };
 }
 
 function catalogNodeFromDef(defn: CatalogNode, id: string, position: { x: number; y: number }): Node {
@@ -84,9 +111,11 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
   const c = translations.common;
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [workflow, setWorkflow] = useState<{ name: string } | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowMeta | null>(null);
   const [executing, setExecuting] = useState(false);
   const [execInput, setExecInput] = useState("");
+  const [execArtifacts, setExecArtifacts] = useState<RunArtifact[]>([]);
+  const [execSummary, setExecSummary] = useState("");
   const [catalogRaw, setCatalogRaw] = useState<RawCatalogNode[]>([]);
   const [categoriesRaw, setCategoriesRaw] = useState<RawCatalogCategory[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -117,6 +146,16 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
         const { data } = await workflowsApi.get(params.id);
         if (cancelled) return;
         setWorkflow(data);
+        const example = data.metadata?.input_example;
+        if (example?.input) {
+          setExecInput(example.input);
+        } else if (data.metadata?.template_id === "ppt-generation") {
+          setExecInput(
+            lang === "zh"
+              ? "做 6 页 AI 数字员工平台产品发布 PPT：封面、痛点、解决方案、核心功能、应用场景、总结"
+              : "Create a 6-slide product launch deck for an AI digital employee platform",
+          );
+        }
         const graphDef = data.graph_definition;
         if (graphDef?.nodes?.length > 0) {
           setNodes(graphDef.nodes.map((n: GraphNode) => graphNodeToFlow(n, localized.nodes)));
@@ -259,10 +298,24 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
   };
 
   const execute = async () => {
+    if (!execInput.trim()) {
+      toast.error(lang === "zh" ? "请先填写执行输入" : "Enter execution input first");
+      return;
+    }
     setExecuting(true);
+    setExecArtifacts([]);
+    setExecSummary("");
     try {
-      const { data } = await workflowsApi.execute(params.id, { input_data: { input: execInput } });
-      toast.success(`${w.execDone[lang]}: ${String(data.output?.final_output || "").slice(0, 80)}...`);
+      const input_data = buildExecutePayload(execInput);
+      const { data } = await workflowsApi.execute(params.id, { input_data });
+      const output = data.output || {};
+      const artifacts = resolveRunArtifacts({
+        output: output.final_output,
+        artifacts: output.artifacts,
+      });
+      setExecArtifacts(artifacts);
+      setExecSummary(String(output.final_output || ""));
+      toast.success(artifacts.length > 0 ? w.downloadReady[lang] : w.execDone[lang]);
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } } };
       toast.error(err.response?.data?.detail || w.execFailed[lang]);
@@ -270,6 +323,10 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
       setExecuting(false);
     }
   };
+
+  const isPptWorkflow =
+    workflow?.metadata?.template_id === "ppt-generation" ||
+    workflow?.name?.includes("PPT");
 
   return (
     <div className="flex h-screen flex-col bg-[#0d0d1a]">
@@ -279,11 +336,11 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
         </Link>
         <span className="text-white font-semibold">{workflow?.name || w.designerTitle[lang]}</span>
         <span className="text-xs text-slate-500">{catalog.length}{w.nodeCount[lang]}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <input
-            type="text"
-            className="rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-1.5 text-sm text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none w-64"
-            placeholder={w.inputLabel[lang]}
+        <div className="ml-auto flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+          <textarea
+            rows={isPptWorkflow ? 3 : 1}
+            className="w-72 rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-1.5 text-sm text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none resize-y min-h-[2.5rem]"
+            placeholder={isPptWorkflow ? w.pptInputHint[lang] : w.inputLabel[lang]}
             value={execInput}
             onChange={(e) => setExecInput(e.target.value)}
           />
@@ -295,6 +352,25 @@ export default function WorkflowDesignerPage({ params }: PageProps) {
           </button>
         </div>
       </div>
+
+      {(execSummary || execArtifacts.length > 0) && (
+        <div className="border-b border-[#2d2d4e] bg-[#12122a] px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="max-w-3xl whitespace-pre-wrap text-sm text-slate-300">{execSummary}</p>
+            {execArtifacts.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {execArtifacts.map((a) => (
+                  <ArtifactDownloadButton
+                    key={a.download_url}
+                    artifact={a}
+                    label={`${w.downloadPptx[lang]} · ${a.filename}`}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         <div className="w-56 shrink-0 border-r border-[#2d2d4e] bg-[#1a1a2e]">

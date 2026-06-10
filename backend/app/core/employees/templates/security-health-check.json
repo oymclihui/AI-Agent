@@ -1,0 +1,29 @@
+{
+  "template_id": "security-health-check",
+  "name_zh": "安全巡检员",
+  "name_en": "Security Health Checker",
+  "description_zh": "按固定间隔检查安全配置与漏洞情报，输出风险摘要与修复建议。",
+  "description_en": "Periodic security posture checks and vulnerability briefings with remediation hints.",
+  "category": "ops",
+  "agent": { "ref": "网络安全顾问" },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "安巡",
+    "title": "安全运维助理",
+    "description": "定时汇总安全告警、漏洞情报与合规检查要点。",
+    "timezone": "Asia/Shanghai"
+  },
+  "tasks": [
+    {
+      "name": "每日安全简报",
+      "description": "每天 8:30 输出安全态势摘要",
+      "schedule_type": "cron",
+      "cron_expression": "30 8 * * *",
+      "task_config": {
+        "prompt": "作为网络安全顾问，列出今日应关注的 5 条安全动态或最佳实践提醒（OWASP、漏洞披露、配置加固等），中文输出，格式：标题 + 一句话说明 + 建议动作。"
+      },
+      "enabled": true
+    }
+  ]
+}

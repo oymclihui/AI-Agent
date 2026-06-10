@@ -1,0 +1,84 @@
+{
+  "template_id": "ppt-generation",
+  "name_zh": "PPT 生成",
+  "name_en": "PPT Generation",
+  "description_zh": "输入 PPT 主题与大纲 → LLM 结构化 → 导出可下载 .pptx。在设计器「运行」框填写内容，或粘贴 JSON（含 input / filename / deck_title）。",
+  "description_en": "Topic/outline → LLM structuring → downloadable .pptx. Enter content in the designer Run box, or paste JSON with input, filename, deck_title.",
+  "process_type": "sequential",
+  "input_schema": {
+    "input": "PPT 内容描述（自然语言，必填）",
+    "filename": "输出文件名，默认 deck.pptx",
+    "deck_title": "PPT 文档属性标题，默认同主题"
+  },
+  "input_example": {
+    "input": "做 6 页 AI 数字员工平台产品发布 PPT：封面、痛点、解决方案、核心功能、应用场景、总结",
+    "filename": "product-launch.pptx",
+    "deck_title": "AI 数字员工平台"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "start",
+        "type": "startNode",
+        "label": "开始",
+        "position": { "x": 80, "y": 40 },
+        "config": {}
+      },
+      {
+        "id": "outline_llm",
+        "type": "llmNode",
+        "label": "生成 Slides JSON",
+        "position": { "x": 80, "y": 160 },
+        "config": {
+          "prompt": "你是 PPT 结构化助手。根据用户需求输出**仅包含** JSON 数组，不要 markdown 说明或其它文字。\n\n用户需求：\n{input}\n\n要求：\n- 每页一个对象，title 必填；可选 subtitle、bullets（字符串数组）、body\n- 页数按用户要求，默认 5–8 页\n- 中文内容\n- 第一页作为封面，含 title 与 subtitle\n\n格式示例：\n[{\"title\":\"封面\",\"subtitle\":\"副标题\"},{\"title\":\"要点\",\"bullets\":[\"A\",\"B\"]}]"
+        }
+      },
+      {
+        "id": "parse_slides",
+        "type": "codeNode",
+        "label": "解析 JSON",
+        "position": { "x": 80, "y": 300 },
+        "config": {
+          "code": "raw = str(agent_outputs.get(\"outline_llm\", \"\")).strip()\nif not raw:\n    raise ValueError(\"LLM 未返回 slides JSON\")\n\ntext = raw\nif \"```\" in text:\n    m = re.search(r\"```(?:json)?\\s*([\\s\\S]*?)```\", text)\n    if m:\n        text = m.group(1).strip()\n\nslides = json.loads(text)\nif isinstance(slides, dict) and \"slides\" in slides:\n    slides = slides[\"slides\"]\nif not isinstance(slides, list) or not slides:\n    raise ValueError(\"slides 必须为非空 JSON 数组\")\n\nresult = {\n    \"slides_json\": json.dumps(slides, ensure_ascii=False),\n    \"filename\": input_data.get(\"filename\") or \"deck.pptx\",\n    \"deck_title\": input_data.get(\"deck_title\") or input_data.get(\"topic\") or \"Presentation\",\n}"
+        }
+      },
+      {
+        "id": "export_pptx",
+        "type": "toolNode",
+        "label": "导出 PPTX",
+        "position": { "x": 80, "y": 440 },
+        "config": {
+          "tool_name": "create_presentation",
+          "kwargs": {
+            "slides_json": "{slides_json}",
+            "filename": "{filename}",
+            "deck_title": "{deck_title}"
+          }
+        }
+      },
+      {
+        "id": "finalize",
+        "type": "codeNode",
+        "label": "整理下载信息",
+        "position": { "x": 80, "y": 580 },
+        "config": {
+          "code": "raw = tool_results.get(\"export_pptx\", \"{}\")\nif isinstance(raw, str):\n    try:\n        data = json.loads(raw)\n    except json.JSONDecodeError:\n        data = {\"ok\": False, \"error\": raw}\nelse:\n    data = raw or {}\n\nfilename = data.get(\"filename\") or input_data.get(\"filename\") or \"deck.pptx\"\ndownload_url = data.get(\"download_url\") or \"\"\nartifacts = []\nif data.get(\"ok\") and download_url:\n    artifacts.append({\"filename\": filename, \"download_url\": download_url})\n\nif data.get(\"ok\"):\n    final_output = f\"PPT 已生成：{filename}\\n下载：{download_url}\"\nelse:\n    final_output = f\"PPT 生成失败：{data.get('error', 'unknown')}\"\n\nresult = {\n    \"artifacts\": artifacts,\n    \"download_url\": download_url,\n    \"filename\": filename,\n    \"final_output\": final_output,\n}"
+        }
+      },
+      {
+        "id": "end",
+        "type": "endNode",
+        "label": "完成",
+        "position": { "x": 80, "y": 720 },
+        "config": {}
+      }
+    ],
+    "edges": [
+      { "id": "start->outline_llm", "source": "start", "target": "outline_llm" },
+      { "id": "outline_llm->parse_slides", "source": "outline_llm", "target": "parse_slides" },
+      { "id": "parse_slides->export_pptx", "source": "parse_slides", "target": "export_pptx" },
+      { "id": "export_pptx->finalize", "source": "export_pptx", "target": "finalize" },
+      { "id": "finalize->end", "source": "finalize", "target": "end" }
+    ]
+  }
+}

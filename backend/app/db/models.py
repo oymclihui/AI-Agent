@@ -54,6 +54,68 @@ class KBStatus(str, enum.Enum):
 
 
 # ──────────────────────────────────────────────
+# User & credentials
+# ──────────────────────────────────────────────
+
+class User(Base, TimestampMixin):
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    employee_no = Column(String(64), unique=True, nullable=True, index=True)
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    password_hash = Column(String(255), nullable=False)
+    display_name = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
+
+    model_credentials = relationship("UserModelCredential", back_populates="user", cascade="all, delete-orphan")
+    mailbox_credential = relationship(
+        "UserMailboxCredential", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class PasswordResetToken(Base, TimestampMixin):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class UserMailboxCredential(Base, TimestampMixin):
+    """Per-user corporate mailbox password for IMAP fetch_mail tool."""
+    __tablename__ = "user_mailbox_credentials"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    email = Column(String(255), nullable=False)
+    mailbox_password = Column(Text, nullable=False)
+    imap_host = Column(String(255), nullable=True)
+    imap_port = Column(Integer, nullable=True)
+    imap_use_ssl = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="mailbox_credential")
+
+
+class UserModelCredential(Base, TimestampMixin):
+    """Per-user LLM API keys (same model catalog, different keys)."""
+    __tablename__ = "user_model_credentials"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String(64), nullable=False)
+    model_id = Column(String(128), nullable=True)  # null = all models for provider
+    api_key = Column(Text, nullable=False)
+    base_url = Column(String(512), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="model_credentials")
+
+
+# ──────────────────────────────────────────────
 # Agent
 # ──────────────────────────────────────────────
 
@@ -61,6 +123,7 @@ class Agent(Base, TimestampMixin):
     __tablename__ = "agents"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     role = Column(String(255), nullable=False)
     goal = Column(Text, nullable=False)
@@ -86,6 +149,7 @@ class Workflow(Base, TimestampMixin):
     __tablename__ = "workflows"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(SAEnum(WorkflowStatus), default=WorkflowStatus.draft, nullable=False)
@@ -140,6 +204,7 @@ class Conversation(Base, TimestampMixin):
     __tablename__ = "conversations"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     title = Column(String(255), nullable=True)
     agent_id = Column(String(36), ForeignKey("agents.id"), nullable=True)
     workflow_id = Column(String(36), ForeignKey("workflows.id"), nullable=True)
@@ -173,6 +238,7 @@ class KnowledgeBase(Base, TimestampMixin):
     __tablename__ = "knowledge_bases"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(SAEnum(KBStatus), default=KBStatus.processing, nullable=False)
@@ -236,6 +302,7 @@ class Skill(Base, TimestampMixin):
     __tablename__ = "skills"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     slug = Column(String(64), nullable=False, unique=True)
     display_name = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
@@ -279,6 +346,7 @@ class DigitalEmployee(Base, TimestampMixin):
     __tablename__ = "digital_employees"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     title = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)

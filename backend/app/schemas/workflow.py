@@ -108,11 +108,13 @@ class WorkflowResponse(BaseModel):
     graph_definition: dict
     agents_config: list
     triggers_config: list
+    metadata_: dict[str, Any] = Field(default={}, alias="metadata")
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class WorkflowExecuteRequest(BaseModel):

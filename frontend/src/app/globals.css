@@ -37,6 +37,17 @@ body {
   background: #718096;
 }
 
+@keyframes scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media print {
+  body { overflow: visible !important; background: white !important; }
+  #ops-screen { background: white !important; color: black !important; }
+  .print\\:hidden { display: none !important; }
+}
+
 /* React Flow customization */
 .react-flow__node {
   border-radius: 8px;

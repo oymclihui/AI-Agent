@@ -21,7 +21,7 @@ export default function ToolsPage() {
   const [tools, setTools] = useState<Tool[]>([]);
 
   useEffect(() => {
-    toolsApi.list().then(({ data }) => setTools(data));
+    toolsApi.list().then(({ data }) => setTools(data)).catch(() => {});
   }, []);
 
   return (

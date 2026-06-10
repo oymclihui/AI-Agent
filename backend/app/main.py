@@ -14,7 +14,7 @@ from app.db.session import engine
 from app.db.init_db import (
     init_db, seed_default_models, seed_template_agents,
     seed_template_workflows, seed_template_skills, seed_template_employees,
-    seed_platform_knowledge_base,
+    seed_platform_knowledge_base, ensure_bundled_skills, seed_default_admin,
 )
 from app.db.session import AsyncSessionLocal
 from app.core.tools.registry import ToolRegistry
@@ -36,9 +36,13 @@ async def lifespan(app: FastAPI):
         await seed_default_models(session)
         await seed_template_agents(session)
         await seed_template_workflows(session)
+        from app.core.workflow.templates.loader import ensure_workflow_templates
+        await ensure_workflow_templates(session)
         await seed_template_skills(session)
+        await ensure_bundled_skills(session)
         await seed_template_employees(session)
         await seed_platform_knowledge_base(session)
+        await seed_default_admin(session)
     logger.info("default_models_seeded")
 
     # Pre-load tool registry
@@ -59,8 +63,8 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description=(
-        "AI-AGENT - Unified AI Agent Platform combining CrewAI, LangGraph, "
-        "LangChain, Dify, n8n, and LangFlow capabilities."
+        "AI-AGENT — Digital employees connect thinking, skills, workflows, "
+        "knowledge, and scheduled tasks into one complete AI workforce pipeline."
     ),
     lifespan=lifespan,
     docs_url="/docs",
@@ -79,23 +83,35 @@ app.include_router(api_router)
 
 
 @app.exception_handler(OperationalError)
-async def sqlite_operational_error_handler(_request, exc: OperationalError):
+async def database_operational_error_handler(_request, exc: OperationalError):
     logger.error("database_operational_error", error=str(exc))
-    return JSONResponse(
-        status_code=503,
-        content={
-            "detail": (
-                "数据库繁忙（SQLite 被锁定）。请确保只运行一个后端实例，"
-                "然后重新执行 E:\\AIAGNET\\start_backend.ps1"
-            ),
-        },
-    )
+    if settings.DATABASE_URL.startswith("sqlite"):
+        detail = (
+            "数据库繁忙（SQLite 被锁定）。请确保只运行一个后端实例，"
+            "然后重新执行 start_backend.ps1；或改用 PostgreSQL（配置 DB_HOST / DATABASE_URL）。"
+        )
+    else:
+        detail = "数据库连接异常，请检查 PostgreSQL 是否可达以及 DATABASE_URL / DB_* 配置是否正确。"
+    return JSONResponse(status_code=503, content={"detail": detail})
 
 
 @app.get("/health")
 async def health_check():
+    from app.database_url import database_label
+    from sqlalchemy import text
+
+    db_status = "unknown"
+    db_backend = database_label(settings.DATABASE_URL)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        db_status = "connected"
+    except Exception as exc:
+        db_status = f"error: {exc}"
+
     return {
-        "status": "healthy",
+        "status": "healthy" if db_status == "connected" else "degraded",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
+        "database": {"backend": db_backend, "status": db_status},
     }

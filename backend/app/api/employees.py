@@ -11,7 +11,10 @@ from app.db.models import (
     EmployeeScheduledTask,
     EmployeeTaskRun,
     EmployeeStatus,
+    User,
 )
+from app.core.auth.deps import get_current_user
+from app.core.auth.scoping import scope_readable
 from app.db.base import generate_uuid
 from app.schemas.employee import (
     EmployeeCreate,
@@ -21,6 +24,9 @@ from app.schemas.employee import (
     ScheduledTaskUpdate,
     ScheduledTaskResponse,
     TaskRunResponse,
+    EmployeeTemplateSummary,
+    EmployeeTemplateImportRequest,
+    EmployeeTemplateImportResponse,
 )
 from app.core.employees.schedule import compute_next_run, validate_schedule
 from app.core.employees.runner import run_scheduled_task
@@ -66,9 +72,14 @@ async def scheduler_status():
 
 
 @router.get("/", response_model=list[EmployeeResponse])
-async def list_employees(db: AsyncSession = Depends(get_db)):
+async def list_employees(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     result = await db.execute(
-        select(DigitalEmployee).order_by(DigitalEmployee.updated_at.desc())
+        select(DigitalEmployee)
+        .where(scope_readable(DigitalEmployee, user.id))
+        .order_by(DigitalEmployee.updated_at.desc())
     )
     employees = result.scalars().all()
     counts: dict[str, int] = {}
@@ -81,6 +92,37 @@ async def list_employees(db: AsyncSession = Depends(get_db)):
         )
         counts = {row[0]: row[1] for row in count_result.all()}
     return [_employee_response(e, counts.get(e.id, 0)) for e in employees]
+
+
+@router.get("/templates", response_model=list[EmployeeTemplateSummary])
+async def list_employee_templates():
+    from app.core.employees.importer import list_templates
+    return list_templates()
+
+
+@router.post("/import-template", response_model=EmployeeTemplateImportResponse, status_code=status.HTTP_201_CREATED)
+async def import_employee_template(
+    payload: EmployeeTemplateImportRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.core.employees.importer import import_template
+
+    try:
+        emp, task_count = await import_template(
+            db,
+            payload.template_id,
+            employee_name_override=payload.employee_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return EmployeeTemplateImportResponse(
+        employee=_employee_response(emp, task_count),
+        tasks_created=task_count,
+        template_id=payload.template_id,
+    )
 
 
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)

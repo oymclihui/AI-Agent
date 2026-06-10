@@ -16,16 +16,108 @@ async def init_db(engine: AsyncEngine) -> None:
 
 
 async def _migrate_schema(engine: AsyncEngine) -> None:
-    """Lightweight schema patches for SQLite (create_all does not alter existing tables)."""
-    if not str(engine.url).startswith("sqlite"):
-        return
+    """Lightweight schema patches (create_all does not alter existing tables)."""
+    from sqlalchemy import inspect, text
+
     async with engine.begin() as conn:
-        result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
-        cols = {row[1] for row in result.fetchall()}
-        if "skills_config" not in cols:
-            await conn.exec_driver_sql(
-                "ALTER TABLE agents ADD COLUMN skills_config JSON DEFAULT '[]'"
+        def _add_skills_config(sync_conn) -> None:
+            inspector = inspect(sync_conn)
+            if not inspector.has_table("agents"):
+                return
+            cols = {c["name"] for c in inspector.get_columns("agents")}
+            if "skills_config" in cols:
+                return
+            if engine.dialect.name == "sqlite":
+                sync_conn.execute(
+                    text("ALTER TABLE agents ADD COLUMN skills_config JSON DEFAULT '[]'")
+                )
+            else:
+                sync_conn.execute(
+                    text(
+                        "ALTER TABLE agents ADD COLUMN IF NOT EXISTS "
+                        "skills_config JSONB NOT NULL DEFAULT '[]'::jsonb"
+                    )
+                )
+
+        await conn.run_sync(_add_skills_config)
+        await conn.run_sync(_add_user_isolation_columns)
+        await conn.run_sync(_add_users_admin_column)
+        await conn.run_sync(_ensure_users_table)
+
+
+async def seed_default_admin(session) -> None:
+    from sqlalchemy import select, func
+    from app.db.models import User
+    from app.config import settings
+    from app.core.auth.security import hash_password
+
+    count = await session.execute(select(func.count()).select_from(User))
+    if (count.scalar() or 0) > 0:
+        return
+
+    admin = User(
+        id=generate_uuid(),
+        employee_no=settings.DEFAULT_ADMIN_EMPLOYEE_NO,
+        email=settings.DEFAULT_ADMIN_EMAIL,
+        password_hash=hash_password(settings.DEFAULT_ADMIN_PASSWORD),
+        display_name="Administrator",
+        is_active=True,
+        is_admin=True,
+    )
+    session.add(admin)
+    await session.commit()
+
+
+def _ensure_users_table(sync_conn) -> None:
+    pass  # create_all handles new tables
+
+
+def _add_users_admin_column(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+    from app.config import settings
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("users"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("users")}
+    if "is_admin" not in cols:
+        if sync_conn.dialect.name == "sqlite":
+            sync_conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL"))
+        else:
+            sync_conn.execute(
+                text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE")
             )
+    admin_no = settings.DEFAULT_ADMIN_EMPLOYEE_NO.replace("'", "''")
+    sync_conn.execute(
+        text(f"UPDATE users SET is_admin = TRUE WHERE employee_no = '{admin_no}' AND is_admin = FALSE")
+    )
+
+
+def _add_user_isolation_columns(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    tables = {
+        "agents": "agents",
+        "workflows": "workflows",
+        "conversations": "conversations",
+        "knowledge_bases": "knowledge_bases",
+        "skills": "skills",
+        "digital_employees": "digital_employees",
+    }
+    for table in tables.values():
+        if not inspector.has_table(table):
+            continue
+        cols = {c["name"] for c in inspector.get_columns(table)}
+        if "owner_id" in cols:
+            continue
+        if sync_conn.dialect.name == "sqlite":
+            sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN owner_id VARCHAR(36)"))
+        else:
+            sync_conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS owner_id VARCHAR(36)")
+            )
+            sync_conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_owner_id ON {table} (owner_id)"))
 
 
 async def seed_default_models(session) -> None:
@@ -33,19 +125,22 @@ async def seed_default_models(session) -> None:
     from sqlalchemy import select
     from app.db.models import ModelConfig
     from app.config import settings
+    from app.models_hub.byd_catalog import byd_catalog_entries, has_byd_models
 
     catalog: dict[tuple[str, str], dict] = {}
+    default_inference = {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
 
     if settings.OPENAI_API_KEY:
         catalog[("openai", "gpt-4o-mini")] = dict(
             name="gpt-4o-mini (default)",
             provider="openai",
             model_id="gpt-4o-mini",
-            is_default=True,
+            is_default=not has_byd_models(),
             is_active=True,
             context_window=128000,
             cost_per_1k_input=0.00015,
             cost_per_1k_output=0.0006,
+            config={"inference": default_inference},
         )
         catalog[("openai", "gpt-4o")] = dict(
             name="gpt-4o",
@@ -56,7 +151,10 @@ async def seed_default_models(session) -> None:
             context_window=128000,
             cost_per_1k_input=0.005,
             cost_per_1k_output=0.015,
+            config={"inference": default_inference},
         )
+
+    catalog.update(byd_catalog_entries())
 
     ollama_models = [
         ("qwen3.6:35b", True, 32768, "Qwen3.6 35B local"),
@@ -72,10 +170,10 @@ async def seed_default_models(session) -> None:
             provider="ollama",
             model_id=model_id,
             base_url=settings.OLLAMA_BASE_URL,
-            is_default=is_default and not bool(settings.OPENAI_API_KEY),
+            is_default=is_default and not bool(settings.OPENAI_API_KEY) and not has_byd_models(),
             is_active=True,
             context_window=ctx,
-            config={"label": label},
+            config={"label": label, "inference": default_inference},
         )
 
     STALE_MODEL_IDS = {"llama3.2"}
@@ -87,9 +185,17 @@ async def seed_default_models(session) -> None:
         cfg = existing.get(key)
         if cfg is None:
             session.add(ModelConfig(**spec))
-        else:
-            for field, value in spec.items():
-                setattr(cfg, field, value)
+        elif (spec.get("config") or {}).get("vendor") == "byd-eis":
+            cfg.base_url = spec.get("base_url")
+            cfg.api_key_encrypted = spec.get("api_key_encrypted")
+            cfg.is_active = True
+            cfg.context_window = spec.get("context_window") or cfg.context_window
+            merged_cfg = dict(cfg.config or {})
+            merged_cfg.update(spec.get("config") or {})
+            cfg.config = merged_cfg
+            if spec.get("is_default"):
+                cfg.is_default = True
+        # Other existing rows are left unchanged so user edits in Model Hub persist.
 
     for (provider, model_id), cfg in existing.items():
         if (provider, model_id) not in catalog or model_id in STALE_MODEL_IDS:
@@ -99,12 +205,22 @@ async def seed_default_models(session) -> None:
     active = [c for c in existing.values() if c.is_active]
     defaults = [c for c in active if c.is_default]
     if not defaults:
-        target_key = ("openai", "gpt-4o-mini") if settings.OPENAI_API_KEY else ("ollama", "qwen3.6:35b")
+        if has_byd_models():
+            target_key = ("openai", "byd-deepseek-v4-flash")
+        elif settings.OPENAI_API_KEY:
+            target_key = ("openai", "gpt-4o-mini")
+        else:
+            target_key = ("ollama", "qwen3.6:35b")
         target = existing.get(target_key)
         if target:
             target.is_default = True
     elif len(defaults) > 1:
-        keep = ("openai", "gpt-4o-mini") if settings.OPENAI_API_KEY else ("ollama", "qwen3.6:35b")
+        if has_byd_models():
+            keep = ("openai", "byd-deepseek-v4-flash")
+        elif settings.OPENAI_API_KEY:
+            keep = ("openai", "gpt-4o-mini")
+        else:
+            keep = ("ollama", "qwen3.6:35b")
         for cfg in defaults:
             cfg.is_default = (cfg.provider, cfg.model_id) == keep
 
@@ -261,6 +377,11 @@ Implement token issuance and validation middleware.
     await session.commit()
 
 
+async def ensure_bundled_skills(session) -> None:
+    from app.core.skills.bundled import ensure_bundled_skills as _ensure
+    await _ensure(session)
+
+
 async def seed_template_employees(session) -> None:
     from sqlalchemy import select
     from app.db.models import (
@@ -383,6 +504,7 @@ PLATFORM_ROADMAP_FILENAME = "platform-roadmap.md"
 
 async def seed_platform_knowledge_base(session) -> None:
     """Seed a knowledge base with platform roadmap / future plans (idempotent)."""
+    import hashlib
     import structlog
     from pathlib import Path
     from sqlalchemy import select
@@ -392,6 +514,21 @@ async def seed_platform_knowledge_base(session) -> None:
     from app.config import settings
 
     log = structlog.get_logger(__name__)
+
+    async def _ingest_doc(kb_obj: KnowledgeBase, doc_obj: Document, file_bytes: bytes) -> None:
+        pipeline = IngestionPipeline(
+            knowledge_base_id=kb_obj.id,
+            embedding_model=kb_obj.embedding_model,
+            chunk_size=kb_obj.chunk_size,
+            chunk_overlap=kb_obj.chunk_overlap,
+        )
+        chunk_count = await pipeline.ingest_file(
+            file_bytes, PLATFORM_ROADMAP_FILENAME, doc_obj.id
+        )
+        doc_obj.status = KBStatus.ready
+        doc_obj.chunk_count = chunk_count
+        doc_obj.file_size = len(file_bytes)
+        kb_obj.status = KBStatus.ready
 
     result = await session.execute(
         select(KnowledgeBase).where(KnowledgeBase.name == PLATFORM_KB_NAME).limit(1)
@@ -408,6 +545,9 @@ async def seed_platform_knowledge_base(session) -> None:
         log.warning("platform_kb_seed_skipped", reason="roadmap file missing", path=str(data_path))
         return
 
+    file_bytes = data_path.read_bytes()
+    content_sha256 = hashlib.sha256(file_bytes).hexdigest()
+
     if kb:
         doc_result = await session.execute(
             select(Document).where(
@@ -417,13 +557,62 @@ async def seed_platform_knowledge_base(session) -> None:
         )
         existing_doc = doc_result.scalar_one_or_none()
         if existing_doc:
+            stored_hash = (existing_doc.metadata_ or {}).get("content_sha256")
             if not existing_doc.storage_path:
-                file_bytes = data_path.read_bytes()
                 existing_doc.storage_path = save_document_file(
                     kb.id, existing_doc.id, PLATFORM_ROADMAP_FILENAME, file_bytes
                 )
+                existing_doc.metadata_ = {
+                    **(existing_doc.metadata_ or {}),
+                    "content_sha256": content_sha256,
+                }
                 await session.commit()
                 log.info("platform_kb_storage_backfilled", doc_id=existing_doc.id)
+            if stored_hash == content_sha256 and existing_doc.status == KBStatus.ready:
+                return
+            try:
+                pipeline = IngestionPipeline(
+                    knowledge_base_id=kb.id,
+                    embedding_model=kb.embedding_model,
+                    chunk_size=kb.chunk_size,
+                    chunk_overlap=kb.chunk_overlap,
+                )
+                await pipeline.vector_store.delete_document(existing_doc.id)
+            except Exception as exc:
+                log.warning("platform_kb_reindex_delete_failed", error=str(exc))
+            existing_doc.storage_path = save_document_file(
+                kb.id, existing_doc.id, PLATFORM_ROADMAP_FILENAME, file_bytes
+            )
+            existing_doc.status = KBStatus.processing
+            existing_doc.metadata_ = {
+                **(existing_doc.metadata_ or {}),
+                "seed": "platform-roadmap",
+                "content_sha256": content_sha256,
+            }
+            await session.flush()
+            try:
+                await _ingest_doc(kb, existing_doc, file_bytes)
+                await session.commit()
+                log.info(
+                    "platform_kb_reindexed",
+                    kb_id=kb.id,
+                    doc_id=existing_doc.id,
+                    chunks=existing_doc.chunk_count,
+                )
+            except Exception as exc:
+                existing_doc.status = KBStatus.error
+                existing_doc.metadata_ = {
+                    **(existing_doc.metadata_ or {}),
+                    "error": str(exc),
+                }
+                kb.status = KBStatus.error
+                await session.commit()
+                log.warning(
+                    "platform_kb_reindex_failed",
+                    kb_id=kb.id,
+                    error=str(exc),
+                    hint="Ensure Ollama is running for embedding ingestion",
+                )
             return
     else:
         kb = KnowledgeBase(
@@ -439,7 +628,6 @@ async def seed_platform_knowledge_base(session) -> None:
         session.add(kb)
         await session.flush()
 
-    file_bytes = data_path.read_bytes()
     doc_id = generate_uuid()
     doc = Document(
         id=doc_id,
@@ -449,31 +637,20 @@ async def seed_platform_knowledge_base(session) -> None:
         file_size=len(file_bytes),
         status=KBStatus.processing,
         storage_path=save_document_file(kb.id, doc_id, PLATFORM_ROADMAP_FILENAME, file_bytes),
-        metadata_={"seed": "platform-roadmap"},
+        metadata_={"seed": "platform-roadmap", "content_sha256": content_sha256},
     )
     session.add(doc)
     await session.flush()
 
     try:
-        pipeline = IngestionPipeline(
-            knowledge_base_id=kb.id,
-            embedding_model=kb.embedding_model,
-            chunk_size=kb.chunk_size,
-            chunk_overlap=kb.chunk_overlap,
-        )
-        chunk_count = await pipeline.ingest_file(
-            file_bytes, PLATFORM_ROADMAP_FILENAME, doc_id
-        )
-        doc.status = KBStatus.ready
-        doc.chunk_count = chunk_count
+        await _ingest_doc(kb, doc, file_bytes)
         kb.document_count = (kb.document_count or 0) + 1
-        kb.status = KBStatus.ready
         await session.commit()
         log.info(
             "platform_kb_seeded",
             kb_id=kb.id,
             doc_id=doc_id,
-            chunks=chunk_count,
+            chunks=doc.chunk_count,
         )
     except Exception as exc:
         doc.status = KBStatus.error

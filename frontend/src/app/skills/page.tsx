@@ -71,7 +71,7 @@ export default function SkillsPage() {
 
   const load = async () => {
     try {
-      const { data } = await skillsApi.list();
+      const { data } = await skillsApi.list(lang);
       setSkills(data);
     } catch {
       toast.error(lang === "zh" ? "加载失败" : "Failed to load skills");
@@ -80,7 +80,11 @@ export default function SkillsPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [lang]);
+
+  useEffect(() => {
+    if (showLibrary) loadLibrary(libSource, libCategory, libQuery);
+  }, [lang]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -88,17 +92,30 @@ export default function SkillsPage() {
     setShowModal(true);
   };
 
-  const openEdit = (skill: Skill) => {
+  const openEdit = async (skill: Skill) => {
     setEditingId(skill.id);
-    setForm({
-      slug: skill.slug,
-      display_name: skill.display_name,
-      description: skill.description,
-      instructions_md: skill.instructions_md,
-      status: skill.status,
-      auto_invoke: skill.auto_invoke,
-      tags: (skill.tags ?? []).join(", "),
-    });
+    try {
+      const { data } = await skillsApi.get(skill.id, { raw: true });
+      setForm({
+        slug: data.slug,
+        display_name: data.display_name,
+        description: data.description,
+        instructions_md: data.instructions_md,
+        status: data.status,
+        auto_invoke: data.auto_invoke,
+        tags: (data.tags ?? []).join(", "),
+      });
+    } catch {
+      setForm({
+        slug: skill.slug,
+        display_name: skill.display_name,
+        description: skill.description,
+        instructions_md: skill.instructions_md,
+        status: skill.status,
+        auto_invoke: skill.auto_invoke,
+        tags: (skill.tags ?? []).join(", "),
+      });
+    }
     setShowModal(true);
   };
 
@@ -158,7 +175,7 @@ export default function SkillsPage() {
   const loadLibrary = async (source = libSource, category = libCategory, q = libQuery) => {
     setLibLoading(true);
     try {
-      const params: { source?: string; category?: string; q?: string } = {};
+      const params: { source?: string; category?: string; q?: string; lang?: string } = { lang };
       if (source) params.source = source;
       if (category) params.category = category;
       if (q.trim()) params.q = q.trim();
@@ -204,8 +221,11 @@ export default function SkillsPage() {
   const syncLibrary = async () => {
     setLibSyncing(true);
     try {
-      await skillsApi.librarySync("skills-hub");
+      const syncSource = libSource || "all";
+      await skillsApi.librarySync(syncSource);
       toast.success(s.librarySyncOk[lang]);
+      const { data: sources } = await skillsApi.librarySources();
+      setLibSources(sources);
       const { data: cats } = await skillsApi.libraryCategories(libSource || undefined);
       setLibCategories(cats);
       await loadLibrary();

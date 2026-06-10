@@ -1,10 +1,13 @@
+import ssl
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy import event
 from sqlalchemy.pool import NullPool
 from typing import AsyncGenerator
 from app.config import settings
+from app.database_url import is_sqlite_url
 
-_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+_is_sqlite = is_sqlite_url(settings.DATABASE_URL)
 
 _engine_kwargs: dict = {
     "echo": settings.SQL_ECHO,
@@ -14,6 +17,10 @@ if _is_sqlite:
     _engine_kwargs["poolclass"] = NullPool
 else:
     _engine_kwargs.update({"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20})
+    if settings.DB_SSL == "disable":
+        _engine_kwargs["connect_args"] = {"ssl": False}
+    elif settings.DB_SSL == "require":
+        _engine_kwargs["connect_args"] = {"ssl": ssl.create_default_context()}
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 

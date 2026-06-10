@@ -8,6 +8,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agents.base import Task
+from app.core.artifacts import collect_artifacts_from_output, collect_artifacts_from_steps, merge_artifacts
 from app.core.skills.factory import build_agent_executor
 from app.core.employees.schedule import compute_next_run
 from app.db.base import generate_uuid
@@ -94,10 +95,15 @@ async def run_scheduled_task(
         )
         db.add(agent_exec)
 
+        artifacts = merge_artifacts(
+            collect_artifacts_from_steps(result.get("steps")),
+            collect_artifacts_from_output(result.get("output")),
+        )
         run.status = ExecutionStatus.completed
         run.output_data = {
             "output": result.get("output"),
             "steps_count": len(result.get("steps") or []),
+            "artifacts": artifacts,
         }
         run.token_usage = result.get("token_usage", {})
         run.duration_ms = duration_ms

@@ -87,12 +87,13 @@ export default function AgentsPage() {
 
   const loadSkills = async () => {
     try {
-      const { data } = await skillsApi.list();
+      const { data } = await skillsApi.list(lang);
       setSkills(data.filter((s: SkillOption) => s.status === "active"));
     } catch { /* optional */ }
   };
 
-  useEffect(() => { load(); loadModels(); loadSkills(); }, []);
+  useEffect(() => { load(); loadModels(); }, []);
+  useEffect(() => { loadSkills(); }, [lang]);
 
   const openCreate = () => {
     setMode("nl");
@@ -310,7 +311,7 @@ export default function AgentsPage() {
                         className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
                         rows={2}
                         placeholder={placeholder}
-                        value={(form as Record<string, string>)[key]}
+                        value={form[key as "name" | "role" | "goal" | "backstory"]}
                         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                       />
                     ) : (
@@ -318,7 +319,7 @@ export default function AgentsPage() {
                         type="text"
                         className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
                         placeholder={placeholder}
-                        value={(form as Record<string, string>)[key]}
+                        value={form[key as "name" | "role" | "goal" | "backstory"]}
                         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                       />
                     )}

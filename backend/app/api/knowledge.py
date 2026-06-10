@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, statusfrom sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
-from app.db.models import KnowledgeBase, Document, KBStatus
+from app.db.models import KnowledgeBase, Document, KBStatus, User
 from app.db.base import generate_uuid
 from app.schemas.knowledge import (
     KnowledgeBaseCreate, KnowledgeBaseResponse,
@@ -11,20 +12,34 @@ from app.schemas.knowledge import (
 )
 from app.knowledge.pipeline import IngestionPipeline
 from app.knowledge.storage import save_document_file, read_document_file, delete_document_file
+from app.core.auth.deps import get_current_user
+from app.core.auth.scoping import scope_readable, assert_mutable_by_user
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
 
 
 @router.get("/", response_model=list[KnowledgeBaseResponse])
-async def list_knowledge_bases(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc()))
+async def list_knowledge_bases(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(KnowledgeBase)
+        .where(scope_readable(KnowledgeBase, user.id))
+        .order_by(KnowledgeBase.created_at.desc())
+    )
     return result.scalars().all()
 
 
 @router.post("/", response_model=KnowledgeBaseResponse, status_code=status.HTTP_201_CREATED)
-async def create_knowledge_base(payload: KnowledgeBaseCreate, db: AsyncSession = Depends(get_db)):
+async def create_knowledge_base(
+    payload: KnowledgeBaseCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     kb = KnowledgeBase(
         id=generate_uuid(),
+        owner_id=user.id,
         name=payload.name,
         description=payload.description,
         embedding_model=payload.embedding_model,
@@ -39,18 +54,27 @@ async def create_knowledge_base(payload: KnowledgeBaseCreate, db: AsyncSession =
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseResponse)
-async def get_knowledge_base(kb_id: str, db: AsyncSession = Depends(get_db)):
+async def get_knowledge_base(
+    kb_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     kb = await db.get(KnowledgeBase, kb_id)
-    if not kb:
+    if not kb or not (kb.owner_id == user.id or kb.owner_id is None):
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     return kb
 
 
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_knowledge_base(kb_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_knowledge_base(
+    kb_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
+    assert_mutable_by_user(kb, user.id, "knowledge base")
     await db.delete(kb)
 
 

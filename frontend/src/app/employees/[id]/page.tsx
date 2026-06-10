@@ -7,6 +7,8 @@ import {
   ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History,
 } from "lucide-react";
 import { employeesApi } from "@/lib/api";
+import { resolveRunArtifacts, type RunArtifact } from "@/lib/artifacts";
+import { ArtifactDownloadButton } from "@/components/ArtifactDownloadButton";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
@@ -25,7 +27,11 @@ interface Task {
 
 interface Run {
   id: string; status: string; triggered_by: string;
-  output_data: { output?: string } | null; error_message: string | null;
+  output_data: {
+    output?: string;
+    artifacts?: Array<{ filename: string; download_url: string }>;
+  } | null;
+  error_message: string | null;
   duration_ms: number | null; created_at: string;
 }
 
@@ -50,6 +56,7 @@ export default function EmployeeDetailPage() {
   const [loading, setLoading] = useState(true);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [readyArtifacts, setReadyArtifacts] = useState<RunArtifact[]>([]);
   const [taskForm, setTaskForm] = useState({
     name: "",
     description: "",
@@ -99,11 +106,21 @@ export default function EmployeeDetailPage() {
     }
   };
 
+  const artifactLabel = (a: RunArtifact) =>
+    a.filename.toLowerCase().endsWith(".pptx") ? e.downloadPptx[lang] : e.downloadFile[lang];
+
   const runTask = async (taskId: string) => {
     setRunningId(taskId);
+    setReadyArtifacts([]);
     try {
-      await employeesApi.runTask(id, taskId);
-      toast.success(e.runOk[lang]);
+      const { data: run } = await employeesApi.runTask(id, taskId);
+      const artifacts = resolveRunArtifacts(run.output_data);
+      if (artifacts.length > 0) {
+        setReadyArtifacts(artifacts);
+      }
+      toast.success(
+        artifacts.length > 0 ? e.downloadReady[lang] : e.runOk[lang],
+      );
       load();
       setTab("runs");
     } catch (err: unknown) {
@@ -219,13 +236,31 @@ export default function EmployeeDetailPage() {
       )}
 
       {tab === "runs" && (
-        runs.length === 0 ? (
+        <>
+          {readyArtifacts.length > 0 && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-500/40 bg-teal-500/10 p-4">
+              <p className="text-sm text-teal-100">{e.downloadReady[lang]}</p>
+              <div className="flex flex-wrap gap-2">
+                {readyArtifacts.map((a) => (
+                  <ArtifactDownloadButton
+                    key={a.download_url}
+                    artifact={a}
+                    label={`${artifactLabel(a)} · ${a.filename}`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        {runs.length === 0 ? (
           <p className="text-slate-500">{e.noRuns[lang]}</p>
         ) : (
           <div className="space-y-2">
-            {runs.map((run) => (
+            {runs.map((run) => {
+              const artifacts = resolveRunArtifacts(run.output_data);
+              return (
               <div key={run.id} className="rounded-lg border border-[#2d2d4e] bg-[#1a1a2e] p-3 text-sm">
-                <div className="mb-1 flex flex-wrap items-center gap-2">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded px-1.5 py-0.5 text-xs ${
                     run.status === "completed" ? "bg-green-500/20 text-green-400" :
                     run.status === "failed" ? "bg-red-500/20 text-red-400" : "bg-slate-500/20 text-slate-400"
@@ -233,15 +268,29 @@ export default function EmployeeDetailPage() {
                   <span className="text-xs text-slate-500">{run.triggered_by}</span>
                   <span className="text-xs text-slate-500">{fmtTime(run.created_at)}</span>
                   {run.duration_ms != null && <span className="text-xs text-slate-500">{run.duration_ms}ms</span>}
+                  </div>
+                  {artifacts.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {artifacts.map((a) => (
+                        <ArtifactDownloadButton
+                          key={a.download_url}
+                          artifact={a}
+                          label={`${artifactLabel(a)} · ${a.filename}`}
+                          variant="compact"
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {run.output_data?.output && (
                   <p className="line-clamp-4 whitespace-pre-wrap text-slate-300">{run.output_data.output}</p>
                 )}
                 {run.error_message && <p className="text-red-400">{run.error_message}</p>}
               </div>
-            ))}
+            );})}
           </div>
-        )
+        )}
+        </>
       )}
 
       {showTaskModal && (

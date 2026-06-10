@@ -55,12 +55,14 @@ class MessageResponse(BaseModel):
     conversation_id: str
     role: MessageRole
     content: str
-    tool_calls: Optional[list[dict]]
-    token_usage: Optional[dict]
+    tool_calls: Optional[list[dict]] = None
+    token_usage: Optional[dict] = None
+    metadata_: dict[str, Any] = Field(default={}, alias="metadata")
     created_at: datetime
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class ChatRequest(BaseModel):
@@ -69,3 +71,17 @@ class ChatRequest(BaseModel):
     knowledge_base_ids: list[str] = []
     stream: bool = False
     context: Optional[dict[str, Any]] = None
+
+
+class SuggestQuestionsResponse(BaseModel):
+    questions: list[str]
+    source: str = "llm"
+
+
+class SaveAsSkillRequest(BaseModel):
+    title: Optional[str] = None
+
+
+class SaveToKnowledgeRequest(BaseModel):
+    kb_id: Optional[str] = None
+    kb_name: Optional[str] = None

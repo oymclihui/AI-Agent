@@ -1,5 +1,6 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, Self
 
 
 class Settings(BaseSettings):
@@ -10,9 +11,40 @@ class Settings(BaseSettings):
     SQL_ECHO: bool = False
     SECRET_KEY: str = "changeme-in-production-32chars!!"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    CONVERSATION_RETENTION_DAYS: int = 30
+    DEFAULT_ADMIN_EMPLOYEE_NO: str = "admin"
+    DEFAULT_ADMIN_PASSWORD: str = "admin123"
+    DEFAULT_ADMIN_EMAIL: str = "admin@local"
 
-    # Database — defaults to local SQLite (no PostgreSQL needed)
+    # Database — use DATABASE_URL directly, or set DB_HOST + credentials for PostgreSQL
     DATABASE_URL: str = "sqlite+aiosqlite:///./aiagnet.db"
+    DB_HOST: Optional[str] = None
+    DB_PORT: int = 5432
+    DB_USER: str = "aiagnet"
+    DB_PASSWORD: str = ""
+    DB_NAME: str = "aiagnet"
+    DB_SSL: str = "prefer"  # disable | prefer | require
+
+    @model_validator(mode="after")
+    def _compose_database_url(self) -> Self:
+        if self.DB_HOST:
+            from app.database_url import build_database_url
+
+            object.__setattr__(
+                self,
+                "DATABASE_URL",
+                build_database_url(
+                    driver="postgresql",
+                    host=self.DB_HOST,
+                    port=self.DB_PORT,
+                    user=self.DB_USER,
+                    password=self.DB_PASSWORD,
+                    database=self.DB_NAME,
+                    ssl=self.DB_SSL,
+                    async_driver=True,
+                ),
+            )
+        return self
 
     # Redis — optional; leave empty to disable Celery/Redis features
     REDIS_URL: str = ""
@@ -51,6 +83,43 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_KEY: Optional[str] = None
     AZURE_OPENAI_ENDPOINT: Optional[str] = None
     AZURE_OPENAI_API_VERSION: str = "2024-02-01"
+
+    # BYD EIS internal LLM gateway (OpenAI-compatible)
+    BYD_DEEPSEEK_V4_FLASH_API_KEY: Optional[str] = None
+    BYD_DEEPSEEK_V4_FLASH_BASE_URL: str = (
+        "https://eisapi.byd.com/open-api/1.0/llm/v1/deepseek-v4-flash"
+    )
+    BYD_QWEN35_35B_API_KEY: Optional[str] = None
+    BYD_QWEN35_35B_BASE_URL: str = (
+        "https://eisapi.byd.com/open-api/1.0/llm/v1/qwen35-35b-a3b-fp8"
+    )
+    BYD_DEEPSEEK_REASONER_API_KEY: Optional[str] = None
+    BYD_DEEPSEEK_REASONER_BASE_URL: str = (
+        "https://eisapi.byd.com/open-api/1.0/llm/v1/ds-open-671b"
+    )
+    BYD_DEEPSEEK_32B_API_KEY: Optional[str] = None
+    BYD_DEEPSEEK_32B_BASE_URL: str = (
+        "https://eisapi.byd.com/open-api/1.0/llm/v1/deepseek/stream"
+    )
+
+    # Public URL for password-reset links
+    APP_PUBLIC_URL: str = "http://localhost:3000"
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 60
+
+    # Platform SMTP (sends password-reset emails)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465
+    SMTP_USE_SSL: bool = True
+    SMTP_USE_TLS: bool = False
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_FROM_NAME: str = "AI-AGENT"
+
+    # Default IMAP for user mailbox tool (BYD corporate mail)
+    IMAP_HOST: str = "imap.byd.com"
+    IMAP_PORT: int = 1993
+    IMAP_USE_SSL: bool = True
 
     # CORS
     ALLOWED_ORIGINS: list[str] = [

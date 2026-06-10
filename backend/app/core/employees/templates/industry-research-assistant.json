@@ -1,0 +1,29 @@
+{
+  "template_id": "industry-research-assistant",
+  "name_zh": "行业研究助理",
+  "name_en": "Industry Research Assistant",
+  "description_zh": "定时搜集 AI 与自动化领域动态，生成结构化早报。绑定研究型智能体，含工作日 Cron 任务。",
+  "description_en": "Scheduled AI/automation industry briefings with a research agent and weekday cron task.",
+  "category": "research",
+  "agent": { "ref": "深度研究分析师" },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "小研",
+    "title": "研究助理",
+    "description": "负责定时信息搜集与简报生成，绑定深度研究分析师智能体。",
+    "timezone": "Asia/Shanghai"
+  },
+  "tasks": [
+    {
+      "name": "工作日早报",
+      "description": "每个工作日上午 9 点生成简要行业动态摘要",
+      "schedule_type": "cron",
+      "cron_expression": "0 9 * * 1-5",
+      "task_config": {
+        "prompt": "请用 3-5 条要点总结今日 AI 与自动化领域的值得关注动态，中文输出。每条附简要来源说明。"
+      },
+      "enabled": true
+    }
+  ]
+}

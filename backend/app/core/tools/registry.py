@@ -29,12 +29,16 @@ class ToolRegistry:
         from app.core.tools.builtin.calculator import CalculatorTool
         from app.core.tools.builtin.http_request import HttpRequestTool
         from app.core.tools.builtin.datetime_tool import DatetimeTool
+        from app.core.tools.builtin.create_presentation import CreatePresentationTool
+        from app.core.tools.builtin.fetch_mail import FetchMailTool
 
         builtins = [
             WebSearchTool,
             CalculatorTool,
             HttpRequestTool,
             DatetimeTool,
+            CreatePresentationTool,
+            FetchMailTool,
         ]
         for tool in builtins:
             self.register(tool)

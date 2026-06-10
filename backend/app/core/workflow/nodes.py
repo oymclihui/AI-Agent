@@ -85,6 +85,8 @@ class EndNode(BaseNode):
             # Collect last agent output as final output
             if state.agent_outputs:
                 state.final_output = list(state.agent_outputs.values())[-1]
+            elif state.context.get("final_output"):
+                state.final_output = str(state.context["final_output"])
             elif state.messages:
                 state.final_output = state.messages[-1].get("content", "")
         logger.info("workflow_end", node_id=self.node_id, output_len=len(state.final_output or ""))
@@ -145,14 +147,21 @@ class ToolNode(BaseNode):
 
     async def __call__(self, state: WorkflowState) -> WorkflowState:
         state.current_node = self.node_id
-        tool_input = self.config.get("input", state.input)
+        cfg = resolve_config(self.config, state)
 
         if not self.tool:
-            state.errors.append(f"ToolNode {self.node_id}: tool '{self.config.get('tool_name')}' not found")
+            state.errors.append(f"ToolNode {self.node_id}: tool '{cfg.get('tool_name')}' not found")
             return state
 
         try:
-            result = await self.tool.arun(tool_input)
+            kwargs = cfg.get("kwargs")
+            if isinstance(kwargs, dict) and kwargs:
+                result = await self.tool.ainvoke(kwargs)
+            elif isinstance(cfg.get("input"), dict):
+                result = await self.tool.ainvoke(cfg["input"])
+            else:
+                tool_input = cfg.get("input", state.input)
+                result = await self.tool.arun(tool_input)
             state.tool_results[self.node_id] = result
             state.add_message("tool", str(result), self.node_id)
         except Exception as e:
@@ -212,7 +221,12 @@ class LLMNode(BaseNode):
 
         model = self.config.get("model")
         provider = self.config.get("provider")
-        llm = await ModelRouter.get_llm(provider=provider, model=model)
+        node_inference = self.config.get("inference_params") or {}
+        llm = await ModelRouter.get_llm(
+            provider=provider,
+            model=model,
+            inference_params=node_inference,
+        )
         response = await llm.ainvoke(prompt)
         output = response.content if hasattr(response, "content") else str(response)
         state.agent_outputs[self.node_id] = output
@@ -264,6 +278,44 @@ class HttpNode(BaseNode):
 class CodeNode(BaseNode):
     node_type = "code"
 
+    @staticmethod
+    def _safe_globals() -> dict[str, Any]:
+        import json
+        import re
+        from pathlib import Path
+
+        import pandas as pd
+
+        safe_builtins = {
+            "len": len,
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "range": range,
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "abs": abs,
+            "round": round,
+            "sorted": sorted,
+            "enumerate": enumerate,
+            "zip": zip,
+            "isinstance": isinstance,
+            "print": print,
+        }
+        return {
+            "__builtins__": safe_builtins,
+            "json": json,
+            "re": re,
+            "Path": Path,
+            "pd": pd,
+            "pandas": pd,
+        }
+
     async def __call__(self, state: WorkflowState) -> WorkflowState:
         state.current_node = self.node_id
         code = self.config.get("code", "result = {}")
@@ -271,13 +323,20 @@ class CodeNode(BaseNode):
             "input_data": state.context,
             "state": state.context,
             "input": state.input,
+            "agent_outputs": state.agent_outputs,
+            "tool_results": state.tool_results,
             "result": None,
         }
         try:
-            exec(code, {"__builtins__": {}}, local_vars)  # noqa: S102
+            exec(code, self._safe_globals(), local_vars)  # noqa: S102
             result = local_vars.get("result", local_vars)
             state.tool_results[self.node_id] = result
-            state.context.update(result if isinstance(result, dict) else {"code_result": result})
+            if isinstance(result, dict):
+                state.context.update(result)
+            else:
+                state.context["code_result"] = result
+            if state.context.get("final_output"):
+                state.final_output = str(state.context["final_output"])
         except Exception as e:
             state.errors.append(f"CodeNode {self.node_id} failed: {e}")
         return state

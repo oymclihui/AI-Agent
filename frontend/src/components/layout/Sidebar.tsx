@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Bot, Workflow, MessageSquare, Database,
-  Cpu, Zap, Home, Settings, Languages, BookOpen, Briefcase,
+  Cpu, Zap, Home, Settings, Languages, BookOpen, Briefcase, Monitor,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useLangStore } from "@/lib/langStore";
@@ -16,15 +16,16 @@ export default function Sidebar() {
   const nav = translations.nav;
 
   const navItems = [
-    { href: "/",          icon: Home,         labelKey: "dashboard" as const },
-    { href: "/agents",    icon: Bot,          labelKey: "agents" as const },
-    { href: "/employees", icon: Briefcase,     labelKey: "employees" as const },
-    { href: "/workflows", icon: Workflow,      labelKey: "workflows" as const },
-    { href: "/chat",      icon: MessageSquare, labelKey: "chat" as const },
+    { href: "/",          icon: Home,          labelKey: "dashboard" as const },
+    { href: "/screen",    icon: Monitor,       labelKey: "screen" as const },
+    { href: "/employees", icon: Briefcase,      labelKey: "employees" as const },
+    { href: "/agents",    icon: Bot,           labelKey: "agents" as const },
+    { href: "/skills",    icon: BookOpen,       labelKey: "skills" as const },
+    { href: "/workflows", icon: Workflow,       labelKey: "workflows" as const },
     { href: "/knowledge", icon: Database,      labelKey: "knowledge" as const },
-    { href: "/skills",    icon: BookOpen,        labelKey: "skills" as const },
-    { href: "/models",    icon: Cpu,           labelKey: "models" as const },
-    { href: "/tools",     icon: Zap,           labelKey: "tools" as const },
+    { href: "/chat",      icon: MessageSquare,  labelKey: "chat" as const },
+    { href: "/models",    icon: Cpu,            labelKey: "models" as const },
+    { href: "/tools",     icon: Zap,            labelKey: "tools" as const },
   ];
 
   return (

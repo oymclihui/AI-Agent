@@ -77,6 +77,9 @@ class EmployeeScheduler:
         now = self._last_tick
         executed = 0
 
+        from app.core.chat.cleanup import cleanup_stale_conversations
+        await cleanup_stale_conversations()
+
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(EmployeeScheduledTask, DigitalEmployee)

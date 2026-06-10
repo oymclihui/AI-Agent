@@ -1,6 +1,6 @@
 # AI-AGENT
 
-**Unified AI Agent Platform** — multi-agent orchestration, visual workflows, skill playbooks, digital employees with scheduled tasks, RAG, and model management.
+**Digital Employee Platform** — Digital employees connect thinking, skills, workflows, knowledge, and scheduled tasks into one complete AI workforce pipeline.
 
 [![Repository](https://img.shields.io/badge/GitHub-AI--Agent-blue)](https://github.com/oymclihui/AI-Agent)
 
@@ -17,12 +17,14 @@
 | Module | Description |
 |--------|-------------|
 | **Agents** | Create and manage agents with roles, goals, tools, **skill bindings**, and NL generation |
-| **Skills** | Reusable SOPs (Cursor `SKILL.md`-compatible), online library import, runtime injection |
-| **Digital Employees** | Role-based agents with **multiple Cron / interval scheduled tasks** and automatic Agent runs |
+| **Skills** | Reusable SOPs (Cursor `SKILL.md`-compatible), online library (~1123 templates), **bilingual UI**, runtime injection |
+| **Digital Employees** | Role-based agents with **multiple Cron / interval tasks**; **one-click import from 11 bundled templates** |
+| **Operations Screen** | Full-screen **`/screen`**: KPIs, employee status, task trends; Dashboard API + SSE |
 | **Workflows** | n8n-style designer (675+ nodes), **NL workflow generation**, AI node config assistant |
-| **Chat** | Multi-turn dialogue, streaming, memory (skills injected when an agent is bound) |
-| **Knowledge** | Document upload and vector search (RAG) with Ollama embeddings |
-| **Model Hub** | Unified LLM config for OpenAI, Anthropic, Ollama, and more |
+| **Chat** | Multi-turn dialogue, streaming, **attachments & suggested questions**, delete sessions, **save as skill / knowledge** |
+| **Knowledge** | Document upload and vector search (RAG); seeded platform roadmap with **content_sha256 re-index** |
+| **Model Hub** | Model config **CRUD**, set default, **inference params**, OpenAI-compatible Base URL |
+| **Users & auth** | Employee no / email login, JWT, **per-user data isolation**, **personal model API keys** |
 | **Tools** | Built-in calculator, HTTP, web search, datetime tools |
 | **Orchestrator** | Multi-agent collaboration (CrewAI-style sequential flows) |
 
@@ -35,7 +37,9 @@ The frontend supports **Chinese / English** UI.
 ### Skills
 
 - Create and edit skills in-platform (Markdown instructions, description, publish status)
-- **Online skill library**: browse and import from [Anthropic official skills](https://github.com/anthropics/skills) and [Agent Skills Hub](https://github.com/agent-skills-hub/agent-skills-hub) (810+ templates)
+- **Online skill library**: import from [Anthropic official skills](https://github.com/anthropics/skills), [Agent Skills Hub](https://github.com/agent-skills-hub/agent-skills-hub), and [SkillHub China](https://skillhub.cn/) (~**1123** templates)
+- Bundled **`data-qa-intent`** (data Q&A intent, smart-qa-inspired); startup seeds include code review and commit message skills
+- **Bilingual skill labels**: `metadata.i18n` + API `?lang=zh|en`, follows UI language
 - Bind skills when creating or editing agents; SOPs are injected during chat and agent task runs
 - Separation: Knowledge = facts; Skills = how to work
 
@@ -44,8 +48,15 @@ The frontend supports **Chinese / English** UI.
 - Wrap an agent as a “role”: name, title, bound agent, timezone
 - Each employee can have **multiple scheduled tasks** (Cron or fixed interval)
 - Current task type: **Agent prompt tasks** (`task_config.prompt`)
+- **`GET /employees/templates` + import**: 11 bundled role templates (research, marketing, security, analytics, …)
 - Background scheduler polls every 30s; supports **run now** and **run history**
 - Sample seed on startup: employee “小研” with a weekday 9:00 briefing task
+
+### Operations Screen
+
+- Full-screen **`/screen`**: KPIs, employee cards, today’s tasks, hourly trends, run rankings
+- Backend **`/api/v1/dashboard/overview`** and **`/stream`** (SSE); timezone **Asia/Shanghai**
+- Entry from home page and sidebar
 
 ### Workflow Enhancements
 
@@ -53,9 +64,20 @@ The frontend supports **Chinese / English** UI.
 - Node catalog generated from the official n8n repo (**675+ nodes**)
 - Designer: collapsible palette, drag/add nodes, AI-assisted node configuration
 
-### Branding
+### Branding & deployment
 
 - Product name unified as **AI-AGENT** (UI, API docs, `APP_NAME` config)
+- **Remote Linux deploy scripts**: `backend/scripts/remote_deploy.py`, etc. (systemd + Nginx)
+- Root **`docker-compose.yml`** (PG / Redis / Chroma / backend / frontend / Nginx); Ollama on host — one-click flow still WIP
+
+### Model Hub, Chat & Auth (latest)
+
+- **Model Hub CRUD** with inference params (temperature, top_p, max_tokens, …) and OpenAI-compatible Base URL
+- **Chat**: file attachments → LLM **suggested questions**; delete / clear-all sessions; **30-day retention**
+- **Export**: save conversation as **Skill** (SOP) or **Knowledge Base** document
+- **Login**: employee no or email + JWT; **per-user isolation**; personal API keys in Settings
+
+See **[User Guide (中文)](docs/用户操作手册.md)** for step-by-step instructions.
 
 ---
 
@@ -207,7 +229,8 @@ All endpoints are under `/api/v1`:
 |------|---------|
 | `/agents` | Agent CRUD, execution, skill bindings |
 | `/skills` | Skill CRUD; `/skills/library/*` online catalog browse & import |
-| `/employees` | Digital employees, scheduled tasks, manual run, run history, scheduler status |
+| `/employees` | Digital employees, **template import**, scheduled tasks, manual run, run history |
+| `/dashboard` | Operations screen overview & SSE stream |
 | `/workflows` | Workflow CRUD, execution, NL generate, node catalog, AI config assistant |
 | `/chat` | Conversations & messaging |
 | `/knowledge` | Knowledge bases & document search |
@@ -219,7 +242,18 @@ Full reference: http://localhost:8000/docs
 
 ---
 
-## Docker (frontend)
+## Docker
+
+**Compose (initial, experimental)**
+
+```bash
+# Requires Ollama on host (default http://host.docker.internal:11434)
+docker compose up -d
+```
+
+Includes PostgreSQL, Redis, Chroma, backend, frontend, and Nginx. Change secrets in `.env` before production use.
+
+**Frontend image only**
 
 ```bash
 cd frontend
@@ -235,12 +269,17 @@ Future plans are stored in the seeded knowledge base **「AI-AGENT 平台文档�
 
 - [x] n8n-style workflow node catalog & designer
 - [x] Natural-language workflow / agent creation
-- [x] Skills module & online skill library import
+- [x] Skills module & online library (SkillHub.cn, data-qa-intent, skill i18n)
 - [x] Digital employees with Cron scheduled tasks
+- [x] Employee templates (including analytics roles)
+- [x] Operations screen `/screen` & Dashboard API
+- [x] Remote deploy scripts (Linux + systemd + Nginx)
+- [ ] Feishu / DingTalk IM bot integration
+- [ ] Chat chart / KPI structured rendering (protocol defined, UI not yet)
 - [ ] Scheduled tasks for workflows & crew orchestration
 - [ ] “Save as skill” from chat / execution history
 - [ ] User authentication & multi-tenancy
-- [ ] Docker Compose one-click deployment
+- [~] Docker Compose one-click deployment (compose file exists, WIP)
 
 ---
 

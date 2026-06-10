@@ -1,18 +1,38 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Send, Plus, MessageSquare } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { chatApi, agentsApi, streamResponse } from "@/lib/api";
+import { chatApi, agentsApi, streamResponse, streamResponseForm } from "@/lib/api";
+import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 import { clsx } from "clsx";
 
-interface Message { id: string; role: string; content: string; created_at: string; }
+interface AttachmentMeta {
+  filename: string;
+  size?: number;
+  kind?: string;
+}
+
+interface Message {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+  metadata?: { attachments?: AttachmentMeta[] };
+}
+
 interface Conversation { id: string; title: string | null; agent_id: string | null; created_at: string; }
 interface Agent { id: string; name: string; role: string; }
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export default function ChatPage() {
   const { lang } = useLangStore();
@@ -23,19 +43,66 @@ export default function ChatPage() {
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const suggestAbortRef = useRef<AbortController | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    chatApi.listConversations().then(({ data }) => setConversations(data));
-    agentsApi.list().then(({ data }) => setAgents(data));
+    chatApi.listConversations().then(({ data }) => setConversations(data)).catch(() => {});
+    agentsApi.list().then(({ data }) => setAgents(data)).catch(() => {});
   }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
+
+  const fetchSuggestions = useCallback(async (files: File[]) => {
+    suggestAbortRef.current?.abort();
+    if (!files.length) {
+      setSuggestedQuestions([]);
+      setSuggestLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    suggestAbortRef.current = controller;
+    setSuggestLoading(true);
+    setSuggestedQuestions([]);
+    try {
+      const result = await chatApi.suggestQuestions(
+        files,
+        lang,
+        selectedAgent || undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      setSuggestedQuestions(result.questions?.slice(0, 3) ?? []);
+    } catch {
+      if (!controller.signal.aborted) {
+        setSuggestedQuestions([]);
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setSuggestLoading(false);
+      }
+    }
+  }, [lang, selectedAgent]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchSuggestions(pendingFiles);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [pendingFiles, fetchSuggestions]);
+
+  useEffect(() => {
+    return () => suggestAbortRef.current?.abort();
+  }, []);
 
   const newConversation = async () => {
     try {
@@ -62,6 +129,36 @@ export default function ChatPage() {
     }
   };
 
+  const deleteConversation = async (convId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!confirm(t.deleteChatConfirm[lang])) return;
+    try {
+      await chatApi.deleteConversation(convId);
+      setConversations((c) => c.filter((x) => x.id !== convId));
+      if (activeConv === convId) {
+        setActiveConv(null);
+        setMessages([]);
+      }
+      toast.success(t.deleteOk[lang]);
+    } catch {
+      toast.error(t.deleteFailed[lang]);
+    }
+  };
+
+  const clearAllConversations = async () => {
+    if (!conversations.length) return;
+    if (!confirm(t.clearAllConfirm[lang])) return;
+    try {
+      await chatApi.deleteAllConversations();
+      setConversations([]);
+      setActiveConv(null);
+      setMessages([]);
+      toast.success(t.deleteOk[lang]);
+    } catch {
+      toast.error(t.deleteFailed[lang]);
+    }
+  };
+
   const appendAssistant = (content: string) => {
     setMessages((m) => [
       ...m,
@@ -74,14 +171,60 @@ export default function ChatPage() {
     ]);
   };
 
+  const onFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files || []);
+    if (!picked.length) return;
+    setPendingFiles((prev) => {
+      const names = new Set(prev.map((f) => `${f.name}-${f.size}`));
+      const merged = [...prev];
+      for (const f of picked) {
+        const key = `${f.name}-${f.size}`;
+        if (!names.has(key)) merged.push(f);
+      }
+      return merged;
+    });
+    e.target.value = "";
+  };
+
+  const removePendingFile = (index: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const applySuggestion = (question: string) => {
+    setInput(question);
+  };
+
+  const saveAsSkill = async () => {
+    if (!activeConv) return;
+    try {
+      await chatApi.saveAsSkill(activeConv, { title: messages[0]?.content?.slice(0, 40) || undefined });
+      toast.success(t.saveAsSkillOk[lang]);
+    } catch {
+      toast.error(t.saveExportFailed[lang]);
+    }
+  };
+
+  const saveToKnowledge = async () => {
+    if (!activeConv) return;
+    try {
+      await chatApi.saveToKnowledge(activeConv, {});
+      toast.success(t.saveToKbOk[lang]);
+    } catch {
+      toast.error(t.saveExportFailed[lang]);
+    }
+  };
+
   const send = async () => {
-    if (!input.trim() || streaming) return;
+    const hasText = input.trim().length > 0;
+    const hasFiles = pendingFiles.length > 0;
+    if ((!hasText && !hasFiles) || streaming) return;
 
     let convId = activeConv;
     if (!convId) {
       try {
+        const title = hasText ? input.slice(0, 40) : pendingFiles[0]?.name || t.newChat[lang];
         const { data } = await chatApi.createConversation({
-          title: input.slice(0, 40),
+          title,
           agent_id: selectedAgent || null,
         });
         convId = data.id;
@@ -94,31 +237,60 @@ export default function ChatPage() {
       }
     }
 
+    const msg = hasText ? input.trim() : t.analyzePrompt[lang];
+    const attachmentsMeta = pendingFiles.map((f) => ({
+      filename: f.name,
+      size: f.size,
+    }));
+
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: input,
+      content: msg,
       created_at: new Date().toISOString(),
+      metadata: attachmentsMeta.length ? { attachments: attachmentsMeta } : undefined,
     };
     setMessages((m) => [...m, userMsg]);
-    const msg = input;
+    const filesToSend = [...pendingFiles];
     setInput("");
+    setPendingFiles([]);
+    setSuggestedQuestions([]);
     setStreaming(true);
     setStreamingContent("");
 
     let full = "";
     try {
-      for await (const token of streamResponse(`/chat/conversations/${convId}/messages`, {
-        message: msg,
-        stream: true,
-      })) {
-        full += token;
-        setStreamingContent(full);
+      if (filesToSend.length > 0) {
+        const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true);
+        for await (const token of streamResponseForm(`/chat/conversations/${convId}/messages`, form)) {
+          full += token;
+          setStreamingContent(full);
+        }
+      } else {
+        for await (const token of streamResponse(`/chat/conversations/${convId}/messages`, {
+          message: msg,
+          stream: true,
+        })) {
+          full += token;
+          setStreamingContent(full);
+        }
       }
     } catch {
       try {
-        const { data } = await chatApi.sendMessage(convId!, { message: msg, stream: false });
-        full = data?.content ?? "";
+        if (filesToSend.length > 0) {
+          const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, false);
+          const response = await fetch(`/api/v1/chat/conversations/${convId}/messages`, {
+            method: "POST",
+            body: form,
+            headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+          });
+          if (!response.ok) throw new Error(await response.text());
+          const data = await response.json();
+          full = data?.content ?? "";
+        } else {
+          const { data } = await chatApi.sendMessage(convId!, { message: msg, stream: false });
+          full = data?.content ?? "";
+        }
       } catch (err: unknown) {
         const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
         toast.error(detail ? `${t.replyFailed[lang]}: ${detail}` : t.replyFailed[lang]);
@@ -132,6 +304,8 @@ export default function ChatPage() {
     setStreamingContent("");
     setStreaming(false);
   };
+
+  const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming;
 
   return (
     <div className="flex h-screen">
@@ -152,29 +326,71 @@ export default function ChatPage() {
               <Plus className="h-4 w-4" />
             </button>
           </div>
+          {conversations.length > 0 && (
+            <button
+              type="button"
+              onClick={clearAllConversations}
+              className="mb-2 w-full rounded-lg border border-red-500/20 px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
+            >
+              {t.clearAllChats[lang]}
+            </button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto px-2">
           {conversations.map((conv) => (
-            <button
+            <div
               key={conv.id}
-              onClick={() => loadMessages(conv.id)}
               className={clsx(
-                "mb-1 w-full rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                activeConv === conv.id
-                  ? "bg-blue-600/20 text-blue-300"
-                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                "group mb-1 flex items-center gap-1 rounded-lg transition-colors",
+                activeConv === conv.id ? "bg-blue-600/20" : "hover:bg-white/5",
               )}
             >
-              <div className="flex items-center gap-2">
-                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                <span className="line-clamp-1">{conv.title || t.untitled[lang]}</span>
-              </div>
-            </button>
+              <button
+                onClick={() => loadMessages(conv.id)}
+                className={clsx(
+                  "min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                  activeConv === conv.id ? "text-blue-300" : "text-slate-400 group-hover:text-slate-200",
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                  <span className="line-clamp-1">{conv.title || t.untitled[lang]}</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => deleteConversation(conv.id, e)}
+                className="mr-1 shrink-0 rounded p-1 text-slate-600 opacity-0 transition-opacity hover:bg-red-500/20 hover:text-red-400 group-hover:opacity-100"
+                title={t.deleteChat[lang]}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))}
         </div>
       </div>
 
       <div className="flex flex-1 flex-col">
+        {activeConv && messages.length > 0 && (
+          <div className="flex gap-2 border-b border-[#2d2d4e] bg-[#1a1a2e]/80 px-6 py-2">
+            <button
+              type="button"
+              onClick={saveAsSkill}
+              disabled={streaming}
+              className="rounded-lg border border-[#2d2d4e] px-3 py-1 text-xs text-slate-300 hover:border-blue-500/40 hover:text-blue-300 disabled:opacity-40"
+            >
+              {t.saveAsSkill[lang]}
+            </button>
+            <button
+              type="button"
+              onClick={saveToKnowledge}
+              disabled={streaming}
+              className="rounded-lg border border-[#2d2d4e] px-3 py-1 text-xs text-slate-300 hover:border-green-500/40 hover:text-green-300 disabled:opacity-40"
+            >
+              {t.saveToKnowledge[lang]}
+            </button>
+          </div>
+        )}
         <div className="flex-1 space-y-4 overflow-y-auto p-6">
           {messages.length === 0 && !streaming && (
             <div className="flex h-full flex-col items-center justify-center text-center">
@@ -193,6 +409,23 @@ export default function ChatPage() {
                     : "rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] text-slate-200"
                 )}
               >
+                {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
+                  <div className={clsx("mb-2 flex flex-wrap gap-1.5", msg.role === "user" ? "" : "")}>
+                    {msg.metadata.attachments.map((a) => (
+                      <span
+                        key={`${a.filename}-${a.size}`}
+                        className={clsx(
+                          "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px]",
+                          msg.role === "user" ? "bg-blue-500/40 text-blue-50" : "bg-slate-700/50 text-slate-300",
+                        )}
+                      >
+                        <Paperclip className="h-3 w-3 shrink-0" />
+                        {a.filename}
+                        {a.size != null && <span className="opacity-70">({formatFileSize(a.size)})</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {msg.role === "assistant" ? (
                   <div className="prose prose-sm prose-invert max-w-none">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -227,7 +460,68 @@ export default function ChatPage() {
         </div>
 
         <div className="border-t border-[#2d2d4e] bg-[#1a1a2e] p-4">
-          <div className="flex items-end gap-3 rounded-xl border border-[#2d2d4e] bg-[#0d0d1a] px-4 py-3">
+          {pendingFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {pendingFiles.map((file, idx) => (
+                <span
+                  key={`${file.name}-${file.size}-${idx}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-2 py-1 text-xs text-slate-300"
+                >
+                  <Paperclip className="h-3 w-3 text-blue-400" />
+                  <span className="max-w-[200px] truncate">{file.name}</span>
+                  <span className="text-slate-500">{formatFileSize(file.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removePendingFile(idx)}
+                    className="rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400"
+                    aria-label={t.removeFile[lang]}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {(suggestLoading || suggestedQuestions.length > 0) && pendingFiles.length > 0 && (
+            <div className="mb-3 rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2">
+              <div className="mb-2 flex items-center gap-1.5 text-xs text-blue-300">
+                <Sparkles className="h-3.5 w-3.5" />
+                {suggestLoading ? t.analyzingFiles[lang] : t.suggestedTitle[lang]}
+              </div>
+              {!suggestLoading && (
+                <div className="flex flex-col gap-1.5">
+                  {suggestedQuestions.map((q, i) => (
+                    <button
+                      key={`${i}-${q.slice(0, 24)}`}
+                      type="button"
+                      onClick={() => applySuggestion(q)}
+                      disabled={streaming}
+                      className="rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-left text-xs text-slate-200 transition-colors hover:border-blue-500/40 hover:bg-blue-600/10 disabled:opacity-40"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="flex items-end gap-2 rounded-xl border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={onFilesSelected}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming}
+              className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-blue-400 disabled:opacity-40"
+              title={t.attachFiles[lang]}
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
             <textarea
               className="flex-1 resize-none bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
               rows={1}
@@ -243,13 +537,15 @@ export default function ChatPage() {
             />
             <button
               onClick={send}
-              disabled={!input.trim() || streaming}
+              disabled={!canSend}
               className="rounded-lg bg-blue-600 p-2 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
               <Send className="h-4 w-4" />
             </button>
           </div>
-          <p className="mt-1.5 text-center text-xs text-slate-600">{t.hint[lang]}</p>
+          <p className="mt-1.5 text-center text-xs text-slate-600">
+            {t.hint[lang]} · {t.fileTypesHint[lang]}
+          </p>
         </div>
       </div>
     </div>

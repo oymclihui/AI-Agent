@@ -5,6 +5,7 @@ Supports RAG-augmented responses, memory injection, and streaming.
 from typing import AsyncIterator, Optional, Any
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.memory.manager import MemoryManager
 
@@ -39,6 +40,9 @@ class DialogueManager:
         system_prompt: Optional[str] = None,
         context: Optional[dict[str, Any]] = None,
         extra_system_messages: Optional[list[SystemMessage]] = None,
+        attachment_context: Optional[str] = None,
+        db: Optional[AsyncSession] = None,
+        user_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Process a single user message and return the assistant's response.
@@ -50,19 +54,29 @@ class DialogueManager:
 
         llm_provider = None
         llm_model = None
+        temperature = None
         if agent_definition:
             llm_provider = agent_definition.llm_provider
             llm_model = agent_definition.llm_model
+            temperature = agent_definition.temperature
             if not system_prompt:
                 system_prompt = agent_definition.system_prompt()
 
-        llm = await ModelRouter.get_llm(provider=llm_provider, model=llm_model)
+        llm = await ModelRouter.get_llm(
+            provider=llm_provider,
+            model=llm_model,
+            temperature=temperature,
+            db=db,
+            user_id=user_id,
+        )
 
         messages = []
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         if extra_system_messages:
             messages.extend(extra_system_messages)
+        if attachment_context:
+            messages.append(SystemMessage(content=attachment_context))
 
         # RAG: retrieve relevant context
         rag_context = ""
@@ -113,25 +127,38 @@ class DialogueManager:
         agent_definition=None,
         system_prompt: Optional[str] = None,
         extra_system_messages: Optional[list[SystemMessage]] = None,
+        attachment_context: Optional[str] = None,
+        db: Optional[AsyncSession] = None,
+        user_id: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Stream the assistant's response token by token."""
         from app.models_hub.router import ModelRouter
 
         llm_provider = None
         llm_model = None
+        temperature = None
         if agent_definition:
             llm_provider = agent_definition.llm_provider
             llm_model = agent_definition.llm_model
+            temperature = agent_definition.temperature
             if not system_prompt:
                 system_prompt = agent_definition.system_prompt()
 
-        llm = await ModelRouter.get_llm(provider=llm_provider, model=llm_model)
+        llm = await ModelRouter.get_llm(
+            provider=llm_provider,
+            model=llm_model,
+            temperature=temperature,
+            db=db,
+            user_id=user_id,
+        )
 
         messages = []
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         if extra_system_messages:
             messages.extend(extra_system_messages)
+        if attachment_context:
+            messages.append(SystemMessage(content=attachment_context))
 
         history = await self.memory.get_history(session_id)
         messages.extend(history)

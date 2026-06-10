@@ -39,6 +39,7 @@ Thumbs.db
 *.log
 _smoke*.txt
 smoke_out.txt
+integration_report.json
 
 # Chroma / local data
 chroma_data/

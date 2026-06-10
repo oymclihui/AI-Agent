@@ -11,7 +11,10 @@ from app.db.models import (
     WorkflowExecution,
     Agent as AgentModel,
     ExecutionStatus,
+    User,
 )
+from app.core.auth.deps import get_current_user
+from app.core.auth.scoping import scope_readable
 from app.db.base import generate_uuid
 from app.schemas.workflow import (
     WorkflowCreate, WorkflowUpdate, WorkflowResponse,
@@ -20,6 +23,7 @@ from app.schemas.workflow import (
     WorkflowGenerateRequest,
 )
 from app.core.workflow.engine import WorkflowEngine, WorkflowBuilder
+from app.core.artifacts import collect_artifacts_from_output, merge_artifacts
 from app.core.workflow.node_catalog import get_node_catalog, get_node_definition
 from app.core.workflow.config_assistant import NodeConfigAssistant
 from app.core.workflow.workflow_generator import WorkflowGenerator
@@ -92,20 +96,38 @@ async def generate_workflow(payload: WorkflowGenerateRequest, db: AsyncSession =
 @router.post("/seed-templates", status_code=status.HTTP_200_OK)
 async def seed_workflow_templates(db: AsyncSession = Depends(get_db)):
     from app.db.init_db import seed_template_workflows
+    from app.core.workflow.templates.loader import ensure_workflow_templates
+
     await seed_template_workflows(db)
-    return {"message": "Template workflows seeded (skipped if already exist)"}
+    created = await ensure_workflow_templates(db)
+    return {
+        "message": "Template workflows seeded",
+        "bundled_created": created,
+    }
 
 
 @router.get("/", response_model=list[WorkflowResponse])
-async def list_workflows(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(WorkflowModel).order_by(WorkflowModel.created_at.desc()))
+async def list_workflows(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(WorkflowModel)
+        .where(scope_readable(WorkflowModel, user.id))
+        .order_by(WorkflowModel.created_at.desc())
+    )
     return result.scalars().all()
 
 
 @router.post("/", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
-async def create_workflow(payload: WorkflowCreate, db: AsyncSession = Depends(get_db)):
+async def create_workflow(
+    payload: WorkflowCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     workflow = WorkflowModel(
         id=generate_uuid(),
+        owner_id=user.id,
         name=payload.name,
         description=payload.description,
         process_type=payload.process_type,
@@ -199,10 +221,20 @@ async def execute_workflow(
     start = time.monotonic()
     try:
         state = await engine.execute(payload.input_data)
+        artifacts = merge_artifacts(
+            state.context.get("artifacts") if isinstance(state.context.get("artifacts"), list) else None,
+            collect_artifacts_from_output(state.final_output),
+        )
         execution.status = ExecutionStatus.completed
         execution.output_data = {
             "final_output": state.final_output,
             "agent_outputs": state.agent_outputs,
+            "errors": state.errors,
+            "rows": state.context.get("rows"),
+            "preview": state.context.get("preview"),
+            "output_path": state.context.get("output_path"),
+            "download_url": state.context.get("download_url"),
+            "artifacts": artifacts,
         }
         execution.token_usage = state.token_usage
         execution.state_snapshot = {

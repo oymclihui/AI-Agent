@@ -131,3 +131,27 @@ class TaskRunResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class EmployeeTemplateSummary(BaseModel):
+    template_id: str
+    name_zh: str
+    name_en: str
+    description_zh: str
+    description_en: str
+    category: str
+    employee_name: str
+    employee_title: Optional[str] = None
+    task_count: int
+    tasks_preview: list[str] = []
+
+
+class EmployeeTemplateImportRequest(BaseModel):
+    template_id: str = Field(..., min_length=1, max_length=128)
+    employee_name: Optional[str] = Field(None, max_length=255)
+
+
+class EmployeeTemplateImportResponse(BaseModel):
+    employee: EmployeeResponse
+    tasks_created: int
+    template_id: str

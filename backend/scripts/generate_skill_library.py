@@ -103,11 +103,31 @@ def main() -> None:
                 "base_path": "skills",
                 "url": "https://github.com/agent-skills-hub/agent-skills-hub",
             },
+            {
+                "id": "skillhub-cn",
+                "name": "SkillHub China",
+                "name_zh": "SkillHub 中国社区",
+                "repo": "",
+                "branch": "",
+                "base_path": "skillhub-cn",
+                "url": "https://skillhub.cn/",
+            },
         ],
         "templates": templates,
     }
     OUT.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"written {OUT} ({len(templates)} templates)")
+
+    try:
+        import asyncio
+        from app.core.skills.library import SkillLibrary
+
+        cn_result = asyncio.run(SkillLibrary.sync_catalog_from_skillhub_cn())
+        print(f"skillhub-cn ok: {cn_result}")
+        data = json.loads(OUT.read_text(encoding="utf-8"))
+        print(f"catalog total: {len(data.get('templates', []))} templates")
+    except Exception as exc:
+        print(f"skillhub-cn fail: {exc}")
 
 
 if __name__ == "__main__":

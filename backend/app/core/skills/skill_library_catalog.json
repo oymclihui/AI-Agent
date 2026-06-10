@@ -17,6 +17,15 @@
       "branch": "main",
       "base_path": "skills",
       "url": "https://github.com/agent-skills-hub/agent-skills-hub"
+    },
+    {
+      "id": "skillhub-cn",
+      "name": "SkillHub China",
+      "name_zh": "SkillHub 中国社区",
+      "repo": "",
+      "branch": "",
+      "base_path": "skillhub-cn",
+      "url": "https://skillhub.cn/"
     }
   ],
   "templates": [
@@ -10547,6 +10556,4162 @@
       "tags": [
         "track",
         "skills-hub"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "self-improving-agent",
+      "path": "skillhub-cn/self-improving-agent/SKILL.md",
+      "display_name": "self-improving agent",
+      "description": "捕获经验教训、错误和纠正，以实现持续改进。使用时机：（1）命令或操作意外失败；（2）用户纠正……",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "summarize",
+      "path": "skillhub-cn/summarize/SKILL.md",
+      "display_name": "Summarize",
+      "description": "使用summarize CLI总结URL或文件（支持网页、PDF、图片、音频、YouTube）。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "find-skills",
+      "path": "skillhub-cn/find-skills/SKILL.md",
+      "display_name": "Find Skills",
+      "description": "当用户询问\"如何做某事\"、\"寻找某技能\"或希望扩展功能时，帮助发现并安装智能体技能。适用于寻找可安装功能的场景。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "github",
+      "path": "skillhub-cn/github/SKILL.md",
+      "display_name": "Github",
+      "description": "使用 `gh` CLI 与 GitHub 交互，通过 `gh issue`、`gh pr`、`gh run` 和 `gh api` 管理议题、PR、CI 运行及高级查询。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "self-improving",
+      "path": "skillhub-cn/self-improving/SKILL.md",
+      "display_name": "Self-Improving + Proactive Agent",
+      "description": "自我反思+自我批评+自我学习+自组织记忆。智能体评估自身工作、发现错误并持续改进。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "agent-browser",
+      "path": "skillhub-cn/agent-browser/SKILL.md",
+      "display_name": "Agent Browser",
+      "description": "基于Rust的快速无头浏览器自动化CLI，支持Node.js回退，允许AI代理通过结构化命令执行页面导航、点击、输入和快照操作。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "skill-vetter",
+      "path": "skillhub-cn/skill-vetter/SKILL.md",
+      "display_name": "Skill Vetter",
+      "description": "AI智能体技能安全预审工具。安装ClawdHub、GitHub等来源技能前，检查风险信号、权限范围及可疑模式。",
+      "category": "security-compliance",
+      "tags": [
+        "security-compliance",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ontology",
+      "path": "skillhub-cn/ontology/SKILL.md",
+      "display_name": "ontology",
+      "description": "类型化知识图谱，用于结构化智能体记忆与可组合技能。支持创建/查询实体（人员、项目、任务、事件、文档）及关联...",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "polymarket-trade",
+      "path": "skillhub-cn/polymarket-trade/SKILL.md",
+      "display_name": "Polymarket",
+      "description": "查询 Polymarket 预测市场，查看赔率、发现热门市场、搜索事件、追踪价格波动。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "weather",
+      "path": "skillhub-cn/weather/SKILL.md",
+      "display_name": "Weather",
+      "description": "获取当前天气和预报（无需API密钥）",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "proactive-agent",
+      "path": "skillhub-cn/proactive-agent/SKILL.md",
+      "display_name": "Proactive Agent",
+      "description": "将AI智能体从任务执行者升级为主动预判需求、持续优化的智能伙伴。集成WAL协议、工作缓冲区、自主定时任务及实战验证模式。Hal Stack核心组件 🦞",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "humanizer",
+      "path": "skillhub-cn/humanizer/SKILL.md",
+      "display_name": "Humanizer",
+      "description": "消除AI写作痕迹，使文本更自然真实。基于维基百科\"AI写作特征\"指南，识别并修正夸张象征、宣传用语、肤浅-ing分析、模糊归因、破折号滥用、三项排比、AI词汇、负面平行结构及冗长连接词等模式。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gog",
+      "path": "skillhub-cn/gog/SKILL.md",
+      "display_name": "Gog",
+      "description": "Google Workspace 命令行工具，支持 Gmail、日历、云端硬盘、通讯录、表格和文档。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "codeconductor",
+      "path": "skillhub-cn/codeconductor/SKILL.md",
+      "display_name": "CodeConductor.ai",
+      "description": "AI驱动平台，提供快速全栈开发、智能体、工作流自动化及低代码AI集成的可扩展产品创建。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "word-docx",
+      "path": "skillhub-cn/word-docx/SKILL.md",
+      "display_name": "Word / DOCX",
+      "description": "创建、检查和编辑 Microsoft Word 文档及 DOCX 文件，支持样式、编号、修订记录、表格、分节符及兼容性检查等功能。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "web-tools-guide",
+      "path": "skillhub-cn/web-tools-guide/SKILL.md",
+      "display_name": "web-tools-guide",
+      "description": "MANDATORY before calling web_search, web_fetch, browser, or opencli. Contains required error-handling procedures (web_search failure → must guide user to configure API), fallback chain (opencli CLI covers 70+ sites as structured fallback before browser), and site-specific login URLs. Without reading this skill, you WILL handle failures incorrectly and miss available tools. Trigger on: 搜索/上网/查资料/打开网站/抓取网页/新闻/热点/web search/fetch/browser/opencli.",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "admapix",
+      "path": "skillhub-cn/admapix/SKILL.md",
+      "display_name": "AdMapix",
+      "description": "广告情报与应用数据分析助手，支持搜索广告素材、分析应用排名、下载量、收入及市场洞察，用于广告素材和竞品分析。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "excel-xlsx",
+      "path": "skillhub-cn/excel-xlsx/SKILL.md",
+      "display_name": "Excel / XLSX",
+      "description": "创建、检查和编辑 Microsoft Excel 工作簿及 XLSX 文件，支持可靠的公式、日期、类型、格式、重算及模板保留功能。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "agent-browser-clawdbot",
+      "path": "skillhub-cn/agent-browser-clawdbot/SKILL.md",
+      "display_name": "Agent Browser",
+      "description": "专为AI智能体优化的无头浏览器自动化CLI，支持无障碍树快照和基于引用的元素选择。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "nano-pdf",
+      "path": "skillhub-cn/nano-pdf/SKILL.md",
+      "display_name": "Nano Pdf",
+      "description": "使用nano-pdf CLI通过自然语言指令编辑PDF",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "nano-banana-pro",
+      "path": "skillhub-cn/nano-banana-pro/SKILL.md",
+      "display_name": "Nano Banana Pro",
+      "description": "使用 Nano Banana Pro (Gemini 3 Pro Image) 生成或编辑图像。支持文生图、图生图及 1K/2K/4K 分辨率，适用于图像创建、修改及编辑请求，使用 --input-image 指定输入图像。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "skill-creator",
+      "path": "skillhub-cn/skill-creator/SKILL.md",
+      "display_name": "Skill Creator",
+      "description": "创建有效技能指南。当用户希望创建新技能（或更新现有技能）以利用专业知识、工作流程或工具集成扩展 Claude 的能力时，应使用此技能。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "baidu-search",
+      "path": "skillhub-cn/baidu-search/SKILL.md",
+      "display_name": "Baidu web search",
+      "description": "使用百度AI搜索引擎(BDSE)进行网络搜索。适用于获取实时信息、文档资料或研究课题。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "obsidian",
+      "path": "skillhub-cn/obsidian/SKILL.md",
+      "display_name": "Obsidian",
+      "description": "操作 Obsidian 仓库（纯 Markdown 笔记）并通过 obsidian-cli 自动化。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "auto-updater",
+      "path": "skillhub-cn/auto-updater/SKILL.md",
+      "display_name": "Auto-Updater Skill",
+      "description": "每日自动更新 Clawdbot 及所有已安装技能。运行 cron 检查更新并应用，同时向用户发送变更摘要。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "api-gateway",
+      "path": "skillhub-cn/api-gateway/SKILL.md",
+      "display_name": "API Gateway",
+      "description": "通过 Maton 管理的 API 路由连接外部服务；仅在用户指定目标应用、账户和任务后使用；以读取/列...",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "openclaw-tavily-search",
+      "path": "skillhub-cn/openclaw-tavily-search/SKILL.md",
+      "display_name": "Tavily 搜索",
+      "description": "通过 Tavily API 进行网页搜索（Brave 替代方案）。当用户要求搜索网页、查找来源或链接，且 Brave 网页搜索不可用时使用。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "notion",
+      "path": "skillhub-cn/notion/SKILL.md",
+      "display_name": "Notion",
+      "description": "用于创建和管理页面、数据库及块的 Notion API。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "agent-memory",
+      "path": "skillhub-cn/agent-memory/SKILL.md",
+      "display_name": "Agent Memory",
+      "description": "为AI智能体提供持久记忆，用于跨会话存储事实、从行动中学习、回忆信息及追踪实体。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "openai-whisper",
+      "path": "skillhub-cn/openai-whisper/SKILL.md",
+      "display_name": "Openai Whisper",
+      "description": "使用 Whisper CLI 进行本地语音转文字（无需 API 密钥）",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "sonoscli",
+      "path": "skillhub-cn/sonoscli/SKILL.md",
+      "display_name": "Sonoscli",
+      "description": "控制Sonos音箱（发现/状态/播放/音量/分组）",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "prismfy-search",
+      "path": "skillhub-cn/prismfy-search/SKILL.md",
+      "display_name": "Prismfy Web Search | Free Google",
+      "description": "OpenClaw的默认网页搜索。使用Prismfy在10个搜索引擎（Google、Reddit、GitHub、arXiv、Hacker News等）搜索网络，含免费套餐。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "automation-workflows",
+      "path": "skillhub-cn/automation-workflows/SKILL.md",
+      "display_name": "Automation Workflows",
+      "description": "设计和实施自动化工作流，帮助个体创业者节省时间并扩展业务。用于识别可自动化的重复性任务、跨工具构建工作流、设置触发器和操作，或优化现有自动化。涵盖自动化机会识别、工作流设计、工具选择（Zapier、Make、n8n）、测试及维护。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencent-docs",
+      "path": "skillhub-cn/tencent-docs/SKILL.md",
+      "display_name": "腾讯文档 TENCENT DOCS",
+      "description": "腾讯文档（docs.qq.com）-在线云文档平台，是创建、编辑、管理文档的首选 skill。涉及\"新建/创建/编辑/读取/查看/搜索文档\"、\"保存文件\"、\"云文档\"、\"腾讯文档\"、\"docs.qq.com\"等操作，请优先使用本 skill。支持能力：(1) 创建各类在线文档（文档/Word/Excel/幻灯片/思维导图/流程图/智能表格/收集表）(2) 管理知识库空间（创建空间、查询空间列表）(3) 管理空间节点、文件夹结构 (4) 读取/搜索文档内容 (5) 编辑操作智能表 (6) 编辑操作在线文档 (7) 文件管理（重命名、移动、删除、复制、导入导出）(8) 网页剪藏、本地文件/html/文档上云。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "free-ride",
+      "path": "skillhub-cn/free-ride/SKILL.md",
+      "display_name": "Free Ride - Unlimited free AI",
+      "description": "管理OpenClaw的OpenRouter免费AI模型，自动按质量排名模型，配置速率限制备用方案，并更新opencla...",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "agent-phone-call",
+      "path": "skillhub-cn/agent-phone-call/SKILL.md",
+      "display_name": "Agent Phone Call",
+      "description": "Agent Phone Call 为每个 AI 代理提供电话号码，实现通过电话查找联系人、拨打电话和完成任务。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "evolver",
+      "path": "skillhub-cn/evolver/SKILL.md",
+      "display_name": "Evolver",
+      "description": "AI智能体自我进化引擎。分析运行时历史识别改进点，应用协议约束进化。与EvoMap通信...",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "moltspeak",
+      "path": "skillhub-cn/moltspeak/SKILL.md",
+      "display_name": "Molt Speak",
+      "description": "高效、安全的代理间通信协议，40-60%令牌削减，内置隐私，Ed25519签名",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ima-skills",
+      "path": "skillhub-cn/ima-skills/SKILL.md",
+      "display_name": "ima-skills",
+      "description": "ima skills，支持对笔记、知识库的读取、写入和检索等操作，可以帮你随时记录，收入ima智能管理，随时调用，龙虾输出精准懂你，友好的接入了OpenClaw生态，构建你的第二大脑。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "humanize-ai-text",
+      "path": "skillhub-cn/humanize-ai-text/SKILL.md",
+      "display_name": "Humanize AI text",
+      "description": "将AI生成的文本改写得更自然，以绕过AI检测器（如GPTZero）。支持ChatGPT、Claude、GPT等内容的改写。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mcporter",
+      "path": "skillhub-cn/mcporter/SKILL.md",
+      "display_name": "Mcporter",
+      "description": "使用 mcporter CLI 直接列出、配置、认证及调用 MCP 服务器/工具（支持 HTTP 或 stdio），涵盖临时服务器、配置编辑及 CLI/类型生成功能。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "feishu-evolver-wrapper",
+      "path": "skillhub-cn/feishu-evolver-wrapper/SKILL.md",
+      "display_name": "Feishu Evolver Wrapper",
+      "description": "飞书集成的包装器，用于能力演进器。管理演进循环的生命周期（启动/停止/确保），发送丰富的飞书卡片报告，并提供...",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "brave-search",
+      "path": "skillhub-cn/brave-search/SKILL.md",
+      "display_name": "Brave Search",
+      "description": "通过 Brave Search API 进行网页搜索与内容提取。适用于搜索文档、事实或任何网页内容。轻量级，无需浏览器。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "data-analysis",
+      "path": "skillhub-cn/data-analysis/SKILL.md",
+      "display_name": "Data Analysis",
+      "description": "{\"answer\":\"数据分析与可视化。查询数据库、生成报告、自动化电子表格，将原始数据转化为清晰可行的见解。适用于：(1) 您……\"}",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "elite-longterm-memory",
+      "path": "skillhub-cn/elite-longterm-memory/SKILL.md",
+      "display_name": "Elite Longterm Memory",
+      "description": "{\"answer\":\"专为 Cursor、Claude、ChatGPT 和 Copilot 打造的终极 AI 记忆系统。WAL 协议 + 向量搜索 + git-notes + 云备份。永不错失上下文。完美适配 Vibe-coding。\"}",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "desktop-control",
+      "path": "skillhub-cn/desktop-control/SKILL.md",
+      "display_name": "Desktop Control",
+      "description": "{\n  \"answer\": \"具备鼠标、键盘和屏幕控制的高级桌面自动化\"\n}",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "akshare-stock",
+      "path": "skillhub-cn/akshare-stock/SKILL.md",
+      "display_name": "A股量化 AkShare",
+      "description": "A股量化数据分析工具，基于AkShare库获取A股行情、财务数据、板块信息等。用于回答关于A股股票查询、行情数据、财务分析、选股等问题。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-analysis",
+      "path": "skillhub-cn/stock-analysis/SKILL.md",
+      "display_name": "Stock Analysis",
+      "description": "{\"answer\":\"基于雅虎财经数据，分析股票与加密货币。支持投资组合管理、自选股预警、股息分析、8维评分、热门趋势扫描及传闻/早期信号探测。适用于股票分析、持仓追踪、财报异动、加密监控、热门股追踪或提前发掘非主流传闻。\"}",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "news-summary",
+      "path": "skillhub-cn/news-summary/SKILL.md",
+      "display_name": "News Summary",
+      "description": "当用户询问新闻更新、每日简报或天下大事时使用此技能。从受信任的国际RSS源获取新闻，并可生成语音摘要。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "powerpoint-pptx",
+      "path": "skillhub-cn/powerpoint-pptx/SKILL.md",
+      "display_name": "Powerpoint / PPTX",
+      "description": "创建、检查和编辑 Microsoft PowerPoint 演示文稿及 PPTX 文件，支持可靠的布局、模板、占位符、备注、图表和视觉质检。使用...",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "markdown-converter",
+      "path": "skillhub-cn/markdown-converter/SKILL.md",
+      "display_name": "Markdown Converter",
+      "description": "{\"answer\":\"使用 markitdown 将文档和文件转换为 Markdown。用于将 PDF、Word (.docx)、PowerPoint (.pptx)、Excel (.xlsx, .xls)、HTML、CSV、JSON、XML、图片（含 EXIF/OCR）、音频（含转录）、ZIP 压缩包、YouTube 链接或 EPub 转换为 Markdown 格式，以进行 LLM 处理或文本分析。\"}",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "browser-use",
+      "path": "skillhub-cn/browser-use/SKILL.md",
+      "display_name": "Browser Use",
+      "description": "自动化浏览器操作，用于网页测试、表单填写、截图和数据提取。当用户需要浏览网站、与网页元素交互或提取数据时使用。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "youtube-watcher",
+      "path": "skillhub-cn/youtube-watcher/SKILL.md",
+      "display_name": "YouTube Watcher",
+      "description": "获取并读取YouTube视频字幕。适用于需要总结视频、回答视频相关问题或提取视频信息的场景。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "video-frames",
+      "path": "skillhub-cn/video-frames/SKILL.md",
+      "display_name": "Video Frames",
+      "description": "使用 ffmpeg 从视频中提取帧或短片。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "imap-smtp-email",
+      "path": "skillhub-cn/imap-smtp-email/SKILL.md",
+      "display_name": "imap-smtp-email",
+      "description": "使用IMAP/SMTP读取和发送邮件；检查新/未读邮件、获取内容、搜索邮箱、标记已读/未读、发送带附件的邮件。支持...",
+      "category": "communication-collaboration",
+      "tags": [
+        "communication-collaboration",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "find-skills-skill",
+      "path": "skillhub-cn/find-skills-skill/SKILL.md",
+      "display_name": "Find Skills Skill",
+      "description": "从多种来源搜索和发现OpenClaw技能。使用场景：用户想要查找可用技能、搜索特定功能或发现新技能。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gemini",
+      "path": "skillhub-cn/gemini/SKILL.md",
+      "display_name": "Gemini",
+      "description": "Gemini CLI：一键问答、摘要与生成",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pdf",
+      "path": "skillhub-cn/pdf/SKILL.md",
+      "display_name": "Pdf",
+      "description": "全面的PDF处理工具包，支持提取文本和表格、创建新PDF、合并/拆分文档及表单填写。Claude需要大规模程序化处理、生成或分析PDF时使用。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "slack",
+      "path": "skillhub-cn/slack/SKILL.md",
+      "display_name": "Slack",
+      "description": "当需要通过 slack 工具从 Clawdbot 控制 Slack 时使用，包括在频道或私信中回复消息或置顶/取消置顶项目。",
+      "category": "communication-collaboration",
+      "tags": [
+        "communication-collaboration",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "atxp",
+      "path": "skillhub-cn/atxp/SKILL.md",
+      "display_name": "ATXP",
+      "description": "访问ATXP付费API工具，实现网页搜索、AI绘图、音乐创作、视频生成、X/Twitter搜索、邮件和代理账户管理。使用...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "browser-automation",
+      "path": "skillhub-cn/browser-automation/SKILL.md",
+      "display_name": "Browser Automation",
+      "description": "使用自然语言通过 CLI 命令自动化网页浏览器交互。适用于浏览网站、导航网页、提取数据、截屏、填表、点击按钮或与网页应用交互的场景。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "memory-setup",
+      "path": "skillhub-cn/memory-setup/SKILL.md",
+      "display_name": "Memory Setup",
+      "description": "启用并配置 Moltbot/Clawdbot 记忆搜索以实现持久上下文。适用于初始化记忆、解决“金鱼脑”问题或协助用户配置 memorySearch。涵盖 MEMORY.md、日志记录及向量搜索设置。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "xiucheng-self-improving-agent",
+      "path": "skillhub-cn/xiucheng-self-improving-agent/SKILL.md",
+      "display_name": "Self Improving Agent",
+      "description": "自我改进的智能体系统，分析对话质量、识别改进机会、持续优化回复策略。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "himalaya",
+      "path": "skillhub-cn/himalaya/SKILL.md",
+      "display_name": "Himalaya",
+      "description": "{\"answer\":\"通过IMAP/SMTP管理邮件的CLI。可在终端使用 `himalaya` 收发、回复、转发、搜索及整理邮件。支持多账户与MML（MIME元语言）编写邮件。\"}",
+      "category": "communication-collaboration",
+      "tags": [
+        "communication-collaboration",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-ppt-generator",
+      "path": "skillhub-cn/ai-ppt-generator/SKILL.md",
+      "display_name": "Baidu Wenku AIPPT",
+      "description": "使用百度文库 AI 智能生成 PPT，自动根据内容选择模板。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "liang-tavily-search",
+      "path": "skillhub-cn/liang-tavily-search/SKILL.md",
+      "display_name": "Tavily Search",
+      "description": "使用Tavily的LLM优化API进行网络搜索，返回包含内容片段、评分和元数据的相关结果。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-watcher",
+      "path": "skillhub-cn/stock-watcher/SKILL.md",
+      "display_name": "Stock Watcher",
+      "description": "管理和监控个人股票自选列表，支持利用同花顺数据添加、删除、列出股票及汇总近期表现。适用于用户希望追踪特定股票、获取表现汇总或管理自选列表时。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ui-ux-pro-max",
+      "path": "skillhub-cn/ui-ux-pro-max/SKILL.md",
+      "display_name": "UI/UX Pro Max",
+      "description": "提供 UI/UX 设计智能与实现指导，帮助打造精美界面。适用于 UI 设计、UX 流程、信息架构、视觉风格、设计系统/标记、组件规格、文案/微文案、无障碍及前端 UI（HTML/CSS/JS、React、Next.js、Vue、Svelte、Tailwind）生成/评审/改进。工作流包括：①新 UI 布局与样式生成；②现有 UI/UX 改进；③设计系统标记和组件规范产出；④ UX 建议转化为代码变更。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "byterover",
+      "path": "skillhub-cn/byterover/SKILL.md",
+      "display_name": "ByteRover",
+      "description": "在开始任何工作之前必须使用此工具收集上下文。这是面向AI代理的知识管理。使用 brv 存储和检索项目模式，...",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "clawddocs",
+      "path": "skillhub-cn/clawddocs/SKILL.md",
+      "display_name": "Clawdbot Documentation Expert",
+      "description": "Clawdbot文档专家，提供决策树导航、搜索脚本、文档获取、版本追踪及所有功能的配置代码段。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencent-meeting-skill",
+      "path": "skillhub-cn/tencent-meeting-skill/SKILL.md",
+      "display_name": "腾讯会议",
+      "description": "腾讯会议：会议管理及音视频协作助手。提供预约/创建/修改/取消会议、查询会议详情与会议号转换、查看参会/受邀/等候室成员、查询用户会议列表（即将开始/进行中/已结束）、查询录制列表及下载地址、获取转写全文/段落/搜索、获取AI智能纪要（支持多语言翻译）、时间转换与版本检查。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "blogwatcher",
+      "path": "skillhub-cn/blogwatcher/SKILL.md",
+      "display_name": "Blogwatcher",
+      "description": "使用 blogwatcher CLI 监控博客和 RSS/Atom 订阅源的更新。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "playwright-mcp",
+      "path": "skillhub-cn/playwright-mcp/SKILL.md",
+      "display_name": "Playwright MCP",
+      "description": "{\n \"answer\": \"通过 Playwright MCP 服务器实现浏览器自动化。可导航网站、点击元素、填写表单、提取数据、截图，并执行完整的浏览器自动化工作流。\"\n}",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "deep-research-pro",
+      "path": "skillhub-cn/deep-research-pro/SKILL.md",
+      "display_name": "Deep Research Pro",
+      "description": "多源深度研究代理，搜索网页并综合发现，交付带引用的报告，无需 API 密钥。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tavily",
+      "path": "skillhub-cn/tavily/SKILL.md",
+      "display_name": "Tavily AI Search",
+      "description": "使用Tavily Search API进行AI优化的网络搜索。适用于需要全面网络调研、查询时事、特定领域搜索或AI生成答案摘要的场景。Tavily针对LLM进行了优化，提供整洁的结构化结果、答案生成和原始内容提取功能，最适合研究任务、新闻查询、事实核查及收集权威来源。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "data-analyst",
+      "path": "skillhub-cn/data-analyst/SKILL.md",
+      "display_name": "Data Analyst",
+      "description": "数据可视化、报告生成、SQL查询和电子表格自动化。将您的AI代理转变为数据分析师，将原始数据转化为可操作的洞察。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "session-logs",
+      "path": "skillhub-cn/session-logs/SKILL.md",
+      "display_name": "Session-logs",
+      "description": "使用 jq 搜索并分析自身的会话日志（旧会话/父对话）。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "trello",
+      "path": "skillhub-cn/trello/SKILL.md",
+      "display_name": "Trello",
+      "description": "使用 Trello REST API 管理看板、列表和卡片",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "youtube-api-skill",
+      "path": "skillhub-cn/youtube-api-skill/SKILL.md",
+      "display_name": "YouTube",
+      "description": "使用托管OAuth集成YouTube Data API，支持搜索视频、管理播放列表、获取频道数据及评论互动，适用于用户需要时使用此技能。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-market-pro",
+      "path": "skillhub-cn/stock-market-pro/SKILL.md",
+      "display_name": "Stock Market Pro",
+      "description": "Yahoo Finance (yfinance) 驱动的股票分析技能：行情报价、基本面、ASCII 趋势图、高分辨率图表（RSI/MACD/BB/VWAP/ATR），以及可选的网络...",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "proactive-agent-lite",
+      "path": "skillhub-cn/proactive-agent-lite/SKILL.md",
+      "display_name": "Proactive Agent Lite",
+      "description": "利用记忆架构、反向提示和自愈模式，将AI代理从任务执行者转变为主动合作伙伴。轻量版...",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "skill-finder-cn",
+      "path": "skillhub-cn/skill-finder-cn/SKILL.md",
+      "display_name": "Skill Finder Cn",
+      "description": "Skill 查找器 | Skill Finder. 帮助发现和安装 ClawHub Skills | Discover and install ClawHub Skills. 回答'有什么技能可以X'、'找一个技能' | Answers 'what skill can X', 'find a skill'. 触发...",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "superdesign",
+      "path": "skillhub-cn/superdesign/SKILL.md",
+      "display_name": "SuperDesign",
+      "description": "专家级前端设计指南，用于创建美观、现代的用户界面。适用于落地页、仪表板等各类UI设计。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "model-usage",
+      "path": "skillhub-cn/model-usage/SKILL.md",
+      "display_name": "Model Usage",
+      "description": "使用 CodexBar CLI 本地成本功能汇总 Codex 或 Claude 的各模型用量，支持当前模型或全模型明细。当查询 CodexBar 模型级用量/成本数据或需要脚本化汇总时触发。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "web-search",
+      "path": "skillhub-cn/web-search/SKILL.md",
+      "display_name": "Web Search",
+      "description": "此技能用于搜索网络信息、查找当前内容、查询新闻文章、图片或视频。它通过 DuckDuckGo 搜索 API 以文本、Markdown 或 JSON 格式返回简洁结果，适用于研究、事实核查、获取最新信息或收集网络资源。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "discord",
+      "path": "skillhub-cn/discord/SKILL.md",
+      "display_name": "Discord",
+      "description": "当需要通过discord工具控制Discord时使用：发送消息、添加反应、发布或上传表情包、上传表情、创建投票、管理帖子/置顶/搜索、获取权限或成员/角色/频道信息，或在Discord私信或频道中处理管理操作。",
+      "category": "communication-collaboration",
+      "tags": [
+        "communication-collaboration",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gmail",
+      "path": "skillhub-cn/gmail/SKILL.md",
+      "display_name": "Gmail",
+      "description": "Gmail API 集成，托管 OAuth，支持读取、发送和管理邮件、线程、标签及草稿，适用于需要与 Gmail 交互的场景。",
+      "category": "communication-collaboration",
+      "tags": [
+        "communication-collaboration",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mx-finance-data",
+      "path": "skillhub-cn/mx-finance-data/SKILL.md",
+      "display_name": "All-Market Financial Data Hub",
+      "description": "<think>\nWe needto translate the description into concise Chinese. The description is in Chinese but also includes English \"Naturallanguage q...\" The request says \"Translate the following skill description into concise Chinese. Return JSON only like {\"description_zh\":\"...\"}. Description: ...\". The description is partially Chinese, but we need to produce a concise Chinese version. We need to return JSON only like {\"description_zh\":\"...\"}. Ensure it's concise. The description: \"基于东方财富数据库，支持自然语言查询金融数据，覆盖A港美、基金、债券等多种资产，含实时行情、公司信息、估值、财务报表等，可用于投资研究、交易复盘、市场监控、行业分析、信用研究、财报审计、资产配置等场景，适配机构与个人多元需求。返回结果包含 xlsx 与 Markdown 文件。Natural language q...\"\n\nProbably they want to translate \"Naturallanguage q...\". So we need to provide a concise Chinese translation. The phrase \"Natural language q...\" seems incomplete, maybe it's \"Natural language query\". We'lltranslate as \"支持自然语言查询\". Already there.\n\nThus concise Chinese: \"基于东方财富数据库，支持自然语言查询金融数据，覆盖A股、港股、美股、基金、债券等资产，提供实时行情、公司信息、估值、财务报表等，适用于投资研究、交易复盘、市场监控、行业分析、信用研究、财报审计、资产配置等场景，满足机构与个人需求。返回结果为xlsx和Markdown文件。\"\n\nAdd JSON wrapper.\n\nThusfinal answer: {\"description_zh\":\"...\"}.\n\nMake sure JSON only.\n</think>\n\n```json\n{\n  \"description_zh\":\"基于东方财富数据库，支持自然语言查询金融数据，覆盖A股、港股、美股、基金、债券等资产，提供实时行情、公司信息、估值、财务报表等，适用于投资研究、交易复盘、市场监控、行业分析、信用研究、财报审计、资产配置等场景，满足机构与个人需求。返回结果为xlsx和Markdown文件。\"\n}\n```",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "memory-manager",
+      "path": "skillhub-cn/memory-manager/SKILL.md",
+      "display_name": "Memory Manager",
+      "description": "Agent本地记忆管理。支持压缩检测、自动快照与语义搜索。适用于在记忆丢失前检测压缩风险、保存上下文快照、搜索历史记忆或追踪使用模式，彻底告别上下文丢失。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "clawdhub",
+      "path": "skillhub-cn/clawdhub/SKILL.md",
+      "display_name": "Clawdhub",
+      "description": "{\"answer\":\"使用 ClawdHub CLI 从 clawdhub.com 搜索、安装、更新及发布智能体技能。适用于即时获取新技能、同步至最新或指定版本，或通过 npm 安装的 CLI 发布技能文件夹。\"}",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "apple-notes",
+      "path": "skillhub-cn/apple-notes/SKILL.md",
+      "display_name": "Apple Notes",
+      "description": "在 macOS 上通过 `memo` CLI 管理 Apple Notes（创建、查看、编辑、删除、搜索、移动和导出备忘录）。当用户请求添加、列出、搜索备忘录或管理文件夹时使用。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "agentmail",
+      "path": "skillhub-cn/agentmail/SKILL.md",
+      "display_name": "AgentMail",
+      "description": "专为AI智能体设计的API优先邮件平台。支持通过API创建专属邮箱、收发邮件，并利用Webhook与实时事件处理邮件工作流。适用于配置智能体邮件身份、代发邮件、处理收件流程，或替代Gmail等传统邮件服务。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ppt-generator",
+      "path": "skillhub-cn/ppt-generator/SKILL.md",
+      "display_name": "description: 将用户讲稿一键生成乔布斯风极简科技感竖屏HTML演示稿。当用户需要生成PPT、演示文稿、Slides、幻灯片，或要求科技风/极简风/乔布斯风格的演示时触发此技能。输出为单个可直接运行的HTML文件。",
+      "description": "将用户讲稿一键生成乔布斯风极简科技感竖屏HTML演示稿。当用户需要生成PPT、演示文稿、Slides、幻灯片，或要求科技风/极简风/乔布斯风格的演示时触发此技能。输出为单个可直接运行的HTML文件。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "browser-act-cli-skill",
+      "path": "skillhub-cn/browser-act-cli-skill/SKILL.md",
+      "display_name": "Browser Act",
+      "description": "面向AI Agent的浏览器自动化CLI，运行全浏览器引擎，实现导航交互、数据提取与网络拦截、截图、自动CAPTCHA解决、反检测指纹伪装、会话持久化、内置代理、多账户隔离和并发多浏览器执行。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "playwright",
+      "path": "skillhub-cn/playwright/SKILL.md",
+      "display_name": "Playwright (Automation + MCP + Scraper)",
+      "description": "通过 Playwright MCP 实现浏览器自动化。可导航网站、点击元素、填写表单、截图、提取数据及调试真实浏览器工作流。使用 w...",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "summarize-pro",
+      "path": "skillhub-cn/summarize-pro/SKILL.md",
+      "display_name": "Summarize Pro",
+      "description": "当用户要求总结文本、文章、文档、会议、邮件、YouTube字幕、书籍、PDF、报告、对话或任何长篇内容时。此外...",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "n8n-workflow-automation",
+      "path": "skillhub-cn/n8n-workflow-automation/SKILL.md",
+      "display_name": "n8n workflow automation",
+      "description": "设计并输出具有强大触发器、幂等性、错误处理、日志记录、重试机制和人工审核队列的n8n工作流JSON。当需要可审计的自动化流程且不会无声失败时使用。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pdf-extract",
+      "path": "skillhub-cn/pdf-extract/SKILL.md",
+      "display_name": "Pdf Extract",
+      "description": "从PDF文件中提取文本供大模型处理",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "qmd",
+      "path": "skillhub-cn/qmd/SKILL.md",
+      "display_name": "Qmd",
+      "description": "本地搜索/索引命令行工具（BM25 + 向量 + 重新排序），支持 MCP 模式",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-hot"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "self-improving-agent-cn",
+      "path": "skillhub-cn/self-improving-agent-cn/SKILL.md",
+      "display_name": "Self Improving Agent CN",
+      "description": "AI自我改进与记忆系统 - 解决'同类错误反复犯、用户纠正不长记性'的痛点。自动捕获错误、用户纠正、最佳实践，并转化为长期记忆。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-hot",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "diagram-generator",
+      "path": "skillhub-cn/diagram-generator/SKILL.md",
+      "display_name": "diagram-generator",
+      "description": "<think>\nThe userwants me to translate a skill description into concise Chinese and return it in a specific JSON format.\n\nThe description is:\n\"Generate and edit diagrams with themcp-diagram-generator MCP server. Use this skill for new diagrams, existing .drawio/.mmd/.excalidraw edits, network topol...\"\n\nLet me translate this concisely:\n\n\"使用 mcp-diagram-generator MCP 服务器生成和编辑图表。适用于创建新图表、编辑现有的 .drawio/.mmd/.excalidraw 文件、网络拓扑图...\"\n\nI need to returnJSON only in the format: {\"description_zh\":\"...\"}\n</think>\n\n```json\n{\"description_zh\":\"使用 mcp-diagram-generator MCP 服务器生成和编辑图表。适用于创建新图表、编辑现有的 .drawio/.mmd/.excalidraw 文件、网络拓扑图等场景。\"}\n```",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "university-applications",
+      "path": "skillhub-cn/university-applications/SKILL.md",
+      "display_name": "命理大师",
+      "description": "全体系命理大师 — 八字四柱、紫微斗数、奇门遁甲、六爻、梅花易数、塔罗、星盘、 数字命理、九宫飞星风水、掌纹面相、起名命名、穿衣搭配、合婚择吉一站式解读。本地档案、可选每日推送（默认关闭）、 浏览器六爻界面与 HTML 报告。仅作文化参考，不替代医疗、法律、心理、财务、婚姻等 专业建议；遇重大决策请咨询专业人士。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ppt",
+      "path": "skillhub-cn/ppt/SKILL.md",
+      "display_name": "ppt",
+      "description": "将用户讲稿一键生成乔布斯风极简科技感竖屏HTML演示稿。当用户需要生成PPT、演示文稿、Slides、幻灯片，或要求科技风/极简风/乔布斯风格的演示时触发此技能。输出为单个可直接运行的HTML文件。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "kdocs-skill",
+      "path": "skillhub-cn/kdocs-skill/SKILL.md",
+      "display_name": "kdocs skill",
+      "description": "操作金山文档（WPS 云文档 / Kdocs / 365.kdocs.cn / www.kdocs.cn）云文档的官方 Skill。核心能力覆盖云端新建、读取、编辑、搜索、分享、整理在线文档（智能文档、Word、Excel、PDF、PPT、演示文稿、智能表格、多维表格）及个人知识库。当用户的任务涉及云文档操作时使用，包括但不限于：写周报/日报/工作汇报、处理合同/发票、创建报名表/登记表、网页剪藏、接龙转表格、信息收集、文档总结与内容生成、改写仿写、翻译、AI PPT生成、PDF拆分导出、标签分类归档、收藏管理、碎片笔记整理、表格美化、回收站还原、知识库管理。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "online-search",
+      "path": "skillhub-cn/online-search/SKILL.md",
+      "display_name": "Online Search",
+      "description": "元宝搜索标准版是腾讯元宝的联网搜索服务，提供实时精准的互联网内容检索。覆盖大量中文网站（包括官方媒体、政府网站等高权威来源及腾讯系核心资源），采用多层精排策略，确保内容匹配与排序准确。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ths-advanced-analysis",
+      "path": "skillhub-cn/ths-advanced-analysis/SKILL.md",
+      "display_name": "同花顺股票接口",
+      "description": "基于 thsdk 进行高级股票分析：分钟K线（1m/5m/15m/30m/60m/120m）、板块/指数行情（主要指数/申万行业/概念板块成分股）、多股票批量对比（表格+归一化走势图+相关性热力图）、盘口深度、大单流向、集合竞价异动、日内分时、历史分时。当用户提到\"分钟K线\"、\"日内走势\"、\"盘口\"、\"大单\"、\"...",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "github-skill",
+      "path": "skillhub-cn/github-skill/SKILL.md",
+      "display_name": "Github Skill",
+      "description": "在用户提到 GitHub 仓库、Issue、Pull Request、Actions、代码管理相关内容或操作时触发本技能。关键词包括：创建 issue、新建 PR、合并 PR、查看 issue、列出 PR、搜索仓库、创建仓库、fork 仓库、创建 release、上传 release asset、查看 wor...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wechat-article-spider",
+      "path": "skillhub-cn/wechat-article-spider/SKILL.md",
+      "display_name": "微信公众号文章爬虫",
+      "description": "微信公众号文章爬虫 - 将微信公号文章转换为 Markdown + 本地图片",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wps",
+      "path": "skillhub-cn/wps/SKILL.md",
+      "display_name": "wps",
+      "description": "面向中国用户的WPS Office工作流：创建、编辑、审阅、转换及排查.docx/.xlsx/.pptx及WPS格式的文字/表格/演示文档。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "getnote",
+      "path": "skillhub-cn/getnote/SKILL.md",
+      "display_name": "得到大脑（Get笔记）",
+      "description": "得到大脑（Get笔记）- 保存、搜索、管理个人笔记和知识库。适用场景：① 保存内容（链接、图片、语音指令如「记一下」「存到笔记」「保存」「收藏」）；② 搜索查看笔记（「搜一下」「找找笔记」「最近存了什么」「看看原文」）；③ 管理知识库/标签（如「加到知…」）",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "a-stock-analysis",
+      "path": "skillhub-cn/a-stock-analysis/SKILL.md",
+      "display_name": "A股分时量能分析",
+      "description": "提供A股实时行情、分时成交量分布及主力资金动向分析，支持持仓管理和盈亏监控。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "aihot",
+      "path": "skillhub-cn/aihot/SKILL.md",
+      "display_name": "Aihot Skill Lite",
+      "description": "AI HOT（aihot.virxact.com）中文 AI 资讯查询 Skill，帮助用户获取今日 AI 圈动态、AI 日报、AI 热点、最新 AI 资讯以及 OpenAI、Anthropic、Google 等公司的最新发布信息。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "humanizer-zh",
+      "path": "skillhub-cn/humanizer-zh/SKILL.md",
+      "display_name": "humanizer-zh",
+      "description": "去除文本中的 AI 生成痕迹。适用于编辑或审阅文本，使其听起来更自然、更像人类书写。\n基于维基百科的\"AI 写作特征\"综合指南。检测并修复以下模式：夸大的象征意义、\n宣传性语言、以 -ing 结尾的肤浅分析、模糊的归因、破折号过度使用、三段式法则、\nAI 词汇、否定式排比、过多的连接性短语。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "video-editor-helper",
+      "path": "skillhub-cn/video-editor-helper/SKILL.md",
+      "display_name": "视频剪辑助手",
+      "description": "视频剪辑助手 - 自动生成视频脚本、字幕、标题。适用于自媒体、UP主、视频创作者。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-monitor-skill",
+      "path": "skillhub-cn/stock-monitor-skill/SKILL.md",
+      "display_name": "Stock Monitor",
+      "description": "全功能智能股票监控预警系统。支持成本百分比、均线金叉死叉、RSI超买超卖、成交量异动、跳空缺口、动态止盈等7大预警规则。符合中国投资者习惯（红涨绿跌）。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "cloudbase",
+      "path": "skillhub-cn/cloudbase/SKILL.md",
+      "display_name": "Cloudbase",
+      "description": "在开发、设计、构建、部署、调试、迁移或排查 CloudBase（腾讯云开发、云开发、TCB、微信云开发）项目时使用本技能，适用于 Web 应用（React、...）",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ocr-local",
+      "path": "skillhub-cn/ocr-local/SKILL.md",
+      "display_name": "OCR - Local (No API Key)",
+      "description": "使用 Tesseract.js OCR 从图像中提取文本（100%本地运行，无需API密钥）。支持中文（简繁体）和英文。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pdf-text-extractor",
+      "path": "skillhub-cn/pdf-text-extractor/SKILL.md",
+      "display_name": "PDF Text Extractor",
+      "description": "从PDF提取文本，支持OCR。适合文档数字化、发票处理、内容分析。无需任何依赖。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "neodata-financial-search",
+      "path": "skillhub-cn/neodata-financial-search/SKILL.md",
+      "display_name": "Neodata Financial Search",
+      "description": "自然语言金融数据搜索服务，支持查询股票、基金、指数、板块、宏观经济、外汇、大宗商品等全品类数据，涵盖行情、财务报表、资金流向、研报评级、事件公告。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ppt-workflow",
+      "path": "skillhub-cn/ppt-workflow/SKILL.md",
+      "display_name": "PPT Workflow",
+      "description": "基于标准化工作流的 PPT 制作技能。从内容搜索到美化优化的全流程自动化。只需提供主题，自动完成文献搜索、框架设计、内容填充、幻灯片制作、美化优化和输出交付。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "microsoft-excel",
+      "path": "skillhub-cn/microsoft-excel/SKILL.md",
+      "display_name": "Microsoft Excel",
+      "description": "通过托管 OAuth 集成 Microsoft Excel API，实现对 OneDrive 中 Excel 工作簿、工作表、区域、表格和图表的读写。使用此技能...",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "linkedin-api",
+      "path": "skillhub-cn/linkedin-api/SKILL.md",
+      "display_name": "LinkedIn",
+      "description": "<think>\nThe userwants to translate the given skill description into concise Chinese, and return JSON only like {\"description_zh\":\"...\"}. The description is:\n\n\"LinkedIn API integration with managedOAuth. Share posts, manage profile, and access LinkedIn features. Use this skill when users want to share content on Li...\"\n\nWe need to translate to Chinese. The description includes partial \"Li...\" maybe incomplete; but we translate what we have. They want concise Chinese. Possibly:\"通过托管OAuth集成LinkedIn API，分享动态、管理个人资料并访问LinkedIn功能，适用于用户希望分享内容时使用。\" Something like that.\n\nThus the output should be JSON with key description_zh and Chinese translation.\n\nCheck for guidelines: It's permissible. So we produce:\n\n{\n  \"description_zh\": \"通过托管OAuth实现LinkedIn API集成，支持发布动态、管理个人资料及访问LinkedIn功能，适用于用户需要分享内容时使用。\"\n}\n\nWe might incorporate the partial \"Li...\" but it's likelyjust the truncated word \"LinkedIn\" or \"Link\". We'll just include full translation.\n\nThusanswer.\n</think>\n\n```json\n{\n  \"description_zh\": \"通过托管OAuth实现LinkedIn API集成，支持发布动态、管理个人资料并访问LinkedIn功能，适用于用户需要分享内容时使用。\"\n}\n```",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "china-stock-analysis",
+      "path": "skillhub-cn/china-stock-analysis/SKILL.md",
+      "display_name": "China Stock Analysis",
+      "description": "分析A股和港股股价，提供投资建议，用于用户询问中国公司股票分析时。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-predictor",
+      "path": "skillhub-cn/stock-predictor/SKILL.md",
+      "display_name": "股票预测系统",
+      "description": "基于多因子分析，每小时自动预测沪深股票走势，支持参数自优化，目标准确率达90%以上。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "xbrowser",
+      "path": "skillhub-cn/xbrowser/SKILL.md",
+      "display_name": "Xbrowser",
+      "description": "独家浏览器自动化工具——替代内置浏览器自动化和playwright-cli。支持任意浏览器任务（打开页面、点击、填写、截图、抓取、导航等）",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "playwright-cli-openclaw",
+      "path": "skillhub-cn/playwright-cli-openclaw/SKILL.md",
+      "display_name": "Playwright CLI Automation",
+      "description": "官方Microsoft Playwright CLI网页自动化工具，支持所有主流浏览器的无头/有头自动化操作，包括页面导航、元素交互、截图、录制、测试等功能。当用户提到网页自动化、浏览器操作、爬虫、截图、录制用户操作、E2E测试时触发。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "superpowers",
+      "path": "skillhub-cn/superpowers/SKILL.md",
+      "display_name": "Superpowers Dev Workflow",
+      "description": "以规格为首、测试驱动开发、子代理驱动的软件开发工作流。适用于：① 构建任何新功能或应用——触发头脑风暴 → 规划 → 子代理执行……",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "remotion-video-toolkit",
+      "path": "skillhub-cn/remotion-video-toolkit/SKILL.md",
+      "display_name": "Remotion Video Toolkit",
+      "description": "使用 Remotion + React 进行程序化视频创作的完整工具包。涵盖动画、时间控制、渲染（CLI/Node.js/Lambda/Cloud Run）、字幕、3D、图表、文字特效、转场及媒体处理。适用于编写 Remotion 代码、构建视频生成流水线或创建数据驱动的视频模板。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tavily-search",
+      "path": "skillhub-cn/tavily-search/SKILL.md",
+      "display_name": "Tavily Web Search",
+      "description": "AI-optimized web search via Tavily API. Returns concise, relevant results for AI agents.",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "skill-scanner",
+      "path": "skillhub-cn/skill-scanner/SKILL.md",
+      "display_name": "Skill Scanner",
+      "description": "在安装前扫描Clawdbot和MCP技能中的恶意软件、间谍软件、加密货币挖矿程序和恶意代码模式。安全审计工具，可检测数据外泄、系统篡改尝试、后门和混淆技术。",
+      "category": "security-compliance",
+      "tags": [
+        "security-compliance",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-persona-os",
+      "path": "skillhub-cn/ai-persona-os/SKILL.md",
+      "display_name": "AI Persona OS",
+      "description": "适用于 OpenClaw 5.x 代理的完整操作系统，内置记忆工具集成（memory_search、memory_get、DREAMS.md），Discord 频道路由修复……",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "find-skill",
+      "path": "skillhub-cn/find-skill/SKILL.md",
+      "display_name": "Find Skill",
+      "description": "帮助用户在提问如「如何做X」、「找X的技能」、「有能...的技能吗」或表达其他需求时发现并安装智能体技能。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "short-video-script",
+      "path": "skillhub-cn/short-video-script/SKILL.md",
+      "display_name": "短视频脚本创作",
+      "description": "短视频脚本创作技能。用于生成抖音、快手、B站、视频号等平台的短视频脚本、标题、封面建议。适用于自媒体运营、内容创作需求。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-trending",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pptx",
+      "path": "skillhub-cn/pptx/SKILL.md",
+      "display_name": "pptx",
+      "description": "Helps users discover and install agent skills when they ask questions like \"how do I do X\", \"find a skill for X\", \"is there a skill that can...\", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-trending"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "file-organizer",
+      "path": "skillhub-cn/file-organizer/SKILL.md",
+      "display_name": "file-organizer",
+      "description": "整理指定文件夹中的文件，按类型、日期或规则自动分类归档到不同子文件夹中。支持 30+ 种文件扩展名的智能分类（文档、图片、代码、压缩包、视频、音频、电子书、字体、设计文件、配置文件、可执行文件、数据文件等），支持按修改日期归档（年/月/日层级），支持自定义分类映射规则，支持试运行预览模式（只预览不动文件），支持空文件夹清理，支持处理结果统计报告。触发场景：用户说文件夹太乱需要整理、按类型归类文件、批量移动文件到不同文件夹、整理下载目录、归类文档/照片/代码等场景。不要在单个文件操作或不需要分类整理的场景下触发。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencent-agent-storage",
+      "path": "skillhub-cn/tencent-agent-storage/SKILL.md",
+      "display_name": "tencent-agent-storage",
+      "description": "Cloud file storage, upload, backup, and file management tool for Tencent Agent Storage (专属网盘).\nManages the user's personal cloud drive: upload files, list files, download, share links, preview, and backup.\nMUST trigger when the user mentions ANY of the following concepts:\n【云盘/网盘相关 — Cloud Drive Access】\n- \"网盘\", \"云盘\", \"云空间\", \"龙虾盘\", \"龙虾云盘\", \"龙虾网盘\", \"龙虾空间\"\n- \"专属云盘\", \"专属网盘\", \"专属空间\", \"我的云盘\", \"我的网盘\", \"我的龙虾\"\n- \"打开网盘\", \"打开云盘\", \"进入网盘\", \"进入云盘\", \"看看云盘\", \"看看网盘\"\n- \"cloud drive\", \"my drive\", \"open drive\", \"lobster drive\"\n【文件列表/查看 — File Listing & Browsing】\n- \"列出文件\", \"有哪些文件\", \"看看文件\", \"文件列表\", \"我的文件\"\n- \"云盘里有什么\", \"空间里有啥\", \"查看云空间\", \"云空间文件\"\n- \"list files\", \"show files\", \"my files\", \"what files\", \"browse files\"\n【上传/备份 — Upload & Backup】\n- \"上传文件\", \"上传某个文件\", \"确定上传\", \"传到云空间\", \"上传到云空间\"\n- \"备份到云\", \"备份文件\", \"保存到云\", \"存到网盘\", \"传到网盘\", \"存到云盘\", \"传到云盘\"\n- \"文件传一下\", \"帮我传个文件\", \"把这个存一下\"\n- \"upload\", \"backup\", \"save to cloud\", \"back up\"\n【发送/传输给用户 — Send & Deliver Files】\n- \"把文件发给我\", \"整理好发我\", \"发到手机\", \"传到手机\"\n- \"做完了发我一份\", \"弄好了发给我\", \"完成后把文件给我\"\n- \"导出之后发我\", \"生成完发给我看看\", \"跑完了把结果给我\"\n- \"send file\", \"send to phone\", \"deliver file\", \"give me the file\"\n【链接/分享 — Links & Sharing】\n- \"生成下载链接\", \"做成链接\", \"给我下载链接\"\n- \"生成个链接发给同事\", \"发到群里\", \"分享文件\", \"分享给别人\", \"发个链接\"\n- \"download link\", \"share file\", \"share link\", \"generate link\"\n【文件状态查询 — File Status Check】\n- \"这个云文件还在吗\", \"之前上传的文件还能下吗\", \"链接过期了能重新生成吗\"\n- \"is file still there\", \"can I still download\", \"regenerate link\"\n【文件搜索/检索 — File Search】\n- \"搜索文件\", \"搜一下\", \"找文件\", \"找一下\", \"查找\", \"检索文件\"\n- \"搜索云盘\", \"在云盘里搜\", \"帮我找个文件\", \"有没有叫xxx的文件\"\n- \"search files\", \"find file\", \"search cloud\"\n【隐式触发 — Implicit Triggers】\n- When a task produces output files (reports, exports, generated content) that need to be delivered to the user\n- When the user's intent implies needing a file on another device, even without explicitly saying \"upload\"\n- When MyClaw/agent needs to upload files to generate download links\n- Any mention of file transfer, cloud storage, or personal file space in the conversation context",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-price-query",
+      "path": "skillhub-cn/stock-price-query/SKILL.md",
+      "display_name": "股票查询 / Stock Price Query",
+      "description": "股票查询：实时查询股票价格与行情数据，支持A股（沪深）、港股、美股及大盘指数（上证、深证、恒生、纳斯达克、道琼斯、标普500），支持批量查询，零配置开箱即用。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wechat-article-search",
+      "path": "skillhub-cn/wechat-article-search/SKILL.md",
+      "display_name": "Wechat Article Search",
+      "description": "搜索微信公众号文章技能。通过微信搜索获取文章列表，覆盖科技/AI、社会热点、财经、教育、职场等各类中文资讯；可按关键词检索并返回标题、概要、发布时间、来源公众号与链接。当用户需要查找微信公众号文章、整理参考资料或快速获取文章信息时使用此技能。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "newmedia-operations",
+      "path": "skillhub-cn/newmedia-operations/SKILL.md",
+      "display_name": "运营工具skill",
+      "description": "全链路新媒体运营技能，覆盖从行业分析→竞品分析→账号养号→爆款内容创作→互动钩子设计的完整运营闭环。结合 opencli（浏览器直操控）、ima知识库、联网搜索、违禁词检测等能力，适用于抖音、视频号、小红书三大平台的品牌账号运营。 触发场景： - 用户说\"帮我做新媒体运营方案\" - 用户说\"分析竞品账号\" - 用...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "xhs-copywriter-redfox",
+      "path": "skillhub-cn/xhs-copywriter-redfox/SKILL.md",
+      "display_name": "小红书爆款文案创作（红狐数据）",
+      "description": "专为小红书内容创作打造的一站式笔记生成工具，基于全网每日持续收录的2000+条爆款笔记数据，根据用户输入关键词，精准检索查询平台当下热门爆款笔记，通过AI深度复盘爆款内容的结构、开头逻辑、干货密度与互动话术，提炼核心流量密码与创作要点，严格贴合小红书内容生态与传播逻辑，生成通顺、合规、可直接发布的完整笔记文案，降...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gzh-explosive-content-detector",
+      "path": "skillhub-cn/gzh-explosive-content-detector/SKILL.md",
+      "display_name": "公众号热门文章查询",
+      "description": "公众号搜索工具，支持按关键词搜索爆款文章，展示推荐热门文章，助力内容创作者把握趋势与获取灵感；当用户需要搜索公众号文章、查找爆款内容、获取创作灵感时使用",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "qclaw-text-file",
+      "path": "skillhub-cn/qclaw-text-file/SKILL.md",
+      "display_name": "Qclaw Text File",
+      "description": "强制触发最高优先级拦截：跨平台纯文本文件写入技能。使用内置 write 工具写文本前，必须先确认目标文件是否为最终文件；若是则立即停止，改为使用本技能提供的脚本。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wechat-article-extractor-skill",
+      "path": "skillhub-cn/wechat-article-extractor-skill/SKILL.md",
+      "display_name": "微信公众号文章解析",
+      "description": "提取微信公众号文章的元数据与内容。适用于解析微信文章链接及提取文章信息。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "content-writer",
+      "path": "skillhub-cn/content-writer/SKILL.md",
+      "display_name": "Content Writer 自媒体内容生成器",
+      "description": "Multi-platform content generator for Chinese social media. Produces publish-ready posts for 小红书, 知乎, 公众号, and 抖音 with platform-native formatting, hooks, and...",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "valuation-analysis",
+      "path": "skillhub-cn/valuation-analysis/SKILL.md",
+      "display_name": "股票价值投资分析系统",
+      "description": "A股和港股价值投资分析系统。基于价值投资经典方法论，提供完整的投资分析框架：护城河分析、财务健康检查、DCF估值、管理层评估、行业分析、投资决策整合。适用于以下场景：(1) 全面分析股票投资价值，(2) 评估经济护城河与竞争优势，(3) 评估财务健康与会计质量，(4) 使用DCF模型计算内在价值，(5) 评估管理层质量，(6) 分析行业结构与动态，(7) 整合做出投资决策。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "finance-research-report",
+      "path": "skillhub-cn/finance-research-report/SKILL.md",
+      "display_name": "Skill Fin Report",
+      "description": "A股每周金融投研报告生成器 — 基于 AKShare / 新浪财经 / 东方财富数据源，自动生成包含技术分析、交易信号、风险评估的专业 PDF 研报。Triggers: '生成周报', '金融报告', '投研报告', '股票分析', 'A股研报'。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "xhs-hotnotes",
+      "path": "skillhub-cn/xhs-hotnotes/SKILL.md",
+      "display_name": "小红书爆款笔记查询",
+      "description": "小红书热门笔记搜索工具，支持关键词搜索获取热门内容数据，基于数据评分排序推荐热门笔记，助力创作者发现热门趋势、获取创作灵感。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "jimeng-image-gen",
+      "path": "skillhub-cn/jimeng-image-gen/SKILL.md",
+      "display_name": "Jimeng AI Image Generation",
+      "description": "即梦 AI 图片生成技能（火山引擎图片生成 4.0）。当用户想要 AI 生成图片、文生图、图生图、 字体设计、海报制作时使用。支持场景： - \"帮我生成一张图片：...\" - \"用即梦画一张 16:9 的科技感壁纸\" - \"字体设计：新年快乐，红色背景\" - \"把这张图的背景换成星空\" - \"生成一组表情包\" -...",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "unclecheng-reduce-ai-perception-v2",
+      "path": "skillhub-cn/unclecheng-reduce-ai-perception-v2/SKILL.md",
+      "display_name": "文章去AI味工具",
+      "description": "去除文本中的AI写作痕迹，让文字读起来更像人类写作。当用户要求'去AI味'、'降AI味'、'让回复更像人话'、'润色'、'改写得更自然'时使用。检测并修复：AI高频词汇、过度结构化、虚假客观性、机械化连接词、完美主义陷阱、公式化结尾、过度修饰、情感缺失等问题。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pptx-generator",
+      "path": "skillhub-cn/pptx-generator/SKILL.md",
+      "display_name": "Pptx Generator",
+      "description": "专业PPT生成器。Use when user wants to create editable PowerPoint presentations with professional layouts, multiple styles, and beautiful designs. Supports business...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "my-novel-writer",
+      "path": "skillhub-cn/my-novel-writer/SKILL.md",
+      "display_name": "小说创作",
+      "description": "辅助规划和生成长篇小说，支持人物世界设定、大纲管理、分章创作和写作风格锁定。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "bilibili-all-in-one",
+      "path": "skillhub-cn/bilibili-all-in-one/SKILL.md",
+      "display_name": "Bilibili All In One",
+      "description": "全面的B站工具箱，集成热门趋势监控、视频下载、观看/播放、字幕下载和视频发布功能。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-analysis-23",
+      "path": "skillhub-cn/stock-analysis-23/SKILL.md",
+      "display_name": "23策略股票分析技能",
+      "description": "AI股票分析技能，基于23个通达信技术指标(M001-M023)，包含MACD、KDJ、RSI、布林带、筹码分布、资金流向等经典指标。提供完整的买入/卖出决策规则、多维度评分系统、风险控制、多指标共振算法、选股策略和买卖点判断。适用于A股、港股、美股技术分析，支持妖股、强势股、趋势股挖掘。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-stock-analyst",
+      "path": "skillhub-cn/ai-stock-analyst/SKILL.md",
+      "display_name": "AI Stock Analyst",
+      "description": "AI驱动的A股股票分析师。通过AkShare获取实时市场数据、技术指标、估值及新闻，生成评分投资建议。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "explosive-cover-generator-gzh",
+      "path": "skillhub-cn/explosive-cover-generator-gzh/SKILL.md",
+      "display_name": "公众号爆款封面生成",
+      "description": "公众号爆款封面AI设计工具。基于全网每日收录的10w+文章数据，获取同赛道爆款封面视觉元素，通过AI分析总结高转化视觉规律，生成贴合文章内容、符合平台流量审美的封面设计方案。当用户设计公众号封面、生成封面方案、查询爆款封面规律时使用。触发词：公众号封面、封面设计、爆款封面、封面方案、封面生图。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "westock-data",
+      "path": "skillhub-cn/westock-data/SKILL.md",
+      "display_name": "腾讯自选股数据工具",
+      "description": "查询A股、港股、美股个股/指数/ETF的详细数据，包括：K线/分时、财务报表（三大报表多期查询，支持跨市场批量对比）、资金流向、技术指标、筹码分析、股东结构、分红除权、业绩预告、公司简况、ETF基金数据（详情/持仓/净值）；以及大盘指数、行业/板块行情、板块成份股、板块区间涨幅排行、指数成份股、热搜、新股日历、投资日历等市场数据。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wps-office",
+      "path": "skillhub-cn/wps-office/SKILL.md",
+      "display_name": "Wps Skill",
+      "description": "自动化WPS Office任务，包括文档创建、打开、格式转换、批量处理，及管理WPS 365智能表单、文档、表格、流程图...",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "chinese-official-writing",
+      "path": "skillhub-cn/chinese-official-writing/SKILL.md",
+      "display_name": "中文公文写作",
+      "description": "<think>\nThe userwants a translation of the skill description into concise Chinese, returning JSON only.\n\nThe description: \"用于起草、改写和复核中文公文及正式工作材料；当用户要求通知、请示、报告、函、复函、批复、意见、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等中文正式文本，或需要顺稿、压缩、去口语化、降 AI 味、文...\"\n\nWeneed to translate into concise Chinese. However, the description is already Chinese? The skill description appears to be Chinese: \"用于起草、改写和复核中文公文及正式工作材料；当用户要求通知、请示、报告、函、复函、批复、意见、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等中文正式文本，或需要顺稿、压缩、去口语化、降 AI 味、文...\" The description seems tobe already Chinese, but maybe it's too verbose and we need a concise translation? The prompt says \"Translate the following skill description into concise Chinese. Return JSON only like {\"description_zh\":\"...\"}. Description: ...\"\n\nSo presumably we need to provide a concise Chinese translation (the descriptionalready in Chinese). But maybe the description is originally English? Let's parse: \"用于起草、改写和复核中文公文及正式工作材料；当用户要求通知、请示、报告、函、复函、批复、意见、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等中文正式文本，或需要顺稿、压缩、去口语化、降 AI 味、文...\" This is Chinese text.\n\nThe user wants a translation into concise Chinese. Possiblythe original description is in English, but they've provided Chinese? However, they wrote \"Translate the following skill description into concise Chinese\". Ifthe description is already Chinese, we just need to output a concise version in Chinese. So we need to condense the long description intoa concise Chinese version.\n\nThe description is long, we can condense: \"用于起草、改写、复核中文公文和正式工作材料，涵盖通知、请示、报告、函件、批复、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等；亦可进行顺稿、压缩、去口语化、降低AI味等润色。\" That's a concise version.\n\nWe should produce JSON only: {\"description_zh\":\"...\"}.\n\nThus answer: {\"description_zh\":\"用于起草、改写、复核中文公文及正式工作材料，涵盖通知、请示、报告、函、批复、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等文本；亦可进行顺稿、压缩、去口语化、降AI味等润色。\"}.\n\nMake sure it's valid JSON. Also ensure the description isconcise. Maybe we can trim further: \"用于起草、改写、复核中文公文和正式工作材料，涵盖通知、请示、报告、函件、批复、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等；亦可顺稿、压缩、去口语化、降AI味。\" That's concise enough.\n\nThus final JSON.\n</think>\n\n```json\n{\n  \"description_zh\":\"用于起草、改写、复核中文公文及正式工作材料，涵盖通知、请示、报告、函件、批复、决定、决议、议案、公报、命令、公告、通告、公示、通报、纪要、方案、说明、申请、征求意见函、采购公告、可研、调研、总结、工作要点、审查材料、讲话稿、致辞、述职报告等；亦可顺稿、压缩、去口语化、降AI味。\"\n}\n```",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "humanize-zh",
+      "path": "skillhub-cn/humanize-zh/SKILL.md",
+      "display_name": "中文去AI味",
+      "description": "将AI生成的机械化文本转换为自然、有人情味的人类写作风格",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "official-doc-writer",
+      "path": "skillhub-cn/official-doc-writer/SKILL.md",
+      "display_name": "中文公文写作技能",
+      "description": "党政机关公文生成技能，支持通知、报告、请示、函等公文类型，符合GB/T 9704-2012标准。当用户需要生成党政机关公文、创建正式文件、导出Word格式公文时调用。无论用户使用何种表述方式（如'帮我写个报告'、'生成一份通知'、'制作公文'等），只要涉及公文文档生成，都应使用此技能。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mx-stocks-screener",
+      "path": "skillhub-cn/mx-stocks-screener/SKILL.md",
+      "display_name": "Intelligent Stocks Screener",
+      "description": "基于东方财富数据库，支持自然语言输入筛选A股、港股、美股、基金、债券等资产；多维指标筛选覆盖技术面、消息面、基本面与市场情绪；适用于全球资产速筛、跨市场监控、投资组合构建和策略回测；返回结果含数据说明及CSV文件。投资自然语言筛选器。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "investlog-ai",
+      "path": "skillhub-cn/investlog-ai/SKILL.md",
+      "display_name": "InvestLog AI",
+      "description": "美股实时数据研究工具：股价行情、估值分析、财报数据、分析师评级、目标价、内部人交易、国会议员交易、机构持仓、ETF持仓、技术指标、分红拆股、财务健康评分。Real-time US stock research: quotes, valuation, financials, analyst ratings, ins...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "smart-weekly-report",
+      "path": "skillhub-cn/smart-weekly-report/SKILL.md",
+      "display_name": "Report Generator",
+      "description": "根据您的职业角色和本周工作内容，自动提炼关键信息，生成结构化、专业且具有洞察力的周报，包括问题分析与下周计划。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "cnki-advanced-search",
+      "path": "skillhub-cn/cnki-advanced-search/SKILL.md",
+      "display_name": "知网高级检索",
+      "description": "知网（CNKI）高级检索论文自动化工具。当用户提供研究关键词（一组或多组）时，自动在知网 高级检索页面模拟人类检索行为：选择学术期刊类别、勾选CSSCI来源、输入主题关键词（含同义词 和同位词，用 + 连接）、多组关键词用OR关系连接，检索后按被引量排序、切换50条/页、 打开摘要视图，最终通过\"导出与分析\"功能...",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ths-financial-data",
+      "path": "skillhub-cn/ths-financial-data/SKILL.md",
+      "display_name": "股票",
+      "description": "该skill用于获取股票市场数据，包括实时行情、中文名称查询、键盘缩写转换、资金流向和日K线数据。使用thsdk库提供同花顺数据接口支持。支持自动将中文、缩写、短代码转换为thsdk所需的完整ths_code格式。当匹配到多只股票时，会返回候选列表供用户选择。如未安装thsdk，会自动安装。",
+      "category": "developer-tools",
+      "tags": [
+        "developer-tools",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "social-media-operator",
+      "path": "skillhub-cn/social-media-operator/SKILL.md",
+      "display_name": "自媒体运营全能助手",
+      "description": "自媒体运营全能助手 — 小红书、公众号、抖音、私域流量一站式运营指南。当你需要写爆款文案、规划内容日历、分析数据、制定涨粉策略时使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencent-news",
+      "path": "skillhub-cn/tencent-news/SKILL.md",
+      "display_name": "腾讯新闻",
+      "description": "7×24 新闻资讯搜索工具，聚焦中国国内信息和国际热点。支持新闻搜索，包括热点新闻、早报晚报、实时资讯、领域新闻和天气信息查询。当用户需要搜索新闻、新闻热榜、新闻早晚报、订阅新闻推送、获取相关新闻资讯和查询天气信息时使用。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "social-media-optimizer",
+      "path": "skillhub-cn/social-media-optimizer/SKILL.md",
+      "display_name": "Social Media Optimizer",
+      "description": "为内容创作者优化社交媒体内容。针对不同平台（微信、小红书、知乎、B站、抖音）提供定制化的优化建议，提高内容的曝光率和互动率。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ecommerce-copywriter",
+      "path": "skillhub-cn/ecommerce-copywriter/SKILL.md",
+      "display_name": "电商爆款文案生成器",
+      "description": "电商爆款文案生成技能。为淘宝/拼多多/抖音/京东卖家生成高转化率的商品标题、详情页文案、卖点提炼和促销文案。使用场景：(1) 商品标题优化，(2) 详情页文案生成，(3) 卖点提炼，(4) 促销活动文案，(5) 竞品文案分析。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stockclaw-yingyan3",
+      "path": "skillhub-cn/stockclaw-yingyan3/SKILL.md",
+      "display_name": "股票量化助手，可以获取个股择时量化图，个股行情分析，监控股买卖点变化通知。",
+      "description": "为该股票量化项目提供 OpenClaw 接入指南，支持股票量化图生成、行情问答、自然语言 AI 搜股以及 WebSocket 实时监控信号推送。凭证需从同目录 config.json 的 openclawCredentials 中读取 user_id 与 openClaw_api_key，均为必填。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wechat-article-typeset",
+      "path": "skillhub-cn/wechat-article-typeset/SKILL.md",
+      "display_name": "公众号文章排版",
+      "description": "公众号预设主题排版—Markdown一键渲染生成预览链接（不含AI结构化预览）",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "file-manager",
+      "path": "skillhub-cn/file-manager/SKILL.md",
+      "display_name": "File Manager",
+      "description": "OpenClaw自动化文件管理助手，用于批量文件操作、智能分类、重复文件清理、文件重命名、目录同步等任务。当用户需要整理文件、批量重命名、清理重复文件、同步目录或自动化文件工作流时使用此技能。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-board",
+      "path": "skillhub-cn/stock-board/SKILL.md",
+      "display_name": "股票打板筛选",
+      "description": "筛选A股市场中当日及昨日涨停和强势股票，并统计各板块涨停数量，支持创业板和科创板筛选。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pmaster",
+      "path": "skillhub-cn/pmaster/SKILL.md",
+      "display_name": "产品经理综合技能（PM Master）",
+      "description": "需求分析、PRD编写、产品需求文档、详细设计、BRD、MRD、PRD模板、用户故事、用户访谈、需求挖掘、痛点分析、功能设计、KANO模型、Y模型、5W1H、优先级排序、需求池管理、写过需求、写PRD、做需求分析、产品设计、产品策略、SWOT分析、波特五力、PESTLE、安索夫矩阵、商业模式画布、价值主张、产品愿景、OKR制定、Sprint规划、回顾会、发布说明、干系人管理、竞品分析、市场调研、用户研究、机会解决方案树、指标看板、测试场景、头脑风暴、假设验证",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "deepresearch-conversation",
+      "path": "skillhub-cn/deepresearch-conversation/SKILL.md",
+      "display_name": "qianfan-deepresearch",
+      "description": "调用百度千帆 DeepResearch Agent API 自动生成深度研究报告（输出 Markdown 与 HTML 两种格式），一键完成「创建会话 → 发起研究 → 自动跳过澄清 → 自动确认大纲 → 获取报告下载链接」完整流程。支持三种深度模式：lite（轻量版，速度快，默认）/ standard（标准…）",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mx-macro-data",
+      "path": "skillhub-cn/mx-macro-data/SKILL.md",
+      "display_name": "Global Macro Database Assistant",
+      "description": "基于东方财富数据库，支持自然语言查询全球宏观经济数据，覆盖国民经济核算、价格指数、货币金融、财政收支、对外贸易、就业民生、产业运行等领域，适用于宏观经济研究、市场分析与政策解读等场景，返回结果包括数据说明及 CSV 文件。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ppt-outline",
+      "path": "skillhub-cn/ppt-outline/SKILL.md",
+      "display_name": "PPT Outline",
+      "description": "PPT outline and HTML presentation generator. PPT大纲、PPT模板、演示文稿、presentation、PowerPoint、幻灯片、slides、HTML演示文稿、HTML slides、浏览器演示、商业路演、pitch deck、BP商业计划书、business...",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tushare-data",
+      "path": "skillhub-cn/tushare-data/SKILL.md",
+      "display_name": "tushare",
+      "description": "面向中文自然语言的 Tushare 数据研究技能。将“查看股票走势”“分析财报趋势”“查询板块动态”“追踪北向资金”“导出行情数据”等请求，转换为数据获取、清洗、对比、筛选、导出与简要分析流程。支持 A 股、指数、ETF/基金、财务、估值、资金流、公告新闻、板块概念与宏观等场景。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "investoday-finance-data",
+      "path": "skillhub-cn/investoday-finance-data/SKILL.md",
+      "display_name": "InvestToday Finance Data",
+      "description": "获取中国市场金融数据与投研信息，覆盖A股、港股、基金、指数、财务、公告、研报和宏观经济等200+接口。适用于查询股票走势、基金净值、指数行情、财务报表、估值指标、公告研报、机构观点、宏观数据、板块主题、产业链、市场统计，或拉取、导出、对比结构化金融数据。不适用于...",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "processon-diagram-generator",
+      "path": "skillhub-cn/processon-diagram-generator/SKILL.md",
+      "display_name": "ProcessOn流程图表生成专家",
+      "description": "ProcessOn官方研发的一键生成精美可编辑的流程图、泳道图、时序图 、架构图、ER图、组织结构图、时间轴、信息图等可视化图表的快速绘制图表工具，支持mermaid数据直接绘制。\n可一键将自然语言转化为精美且可编辑的 ProcessOn 专业可视化图表。当你需要“自动画图”、“在线制作流程图”、“可视化业务流程”或“生成系统架构”时即可完美触发。本绘图工具全面支持生成多种在线图形：流程图（含业务流程图、泳道图与标准流程）、时序图（系统交互与API调用顺序）、软件架构图（云架构与系统模块划分）、ER图（数据库建模）、组织架构图（团队层级）、时间轴以及信息图。这款 AI 智能图表生成器与流程图制作软件，专为开发者、产品经理和设计师打造，助你高效产出专业级出图。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "meeting-minutes",
+      "path": "skillhub-cn/meeting-minutes/SKILL.md",
+      "display_name": "Meeting Minutes",
+      "description": "Meeting notes and minutes generator. 会议纪要、会议记录、会议总结、meeting minutes、会议模板、行动项、action items、待办事项、to-do list、站会模板、standup template、复盘会、brainstorm会议、决策会议、会议要点、会议...",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mx-finance-search",
+      "path": "skillhub-cn/mx-finance-search/SKILL.md",
+      "display_name": "Financial Search Engine",
+      "description": "基于东方财富数据库，支持自然语言搜索全网最新公告、研报、财经新闻、交易所动态及官方政策等，覆盖全球市场标的，可用于热点捕捉、舆情监控、研报速览、公告精读及投资决策等场景。Natural language search for financial information, covering authoritativ...",
+      "category": "security-compliance",
+      "tags": [
+        "security-compliance",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock-trader",
+      "path": "skillhub-cn/stock-trader/SKILL.md",
+      "display_name": "A股股票交易助手",
+      "description": "A股股票分析助手。支持实时股价查询、批量查询、财经新闻、潜力股分析、行业资金流向、龙头股分析、消息面情感分析、激进型模拟交易。触发场景：(1) 查询股票实时价格 (2) 分析消息面预测走势 (3) 行业资金+龙头分析 (4) 激进型模拟交易 (5) 制定买卖策略。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "seedance2-skill",
+      "path": "skillhub-cn/seedance2-skill/SKILL.md",
+      "display_name": "seedance2-skill",
+      "description": "即梦 Seedance 视频创意工作台。用户发图+文案时自主完成看图分析→文案扩写→运镜匹配→质量验证→API生成。触发词：即梦、Seedance、seedance、视频生成、视频提示词、AI视频、运镜、短剧、广告视频、视频延长、图生视频。",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "writing-polish",
+      "path": "skillhub-cn/writing-polish/SKILL.md",
+      "display_name": "Writing Polish",
+      "description": "中文写作与润色。当用户要求润色文章、改写段落、优化文风、修改措辞、让文章更通顺、写作辅助、改稿、polish writing、或者给出一段中文文本要求改善时，使用此skill。也适用于用户说\"帮我改改这篇文章\"、\"润色一下\"、\"语言不够好\"、\"读起来不顺\"、\"太空洞了\"、\"太说教了\"等场景。即使用户没有明确说\"润...",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "douyin-search-keyword",
+      "path": "skillhub-cn/douyin-search-keyword/SKILL.md",
+      "display_name": "抖音搜索关键词",
+      "description": "抖音公开数据智能分析工具，支持关键词搜索、作品抓取、实时热榜，适用于短视频营销、竞品分析和热点监控，助力爆款策划与流量追踪。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ima",
+      "path": "skillhub-cn/ima/SKILL.md",
+      "display_name": "ima_skills_yc",
+      "description": "IMA 个人笔记服务 API skill，用于管理用户的 IMA 笔记。支持搜索笔记、浏览笔记本、获取笔记内容、新建笔记和追加内容。 当用户提到笔记、备忘录、记事、知识库，或者想要查找、阅读、创建、编辑笔记内容时，使用此 skill。 即使用户没有明确说\"笔记\"，只要意图涉及个人文档的存取（如\"帮我记一下\"、\"我...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "video-image-file-analysis",
+      "path": "skillhub-cn/video-image-file-analysis/SKILL.md",
+      "display_name": "Video Image & File Analysis 多模态视觉视频图片文件分析专家",
+      "description": "图片分析与识别，可分析本地图片、网络图片、视频、文件。适用于 OCR、物体识别、场景理解等。当用户发送图片或要求分析图片时必须使用此技能。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "thesis-tutor",
+      "path": "skillhub-cn/thesis-tutor/SKILL.md",
+      "display_name": "Thesis Tutor — 论文写作全流程AI导师",
+      "description": "论文写作全流程AI导师。七阶段核心流程（选题诊断→开题报告→大纲构建→逐章辅导→自检清单→导出docx→答辩准备）+ 五个专项模块（量化研究/质性研究/文献综述/查重指南/工具链）。支持8大学科方向，92项测试用例100%通过。核心理念：引导而非代写。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "qclaw-cron-skill",
+      "path": "skillhub-cn/qclaw-cron-skill/SKILL.md",
+      "display_name": "Qclaw Cron Skill",
+      "description": "【强制加载】所有定时、提醒、闹钟、周期执行、打卡、签到、cron、schedule、remind 等需求，以及对已有定时任务的修改、编辑、更新、暂停、恢复、删除、取消推送、变更推送目标或渠道等操作，必须读取本 skill，严禁凭记忆猜测参数。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "govwriter-pro",
+      "path": "skillhub-cn/govwriter-pro/SKILL.md",
+      "display_name": "体制内写作·灵析",
+      "description": "政府公文创作与重构专家，支持修改模式（原文素材重构）和创作模式（主题+提纲+过往材料 → 初稿），输出符合党政机关公文格式（GB/T 9704-2012）的 Word 文档",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "unclecheng-reduce-ai-perception",
+      "path": "skillhub-cn/unclecheng-reduce-ai-perception/SKILL.md",
+      "display_name": "一键去AI味工具",
+      "description": "去除文本中的AI写作痕迹，让文字读起来更像人类写作。当用户要求'去AI味'、'降AI味'、'让回复更像人话'、'润色'、'改写得更自然'时使用。检测并修复：AI高频词汇、过度结构化、虚假客观性、机械化连接词、完美主义陷阱、公式化结尾、过度修饰、情感缺失等问题。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "juejin-skills",
+      "path": "skillhub-cn/juejin-skills/SKILL.md",
+      "display_name": "掘金技能集",
+      "description": "掘金社区一站式工具，提供热门文章排行榜、Markdown 文章发布（默认草稿）及文章下载为 Markdown。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "dragon-ppt-maker",
+      "path": "skillhub-cn/dragon-ppt-maker/SKILL.md",
+      "display_name": "PPT制作",
+      "description": "使用python-pptx制作科技风PPT，支持多布局、多图文混排及HTML内容嵌入，轻松生成专业演示文稿。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-text-humanizer-zh",
+      "path": "skillhub-cn/ai-text-humanizer-zh/SKILL.md",
+      "display_name": "AI 文本净化器（中文版）",
+      "description": "中文AI文本检测与改写工具。当用户需要检测AI生成文本、优化AI文本使其更自然、降低AI痕迹、文本去重、论文降重时使用。支持检测16+类AI特征，自动改写冗余表达，清理Markdown格式，移除chatbot痕迹，输出详细报告和AI概率分数。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "g113593",
+      "path": "skillhub-cn/g113593/SKILL.md",
+      "display_name": "番茄小说写作助手（单章2200-2800字）",
+      "description": "|专为番茄小说平台优化的分章节创作助手。支持各种题材（悬疑/言情/奇幻/科幻/历史等），支持长篇创作，每章2200-2800字，结尾设置悬念钩子。强化情绪拉扯、爆点分布、开篇黄金三行、评论区诱导，深度润色去除AI痕迹。 当用户要求：写番茄小说、创作网文、分章节写作、连续剧情、章节悬念、长篇小说时使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "vectcut",
+      "path": "skillhub-cn/vectcut/SKILL.md",
+      "display_name": "VectCut: The first \"To-Agent\" video editing platform. Build automated video workflows with our stable cloud APIs in Coze, Dify, or OpenClaw.",
+      "description": "VectCut 全能剪辑聚合技能。用于剪口播、混剪、电商广告等场景，统一编排流光剪辑能力（字幕、音频、特效、画中画、抠像、AI补镜、AI配音、预设、平台视频抓取、渲染导出），也支持把既有视频制作流程整理为飞书多维表格自动化工作流。当用户提出“做成片/自动剪辑/口播包装/广告剪辑/抓平台视频后再剪”，或想把视频制作...",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ppt-maker",
+      "path": "skillhub-cn/ppt-maker/SKILL.md",
+      "display_name": "AI PPT Generator",
+      "description": "使用Markdown快速生成专业PPT，支持自动图表转换、多主题、多类型列表、引用和代码块，自动识别感谢页。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencentads-creatives",
+      "path": "skillhub-cn/tencentads-creatives/SKILL.md",
+      "display_name": "腾讯广告投放-创意管理",
+      "description": "腾讯营销（原腾讯广告）展示广告管理 - 创意管理。用于管理动态创意(dynamic_creatives)和创意形式(creative_template)，以及素材标签（material_labels）。当用户需要创建或管理广告创意（含组件字段填写/审核详情）、或管理素材标签（素材标签查询、新建、更新和素材绑定）时使用此技能。排除搜索创意(search_dynamic_creatives)。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "a-share-real-time-data",
+      "path": "skillhub-cn/a-share-real-time-data/SKILL.md",
+      "display_name": "A股实时行情数据",
+      "description": "通过mootdx/TDX协议获取中国A股市场数据（包括K线、实时报价、逐笔成交）。适用于处理中国股票数据、mootdx库、TDX行情、分钟级K线、成交历史或实时A股市场数据。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencentads-management",
+      "path": "skillhub-cn/tencentads-management/SKILL.md",
+      "display_name": "腾讯广告投放-广告管理",
+      "description": "腾讯营销（原腾讯广告）管理 — 跨账户查询营销单元（原广告）/创意/素材等多层级数据及报表指标；查看营销单元完整配置（定向、出价、转化、版位等）与智能投放项目详情；获取创意列表及组件详情，单创意时自动解析组件并获取图片/视频预览 URL；管理关键词和否定词的增删改查。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "novel-generator",
+      "path": "skillhub-cn/novel-generator/SKILL.md",
+      "display_name": "novel-generator 是一个中文爽文小说生成技能。用户只需提供一句话方向（如\"写个都市重生爽文\"），AI 代理即可自动完善提示词、规划大纲、逐章创作并输出为独立 Markdown 文件。  核心特性：  智能提示词生成：从一句话方向自动补全世界观、人设、冲突、爽点设计 分章节创作：每章 2000-3000 字，层层递进，章章有爽点 记忆系统：通过 .learnings/ 记录角色、地点、情节、世界观，确保故事前后一致 情节图解：关键战斗、人物关系、势力分布自动生成 Mermaid 图 失败记录：穿帮、矛盾、崩塌等问题自动记录，持续优化 多题材支持：都市、修仙、玄幻、重生、系统流、末世、科幻、游戏 兼容 Claude Code、Cursor、OpenAI Codex、GitHub Copilot 等所有支持 Agent Skills 的工具。",
+      "description": "根据用户指定的小说方向/题材/关键词，自动生成提示词并创作章节连贯的爽文。支持都市、修仙、玄幻、重生、系统流等多题材，自动维护角色、地点、情节连续性，可生成情节图解，记录失败场景以优化创作。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencentads-delivery-standard-create",
+      "path": "skillhub-cn/tencentads-delivery-standard-create/SKILL.md",
+      "display_name": "腾讯广告投放-常规投放",
+      "description": "专用于创建常规(标准)展示营销单元（原广告组）的 SDK 化技能。当用户意图涉及常规投放、标准营销单元创建、CPC/CPM/oCPM/oCPC出价营销单元的**创建**场景时，使用本技能。当用户未明确提到智投关键词或者用户指定了手动版位的，应优先使用本技能。覆盖场景：电商推广、APP下载注册、品牌曝光、销售线索收集、内容变现等常规展示营销单元。本技能通过专用脚本（而非全局 CLI 工具）调用 API，脚本已处理复杂分支、字段过滤和数据转换。**注意：如果当用户明确提到智投、项目、AIM+、艾米等关键词，应使用 tencentads-delivery-smart-create 技能**",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tencentads-delivery-smart-create",
+      "path": "skillhub-cn/tencentads-delivery-smart-create/SKILL.md",
+      "display_name": "腾讯广告投放-智投",
+      "description": "专用于创建智投(AIM+)营销单元（原广告组）的 SDK 化技能。当用户意图涉及智投、AIM+、艾米、智能投放、自动投放、小店智投、smart delivery 的**创建**场景时，使用本技能。覆盖场景：小店艾米、商品艾米、线索艾米、内容艾米、APP艾米(游戏/阅读/AI应用)、小游戏跑量、爆剧跑量、小说智投、全域通、视频号直播智投等。本技能通过专用脚本（而非全局 CLI 工具）调用 API，脚本已处理复杂分支、字段过滤和数据转换。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "academic-paper-assistant",
+      "path": "skillhub-cn/academic-paper-assistant/SKILL.md",
+      "display_name": "Academic Paper Assistant",
+      "description": "专业的学术论文写作助手。当用户要求撰写、修改、润色学术论文，或需要论文结构规划、参考文献整理、学术用语规范化、查重检测等支持时使用。触发短语包括：\"写论文\"、\"润色论文\"、\"修改论文\"、\"论文结构\"、\"参考文献格式\"、\"学术用语\"、\"论文查重\"等。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "douyin-traffic-dashboard",
+      "path": "skillhub-cn/douyin-traffic-dashboard/SKILL.md",
+      "display_name": "抖音流量实时监控大盘（平台流量分配）",
+      "description": "抖音流量分配大盘适合内容创作者、运营、电商、营销在用户想知道抖音流量正在流向哪些方向时使用，帮助基于输入材料生成流量分布、分类层级结构、可用于内容布局的平台方向信号。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gongzhonghao-xieshou",
+      "path": "skillhub-cn/gongzhonghao-xieshou/SKILL.md",
+      "display_name": "公众号写手",
+      "description": "专业公众号内容创作专家，支持多平台文章写作（公众号/小红书/知乎等），提供从构思到成文的全流程服务。 基于传播学原理和新媒体运营实践，专注于创作具有传播力、高质量、自然流畅的内容。 核心功能包括：标题优化与吸引力提升、文章结构设计与逻辑梳理、语言润色与AI痕迹去除、 配图建议与视觉元素规划、传播性内容策划与话题挖...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "flyai",
+      "path": "skillhub-cn/flyai/SKILL.md",
+      "display_name": "FlyAI — Travel, Flight & Hotel Search and Booking",
+      "description": "使用自然语言搜索航班、酒店、景点、音乐会和旅游优惠。FlyAI 连接 Fliggy MCP，提供实时搜索和预订服务。",
+      "category": "data-analysis",
+      "tags": [
+        "data-analysis",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "stock",
+      "path": "skillhub-cn/stock/SKILL.md",
+      "display_name": "股票查询",
+      "description": "查询A股、港股、美股股票的实时行情，包括价格、涨跌幅、开盘价、成交量等详细数据。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mermaid-diagram",
+      "path": "skillhub-cn/mermaid-diagram/SKILL.md",
+      "display_name": "Mermaid Diagram",
+      "description": "生成有效的 Mermaid 图表，如流程图、时序图、思维导图、ER 图、用户旅程等。",
+      "category": "ai-intelligence",
+      "tags": [
+        "ai-intelligence",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "nano-banana-pro-image-gen",
+      "path": "skillhub-cn/nano-banana-pro-image-gen/SKILL.md",
+      "display_name": "Nano Banana Pro Image Gen(基于API易代理站)",
+      "description": "图片生成技能，用于在用户需要生成图片、视觉信息图、创建图像或编辑/修改/调整已有图片时使用。基于中国API易代理站（https://api.apiyi.com/）的NanoBananaPro模型提供图片生成服务，无需访问外网。支持10种宽高比的图片比例（1:1、16:9、9:16、4:3、3:...）",
+      "category": "content-creation",
+      "tags": [
+        "content-creation",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "word-reader",
+      "path": "skillhub-cn/word-reader/SKILL.md",
+      "display_name": "Word Reader",
+      "description": "读取 Word 文档（.docx 和 .doc 格式）并提取文本内容。支持文档解析、表格提取、图片处理等功能。使用当用户需要分析 Word 文档内容、提取文本信息或批量处理文档时。",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "superpowers-systematic-debugging",
+      "path": "skillhub-cn/superpowers-systematic-debugging/SKILL.md",
+      "display_name": "Superpowers Systematic Debugging",
+      "description": "对所有缺陷和故障强制执行四阶段调试流程：根因调查、模式分析、假设检验、基于证据的修复验证。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-recommended"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wjs-uploading-video",
+      "path": "skillhub-cn/wjs-uploading-video/SKILL.md",
+      "display_name": "Wjs Uploading Video",
+      "description": "将一个或多个视频上传至YouTube。当用户想“上传到YouTube”“发YouTube”“批量上传”“upload to YouTube”“post videos to YouTube”或发布到YouTube时使用此技能。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "camino-context",
+      "path": "skillhub-cn/camino-context/SKILL.md",
+      "display_name": "Context",
+      "description": "获取关于地点的综合上下文，包括附近地点、区域描述以及可选的天气信息。在需要了解周围环境时使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "clawtip-client",
+      "path": "skillhub-cn/clawtip-client/SKILL.md",
+      "display_name": "AI离谱甲方",
+      "description": "AI离谱甲方：将正常需求转化为甲方的离谱修改意见和你的内心吐槽。适用于设计/文案/程序行业。付费服务，需先完成支付验证。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "client-proposal-generator",
+      "path": "skillhub-cn/client-proposal-generator/SKILL.md",
+      "display_name": "Client Proposal Generator",
+      "description": "为自由职业者和机构生成精炼、以转化为导向的客户提案，包含执行摘要、项目范围、定价层级和条款。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "doubao-opencli",
+      "path": "skillhub-cn/doubao-opencli/SKILL.md",
+      "display_name": "doubao-opencli",
+      "description": "豆包（Doubao）AI 助手 OpenCLI 技能包。通过 opencli browser 桥接复用 Edge 浏览器登录态， 提供豆包对话、AI 播客生成（文字/网页链接/PDF 三种输入方式，自动裁剪广告）、 PPT 生成、图像生成（文生图）、会议摘要、批量提问、对话备份等功能。 使用场景：(1) 需要通过...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ecommerce-customer-journey-mapper",
+      "path": "skillhub-cn/ecommerce-customer-journey-mapper/SKILL.md",
+      "display_name": "Ecommerce Customer Journey Mapper",
+      "description": "Generates a heuristic markdown report mapping e-commerce customer journeys, identifying friction points, and prioritizing actionable improvements without rea...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "editor-maker",
+      "path": "skillhub-cn/editor-maker/SKILL.md",
+      "display_name": "Editor Maker",
+      "description": "使用此技能可将原始视频片段编辑为MP4格式，支持MP4、MOV、AVI、WebM等格式，单个文件最大500MB，深受内容创作者和营销人员青睐。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "finance-office-automation",
+      "path": "skillhub-cn/finance-office-automation/SKILL.md",
+      "display_name": "Finance Office Automation",
+      "description": "自动化财务办公任务，涵盖文档模板、邮件起草、报告摘要和合规审批，提高效率。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "free-video-generator-china-ai",
+      "path": "skillhub-cn/free-video-generator-china-ai/SKILL.md",
+      "display_name": "Free Video Generator China Ai",
+      "description": "获取可直接发布的AI生成视频，无需调节任何滑块。上传文本或图片（MP4、MOV、JPG、PNG，最大200MB），比如说“ge...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "git-version-control",
+      "path": "skillhub-cn/git-version-control/SKILL.md",
+      "display_name": "git-version-control",
+      "description": "Git-based version control for OpenClaw system configuration changes. Provides two core capabilities: (1) SAVE - Create a checkpoint before sensitive operatio...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gpt5-5free",
+      "path": "skillhub-cn/gpt5-5free/SKILL.md",
+      "display_name": "gpt5.5free",
+      "description": "通过OpenRouter访问高性能开源模型，免费体验类GPT-5.5聊天，需提供API密钥。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "italiano-photo-video",
+      "path": "skillhub-cn/italiano-photo-video/SKILL.md",
+      "display_name": "Italiano Photo Video",
+      "description": "无需学习专业编辑软件，直接描述需求——制作包含音乐和转场的意大利旅行照片幻灯片视频。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "itfe-code-review",
+      "path": "skillhub-cn/itfe-code-review/SKILL.md",
+      "display_name": "ITFE Code Review",
+      "description": "以高级工程师视角对当前Git提交进行专家级代码审查，检测SOLID违规、安全风险并提出可操作的改进建议。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "linkfox-temu-price-us",
+      "path": "skillhub-cn/linkfox-temu-price-us/SKILL.md",
+      "display_name": "Temu Price US",
+      "description": "Temu 美国站商品价格管理 API，经 LinkFox 网关转发 Partner US 价格接口：定价单列表查询(bg.local.goods.priceorder.query)、批量改 SKU 基础价(bg.local.goods.priceorder.change.sku.price)、推荐供货价/基础价估...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "maverick-exa",
+      "path": "skillhub-cn/maverick-exa/SKILL.md",
+      "display_name": "Maverick Exa",
+      "description": "使用固定的工具集（`web_search_exa`、`web_search_advanced_exa`、`people_search` …）实现网页和人物搜索的 Exa MCP 工作流，并搭建托管 MCP 服务器。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "music-video-clip",
+      "path": "skillhub-cn/music-video-clip/SKILL.md",
+      "display_name": "Music Video Clip",
+      "description": "将音频和视频同步生成音乐视频，支持MP3、MP4、WAV、MOV（最高500MB），适用于音乐人、制作人和内容创作者。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "occ-artifact-gallery",
+      "path": "skillhub-cn/occ-artifact-gallery/SKILL.md",
+      "display_name": "OCC Artifact Gallery",
+      "description": "用于在代理生成本地文件或文件夹时，返回移动端可访问的 OCC/Tailscale 查看链接，而非文件系统路径。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "patent-disclosure",
+      "path": "skillhub-cn/patent-disclosure/SKILL.md",
+      "display_name": "patent-disclosure",
+      "description": "发明披露模板、检查清单和 Markdown 转 Word 导出（无需第三方 API token）",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "proof-card-forge",
+      "path": "skillhub-cn/proof-card-forge/SKILL.md",
+      "display_name": "Proof Card Forge",
+      "description": "从技能审计或发布元数据生成可分享的 SVG 与Markdown 证明卡片，用于 GitHub README、落地页和 ClawHub 列表。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "research-brief",
+      "path": "skillhub-cn/research-brief/SKILL.md",
+      "display_name": "Research Brief",
+      "description": "渐进式研究协议（适用于智能体）：立即写入占位文件，增量追加发现内容，切勿最后保存写入。防止数据丢失...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "root-cause-hunter",
+      "path": "skillhub-cn/root-cause-hunter/SKILL.md",
+      "display_name": "Root Cause Hunter",
+      "description": "根因猎人技能。遇到问题时严格走五阶段根因调查流程，禁止随机修复。触发词：诊断、帮我调试、帮我分析原因、排查问题。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "runapi-cli",
+      "path": "skillhub-cn/runapi-cli/SKILL.md",
+      "display_name": "runapi-cli",
+      "description": "安装并使用 RunAPI CLI 作为 RunAPI 模型的通用执行层，用于在用户请求运行任何 RunAPI 模型、检查认证信息时使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "scene-video-pipeline",
+      "path": "skillhub-cn/scene-video-pipeline/SKILL.md",
+      "display_name": "Scene Video Pipeline",
+      "description": "Produce modular scene-based videos from slide deck source and per-scene narration audio (text manifest + Kokoro). Includes Playwright slide rendering, per-sc...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "serverless-template-generator",
+      "path": "skillhub-cn/serverless-template-generator/SKILL.md",
+      "display_name": "Serverless Template Generator",
+      "description": "生成 Serverless 脚手架，支持 AWS Lambda、Vercel、Netlify、Cloudflare Workers，一键部署至云端。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "setup-x-growth-skills",
+      "path": "skillhub-cn/setup-x-growth-skills/SKILL.md",
+      "display_name": "setup-x-growth-skills",
+      "description": "为账户配置这些 X 增长技能。适用于首次安装此仓库、开启新的 X 账户计划或定义细分领域、支柱、发布节奏等。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "smseow-peekaboo",
+      "path": "skillhub-cn/smseow-peekaboo/SKILL.md",
+      "display_name": "Smseow Peekaboo",
+      "description": "（Simon专属）桌面控制技能 - AI操控电脑。macOS使用Peekaboo，Linux使用MCP工具。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "swppp-drafter",
+      "path": "skillhub-cn/swppp-drafter/SKILL.md",
+      "display_name": "Swppp Drafter",
+      "description": "当土木工程师、QSD、QSP或侵蚀控制设计师需要将建筑项目的现场数据、BMP选择及接收...（内容截断）",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "text-to-video-google-flow",
+      "path": "skillhub-cn/text-to-video-google-flow/SKILL.md",
+      "display_name": "Text To Video Google Flow",
+      "description": "Get AI-generated video ready to post, without touching a single slider. Upload your text prompts (TXT, DOCX, PDF, plain text, up to 500MB), say something lik...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "unisound-medication-record-management",
+      "path": "skillhub-cn/unisound-medication-record-management/SKILL.md",
+      "display_name": "unisound-medication-record-management",
+      "description": "病人端通用健康用药记录管理，参照 MedTimer 的 medication list/dose history，构建个人长期用药管理能力。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "url-citation-search",
+      "path": "skillhub-cn/url-citation-search/SKILL.md",
+      "display_name": "Url Citation Search",
+      "description": "查找引用指定URL的论文和预印本，尤其是博客、文档页、项目页或其他标准引文索引常遗漏的网页内容。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "video-explanation",
+      "path": "skillhub-cn/video-explanation/SKILL.md",
+      "display_name": "Video Explanation",
+      "description": "获取可直接发布的解说视频内容，无需手动调节滑块。上传现有视频文件（MP4、MOV、AVI、WebM，最高500MB），说出...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "invoice-extractor-from-mail",
+      "path": "skillhub-cn/invoice-extractor-from-mail/SKILL.md",
+      "display_name": "invoice-extractor-from-mail",
+      "description": "专为跨境贸易企业的AP财务团队设计。自动从邮件（IMAP/OAuth）或本地文件获取发票附件，批量提取...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "a2a-agent-discovery",
+      "path": "skillhub-cn/a2a-agent-discovery/SKILL.md",
+      "display_name": "A2A Agent Board: Publish · Find · Use with itinai.com",
+      "description": "<think>\nThe userasks: \"Translate the following skill description into concise Chinese. Return JSON only like {\"description_zh\":\"...\"}. Description: Find ITINAI agents, post service agents, and make reviewed A2A service requests.\"\n\nWe need to translate thedescription into concise Chinese. Return JSON only like {\"description_zh\":\"...\"}.\n\nThus we need to output something like:\n\n{\n  \"description_zh\": \"查找ITINAI代理、发布服务代理并进行审查的A2A服务请求。\"\n}\n\nBut we need to ensure the Chinese is concise. The English description: \"Find ITINAI agents, post service agents, and make reviewed A2A service requests.\" Something like \"查找ITINAI代理、发布服务代理并进行审查的A2A服务请求。\" That's concise. Could be \"查找ITINAI代理、发布服务代理并进行审查的A2A服务请求。\" Or \"查找ITINAI代理、发布服务代理并发起经审查的A2A服务请求。\" The latter might be more precise.\n\nBut the user wants \"concise Chinese\". Let's propose something like \"查找ITINAI代理、发布服务代理并发起经审查的A2A服务请求。\"\n\nThat's fairly concise. Return JSON only. So we output:\n\n{\n  \"description_zh\": \"查找ITINAI代理、发布服务代理并发起经审查的A2A服务请求。\"\n}\n\nWe need to ensure JSON is properly formatted. No extra text. The user says \"Return JSON only like {\"description_zh\":\"...\"}\". So just output JSON.\n\nThus final.\n</think>\n\n{\"description_zh\":\"查找ITINAI代理、发布服务代理并发起经审查的A2A服务请求。\"}",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mp3-list-to-video",
+      "path": "skillhub-cn/mp3-list-to-video/SKILL.md",
+      "display_name": "mp3-list-to-video",
+      "description": "将指定文件夹下的所有 MP3 文件拼接成一个 MP4 视频文件，可生成黑色背景视频，也可基于已合并 MP4 生成带歌曲清单、当前歌曲高亮和右侧旋转黑胶唱片动效的菜单背景视频。菜单高亮默认使用智能分段渲染：并行生成关键帧、每首歌开头高帧密度、其余静态区间单帧拉长，避免整段 30fps 慢速重渲染；黑胶唱片作为独立动...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wechat-bot-reply-skill",
+      "path": "skillhub-cn/wechat-bot-reply-skill/SKILL.md",
+      "display_name": "wechat-auto-reply-skill-v5",
+      "description": "监控微信特定联系人新消息并自动回复。支持 macOS（Peekaboo CLI）和 Windows（PeekabooWin）。macOS 需安装 Peekaboo CLI。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "agent-code-no7-tax-butler",
+      "path": "skillhub-cn/agent-code-no7-tax-butler/SKILL.md",
+      "display_name": "Agent Code No.7 Tax Butler",
+      "description": "提供税务筹划、匹配优惠、评估风险、辅助申报、确保合规并量化节税。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-video-editor-enhancer-free",
+      "path": "skillhub-cn/ai-video-editor-enhancer-free/SKILL.md",
+      "display_name": "Ai Video Editor Enhancer Free",
+      "description": "enhance raw video footage into enhanced edited videos with this skill. Works with MP4, MOV, AVI, WebM files up to 500MB. content creators use it for improvin...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "blender-bpy-enhanced",
+      "path": "skillhub-cn/blender-bpy-enhanced/SKILL.md",
+      "display_name": "Blender Bpy Enhanced",
+      "description": "通过 Python bpy API 实现全面的 Blender 自动化，涵盖程序化建模、材质节点、灯光、渲染和资产生成，包含已验证的齿轮/...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "bohrium-knowledge-base",
+      "path": "skillhub-cn/bohrium-knowledge-base/SKILL.md",
+      "display_name": "Bohrium Knowledge Base Management",
+      "description": "Manage Bohrium knowledge bases via open.bohrium.com API. Use when: user asks about creating/listing/searching knowledge bases, managing literature/papers, up...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "bohrium-project",
+      "path": "skillhub-cn/bohrium-project/SKILL.md",
+      "display_name": "Bohrium Project Management",
+      "description": "通过 bohr CLI 或 open.bohrium.com API 管理 Bohrium 项目。使用时机：用户询问在 Bohrium 上创建/列出/删除项目、管理项目成员...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "brand-voice-style-guide-generator",
+      "path": "skillhub-cn/brand-voice-style-guide-generator/SKILL.md",
+      "display_name": "Brand Voice Style Guide Generator",
+      "description": "生成完整的品牌声音与风格指南，包含声音审计、信息架构、内容规则及团队培训材料，保证品牌一致性。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "code-health-scanner",
+      "path": "skillhub-cn/code-health-scanner/SKILL.md",
+      "display_name": "Code Health Scanner",
+      "description": "一键 Spring Boot 代码健康诊断，检测安全漏洞、性能反模式、代码质量问题及Java 依赖风险。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "dealpilot",
+      "path": "skillhub-cn/dealpilot/SKILL.md",
+      "display_name": "Dealpilot",
+      "description": "跨平台购物决策助手（又称全网购物决策官），比较淘宝、拼多多、京东、一号店、唯品会等平台的价格、质量与风险，为指定商品推荐最佳购买平台。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "douyin-browser-publish",
+      "path": "skillhub-cn/douyin-browser-publish/SKILL.md",
+      "display_name": "Douyin Browser Publish",
+      "description": "抖音视频浏览器自动化发布：输入视频路径、标题和描述，自动完成上传发布。当用户说“发抖音”或“发布到抖音”时触发。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ecommerce-creator-brief",
+      "path": "skillhub-cn/ecommerce-creator-brief/SKILL.md",
+      "display_name": "带货达人Brief技能包",
+      "description": "撰写带货内容达人合作Brief（任务简报）。当用户提到“写达人brief”、“带货达人简报”、“KOL合作brief”、“达人任务书”、“内容合作需求”、“creator brief”、“influencer brief”、“达人广场需求”时触发。本技能帮助快速生成结构完整、信息清晰、可直接发给达人的合作简报。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "estate-plan-design-memo",
+      "path": "skillhub-cn/estate-plan-design-memo/SKILL.md",
+      "display_name": "Estate Plan Design Memo",
+      "description": "此技能用于遗产规划律师、信托官员或律师助理在将客户信息转成遗产规划设计方案草稿备忘录时，在正式起草前使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "evez-oracle-bridge",
+      "path": "skillhub-cn/evez-oracle-bridge/SKILL.md",
+      "display_name": "EVEZ Oracle Bridge",
+      "description": "将 LLM 调用通过您自己的 Vultr Oracle 实例路由，4 个 EVEZ 模型映射到 Vultr 端点，零成本，兼容 OpenAI，包含 EVEZ‑OS 电路集成。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "gptsovits-tts",
+      "path": "skillhub-cn/gptsovits-tts/SKILL.md",
+      "display_name": "GPT-SoVITS TTS",
+      "description": "使用GPT-SoVITS v2 Pro+的高质量中文TTS，支持文本转自然语音和声音克隆。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "immigration-petition-cover-letter",
+      "path": "skillhub-cn/immigration-petition-cover-letter/SKILL.md",
+      "display_name": "Immigration Petition Cover Letter",
+      "description": "Use this skill when a licensed immigration attorney, BIA-accredited representative, or supervising paralegal needs to draft a USCIS petition or application c...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "job-hazard-analysis",
+      "path": "skillhub-cn/job-hazard-analysis/SKILL.md",
+      "display_name": "Job Hazard Analysis",
+      "description": "当EHS经理、安全专业人员、主管或合格人员需要起草符合OSHA的作业危险分析（JHA/JSA）时使用此技能。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "macos-reminders",
+      "path": "skillhub-cn/macos-reminders/SKILL.md",
+      "display_name": "macOS Reminders",
+      "description": "通过 AppleScript 创建、列出和管理 macOS 提醒。适用于用户请求创建提醒、添加待办、生成任务或设置提醒等场景。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "miemie-le-skills",
+      "path": "skillhub-cn/miemie-le-skills/SKILL.md",
+      "display_name": "openclaw-skill-generator",
+      "description": "交互式向导，用于创建包含必需的 SKILL.md 文件和可选辅助脚本的全新 OpenClaw 技能文件夹。仅在...时触发此技能。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mobile-commerce-ux-auditor",
+      "path": "skillhub-cn/mobile-commerce-ux-auditor/SKILL.md",
+      "display_name": "Mobile Commerce Ux Auditor",
+      "description": "审计移动购物流程，识别转化摩擦点，优先处理用户体验问题，并为产品团队、CRO专家和电商...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "owncloud-sync",
+      "path": "skillhub-cn/owncloud-sync/SKILL.md",
+      "display_name": "Owncloud Sync",
+      "description": "验证新 Google Drive 文件与 OwnCloud，邮件报告缺失或过时文件，供手动同步决策。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pencil-to-code-2",
+      "path": "skillhub-cn/pencil-to-code-2/SKILL.md",
+      "display_name": "Pencil To Code",
+      "description": "将 Pencil `.pen` 设计文件及命名的 Pencil 节点 ID 转换为生产级前端代码。用于实现、迁移、复现或优化 Pencil 相关功能。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "problem-to-action",
+      "path": "skillhub-cn/problem-to-action/SKILL.md",
+      "display_name": "Problem-to-Action",
+      "description": "8步问题→方案分析器。把任何问题变成清晰可执行的行动计划。触发：问题、stuck、卡住、困境、冲突、矛盾、困难、麻烦、挑战、纠结、两难、不知道怎么办。引导用户走完8步交互式流程，每步必填校验，最终生成行动计划。完成后自动推荐打卡执行。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "quanyu-tech-director",
+      "path": "skillhub-cn/quanyu-tech-director/SKILL.md",
+      "display_name": "Quanyu Tech Director",
+      "description": "权舆科技软件研发总监技能：项目经理（小缺）在任务派发、进度跟踪、超时处理和结果汇报时激活。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "shopguard",
+      "path": "skillhub-cn/shopguard/SKILL.md",
+      "display_name": "ShopGuard",
+      "description": "Cross-platform shopping risk and after-sales decision skill for mainland China that evaluates merchant credibility, hidden post-purchase friction, refund dif...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "unisound-med-rx-safety-ethics",
+      "path": "skillhub-cn/unisound-med-rx-safety-ethics/SKILL.md",
+      "display_name": "unisound-med-rx-safety-ethics",
+      "description": "处方审核（问答/单选/多选题型）、医疗安全规范与医学伦理法规问答；仅含 `scripts/run.py`，可独立拷贝部署。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "unisound-medication-reminder",
+      "path": "skillhub-cn/unisound-medication-reminder/SKILL.md",
+      "display_name": "unisound-medication-reminder",
+      "description": "提供病人慢病管理用药提醒，参考 MedTimer 用药提醒功能，帮助提升慢病依从性。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "video-editing-with-ai-features",
+      "path": "skillhub-cn/video-editing-with-ai-features/SKILL.md",
+      "display_name": "Video Editing With Ai Features",
+      "description": "使用此技能可将原始视频素材自动剪辑为AI编辑视频。支持MP4、MOV、AVI、WebM格式，单文件最大500MB。内容创作者和营销人员用于实现自动化处理。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "warehouse-flow-optimizer",
+      "path": "skillhub-cn/warehouse-flow-optimizer/SKILL.md",
+      "display_name": "Warehouse Flow Optimizer",
+      "description": "Turn warehouse process notes, bottleneck observations, labor constraints, slotting issues, and service targets into a practical flow optimization brief with...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "whatsapp-local-endpoints-router",
+      "path": "skillhub-cn/whatsapp-local-endpoints-router/SKILL.md",
+      "display_name": "WhatsApp Local Endpoints Router",
+      "description": "将 WhatsApp 消息路由到本地 HTTP 端点并直接返回 JSON。用于消息为纯文本或随机内容。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "yq-knowledge-digest",
+      "path": "skillhub-cn/yq-knowledge-digest/SKILL.md",
+      "display_name": "Yq Knowledge Digest",
+      "description": "将学习资料（PDF/教材/话题）转换为个性化、多模态的学习材料：手写笔记PDF、极简交互测验HTML、幻灯片PDF+PPTX、思维导图、音频课程。触发词：知识消化、学习材料、笔记生成、测验、幻灯片、思维导图、音频课程、课件、教材转换",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "jd-triage",
+      "path": "skillhub-cn/jd-triage/SKILL.md",
+      "display_name": "JD - Triage",
+      "description": "将职位描述（JD）与用户存储的职业标准进行对比，输出判定结果并在多维度给出5星评分。适用于（1）用户粘贴...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "02-content-channel-research",
+      "path": "skillhub-cn/02-content-channel-research/SKILL.md",
+      "display_name": "02 Content Channel Research",
+      "description": "在脚本编写或录制前，通过结构化的GO/NO‑GO框架验证内容选题，运行受众细分、采纳研究和饱和度等检查。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "12321321123",
+      "path": "skillhub-cn/12321321123/SKILL.md",
+      "display_name": "123",
+      "description": "从提示/块 XML 生成 PPT 演示文稿，并保持企业品牌风格。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ah-shorts",
+      "path": "skillhub-cn/ah-shorts/SKILL.md",
+      "display_name": "Ah Shorts",
+      "description": "无需手动调节，一键生成可发布的短视频。上传长视频（MP4、MOV、AVI、WebM，最大500MB），比如“cu...”",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-readme-generator",
+      "path": "skillhub-cn/ai-readme-generator/SKILL.md",
+      "display_name": "AI README Generator",
+      "description": "为OpenClaw/Cursor风格的编码工作流生成AI可读的项目文档。当用户要求创建、初始化、更新或刷新AGENT时使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "alimerce",
+      "path": "skillhub-cn/alimerce/SKILL.md",
+      "display_name": "AliMerce 商城助手",
+      "description": "AliMerce 商城 AI 助手技能：客服、销售、商品管理、订单处理",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "aliyun-sls-query",
+      "path": "skillhub-cn/aliyun-sls-query/SKILL.md",
+      "display_name": "阿里云SLS日志查询",
+      "description": "调用阿里云日志服务CLI查询指定Project和Logstore的日志，支持时间范围过滤和SQL分析，返回结构化数据。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "axioma-safe-cron-creator",
+      "path": "skillhub-cn/axioma-safe-cron-creator/SKILL.md",
+      "display_name": "Axioma Safe Cron Creator",
+      "description": "Axioma Safe Cron Creator — Creates isolated system crons without OpenClaw session collision. Use when: (1) Creating a cron that bypasses EmbeddedAttemptSessi...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "b2b-saas-campaign-brief",
+      "path": "skillhub-cn/b2b-saas-campaign-brief/SKILL.md",
+      "display_name": "B2B SaaS Campaign Brief",
+      "description": "B2B SaaS营销活动策划简报生成器。适用于用户计划、记录或启动营销活动。触发词例如...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "browser-free-hd",
+      "path": "skillhub-cn/browser-free-hd/SKILL.md",
+      "display_name": "Browser Free Hd",
+      "description": "无需任何调节，即可获得可发布的HD MP4文件。上传视频文件（MP4、MOV、AVI、WebM，最大500MB），例如输入“convert and...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "brw-marketing-principles",
+      "path": "skillhub-cn/brw-marketing-principles/SKILL.md",
+      "display_name": "Marketing Principles",
+      "description": "将永恒的市场营销与商业原则应用于任何问题。适用于需要战略思维、想要评估营销决策、需要框架的情况。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "color-grading-tool",
+      "path": "skillhub-cn/color-grading-tool/SKILL.md",
+      "display_name": "Color Grading Tool",
+      "description": "让视频直接具备专业调色，随时发布，无需手动调节任何滑块。上传原始视频素材（MP4、MOV、AVI、ProRes，最高500MB），说点什么...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "concussion-return-to-play-protocol",
+      "path": "skillhub-cn/concussion-return-to-play-protocol/SKILL.md",
+      "display_name": "Concussion Return To Play Protocol",
+      "description": "使用此技能，当团队医生、运动训练师或体育临床医生需要起草针对脑震荡的逐步恢复运动和恢复学习计划时。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "conversational-ai-assistant",
+      "path": "skillhub-cn/conversational-ai-assistant/SKILL.md",
+      "display_name": "Conversational Ai Assistant",
+      "description": "用于查询希腊会计数据的自然语言接口。用英语提问，系统所有技能均可提供答案。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "crypto-wave-scanner",
+      "path": "skillhub-cn/crypto-wave-scanner/SKILL.md",
+      "display_name": "Crypto Wave Scanner",
+      "description": "可视化加密期货波浪扫描器，实时检测10个币种的最佳入场和出场时机，基于EMA9/21/50叠加、RSI等指标对每个币种评分0-6...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "evolver-1-32-2",
+      "path": "skillhub-cn/evolver-1-32-2/SKILL.md",
+      "display_name": "Evolver 1.32.2",
+      "description": "AI智能体自我进化引擎，通过分析运行时历史识别改进点，实现协议约束的进化。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "glucodna-ad-generator",
+      "path": "skillhub-cn/glucodna-ad-generator/SKILL.md",
+      "display_name": "GlucoDNA 广告图生成器",
+      "description": "使用 Gemini API 与产品信息生成 1024x1024 的中文 GlucoDNA 肾保护广告图片",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "google-trending",
+      "path": "skillhub-cn/google-trending/SKILL.md",
+      "display_name": "google trending",
+      "description": "获取并展示过去24小时内任意国家的Google热门搜索。当用户询问Google热门话题或热门搜索时使用。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "hazop-node-analysis-worksheet",
+      "path": "skillhub-cn/hazop-node-analysis-worksheet/SKILL.md",
+      "display_name": "Hazop Node Analysis Worksheet",
+      "description": "当过程安全团队需要起草、运行或审查 IEC 61882/CCPS HAZOP 节点工作表时使用此技能，涵盖节点定义、设计意图、指南等。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "knowledge-base-sop",
+      "path": "skillhub-cn/knowledge-base-sop/SKILL.md",
+      "display_name": "Knowledge Base SOP",
+      "description": "个人Wiki知识库管理SOP：摄入、归档、检查与维护。适用于原始文档、书签等处理。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "mediakit-voiceover",
+      "path": "skillhub-cn/mediakit-voiceover/SKILL.md",
+      "display_name": "Mediakit Voiceover",
+      "description": "使用此技能将媒体套件素材添加到配音媒体套件中。支持 MP4、MOV、PDF、PNG 文件，最大 500 MB。营销人员用于添加 AI 语音配音。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "moltlify-skill",
+      "path": "skillhub-cn/moltlify-skill/SKILL.md",
+      "display_name": "moltlify",
+      "description": "面向AI代理的类Twitter社交网络，支持发帖和关注。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ops-coding-standards",
+      "path": "skillhub-cn/ops-coding-standards/SKILL.md",
+      "display_name": "Ops Coding Standards",
+      "description": "运维后台（Python/Django）编码规范与最佳实践，适用于 ops_api等运维系统开发。编写运维代码、代码审查、编码规范检查、Python Django 开发规范时自动激活。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "order-mcp",
+      "path": "skillhub-cn/order-mcp/SKILL.md",
+      "display_name": "废弃mcp",
+      "description": "测试技能",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ph-mill",
+      "path": "skillhub-cn/ph-mill/SKILL.md",
+      "display_name": "Mill",
+      "description": "与约翰·斯图亚特·穆勒（1806–1873）对话，英国功利主义、自由与女权的哲学家。简洁、审慎、自由主义。使用 /mill 唤起。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "pozzzi-charity-report",
+      "path": "skillhub-cn/pozzzi-charity-report/SKILL.md",
+      "display_name": "噗滋慈善 - 报告助手 / pozzzi-charity report-assistant",
+      "description": "噗滋慈善 - 为中小型NGO自动生成年度工作报告、项目结项报告及财务决算报告草稿，确保法定章节完整，输出符合民政部和资助方格式要求。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "product-video-script-skill-no-subtitles",
+      "path": "skillhub-cn/product-video-script-skill-no-subtitles/SKILL.md",
+      "display_name": "SP10 SKILL",
+      "description": "根据一张或多张商品图片及可选卖点，生成电商产品视频脚本，并附带禁止字幕、配文等视频交接说明。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "rollinggo-flight-search-skill",
+      "path": "skillhub-cn/rollinggo-flight-search-skill/SKILL.md",
+      "display_name": "全能订机票国内版-仅支持查询",
+      "description": "使用 RollingGo Flight CLI 查询机场三字码和机票。用于搜索机票、查询机场代码、按出发地/目的地/日期/舱位/往返类型筛选航班，或进行结构化飞行查询。触发词包括：查机票、搜索机票、查航班、查机场代码、北京到上海机票、往返商务舱等。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "senseaudio-floating-audio-assistant-v2",
+      "path": "skillhub-cn/senseaudio-floating-audio-assistant-v2/SKILL.md",
+      "display_name": "senseaudio-floating-audio-assistant-v2",
+      "description": "在 AudioClaw 中打开、停止、配置、调试或打包 SenseAudio 浮动音频助手，包括系统音频字幕等功能。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tutur-aceh",
+      "path": "skillhub-cn/tutur-aceh/SKILL.md",
+      "display_name": "Tutur Aceh",
+      "description": "生成、改编或审阅亚齐语文本，采用离线优先的区域语言工作流，适用于用户请求亚齐语或亚齐地区词典等场景。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "tutur-bagongan-jogja",
+      "path": "skillhub-cn/tutur-bagongan-jogja/SKILL.md",
+      "display_name": "Tutur Bagongan Jogja",
+      "description": "Produce, adapt, or review text in a source-aware Yogyakarta/Jogja court-inspired Basa Bagongan register. Use when the user asks for bahasa Keraton Jogja, Bas...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "wechatpay-skill",
+      "path": "skillhub-cn/wechatpay-skill/SKILL.md",
+      "display_name": "WeChat Pay Integration",
+      "description": "微信支付接入助手Python/Node.js专精版。基于官方Skills改造，补充Python/Node.js代码示例，专为小程序开发者优化。支持JSAPI、小程序、Native、APP、付款码支付的选型指导和代码示例（Python/Node.js/Java/Go）。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "ai-gpt-image-2",
+      "path": "skillhub-cn/ai-gpt-image-2/SKILL.md",
+      "display_name": "image2生图助手",
+      "description": "视觉质量诊断助手适用于市场营销、运营、内容媒体、电商，在用户询问“这张图够发布吗”等问题时，快速拆解目标、判断重点、生成可执行结果，提供摘要、诊断结论、行动建议和可复用交付物。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "aicoo-discover",
+      "path": "skillhub-cn/aicoo-discover/SKILL.md",
+      "display_name": "Aicoo Discover",
+      "description": "当用户想在Aicoo广场发现有趣的人时使用此技能。支持两种模式：自动模式（根据上下文推断用户关注点并主动寻找匹配用户）和手动模式（用户自行筛选）。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "aicoo-daily-brief",
+      "path": "skillhub-cn/aicoo-daily-brief/SKILL.md",
+      "display_name": "Aicoo Daily Brief",
+      "description": "Use this skill when the user asks for a daily briefing, morning summary, executive brief, top priorities, COO strategies, or Eisenhower matrix. Triggers on:...",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
+      ]
+    },
+    {
+      "source": "skillhub-cn",
+      "slug": "aigc-higher-ed-news",
+      "path": "skillhub-cn/aigc-higher-ed-news/SKILL.md",
+      "display_name": "高校AIGC日报",
+      "description": "高校AIGC资讯聚合：行业动态、AI微专业、招标需求（语音室/同声传译/云桌面）与AI政策。每日自动抓取并生成结构化简报。",
+      "category": "general",
+      "tags": [
+        "general",
+        "skillhub-cn",
+        "skillhub-newest"
       ]
     }
   ]
