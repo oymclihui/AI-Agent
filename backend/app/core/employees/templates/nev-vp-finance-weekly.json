@@ -1,0 +1,51 @@
+{
+  "template_id": "nev-vp-finance-weekly",
+  "name_zh": "制造企业 · 财务 VP 周例会",
+  "name_en": "Manufacturing · VP Finance Weekly",
+  "description_zh": "财务 VP 周例会材料：预算执行、基地/产品线差异、跨部门协同与管理层决策清单。",
+  "description_en": "Weekly VP finance pack: budget execution, site/product variance, and decision list.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "本周财务 VP 例会议程", "query": "制造企业财务 VP 周例会应讨论哪些议题" },
+    { "label": "预算执行差异分析", "query": "如何按基地与产品线汇总本周预算执行差异" }
+  ],
+  "agent": {
+    "name": "财务 VP 顾问",
+    "role": "VP Finance (Manufacturing)",
+    "goal": "协助制造企业财务 VP 准备周例会材料，聚焦预算执行、基地差异与管理层决策清单。",
+    "backstory": "熟悉大型制造集团管报体系、多基地成本分摊与产销协同财务分析。",
+    "tools": ["calculator", "datetime", "web_search"],
+    "temperature": 0.35,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "财务 VP 助理",
+    "title": "财务副总裁助理",
+    "description": "每周生成 VP 级例会材料框架，覆盖预算执行、差异分析与待决事项。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 2,
+      "org_rank": 0,
+      "org_reports_to": "nev-cfo-monthly-board",
+      "org_cadence": "weekly"
+    }
+  },
+  "tasks": [
+    {
+      "name": "财务 VP 周例会材料",
+      "description": "每周一 08:30 生成 VP 例会框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 30 8 * * 1",
+      "task_config": {
+        "prompt": "作为制造型企业财务 VP 办公室助手，撰写「本周财务 VP 例会材料」框架（中文 Markdown）：\n1) 上周预算执行快照（收入/毛利/费用/EBIT 维度，标注【待填】）\n2) 按基地/产品线 Top 5 差异及原因假设\n3) 产销协同相关财务影响（产量、库存、交付节奏）\n4) 需 VP 拍板的 3–5 项（含建议选项）\n5) 本周跨部门协同清单（采购/制造/销售/研发）\n6) 风险提示与跟踪项\n\n面向管理层，条目化，可直接贴入例会 PPT 大纲。"
+      },
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "ft-demo-e22f91-capture",
+  "app_name": "",
+  "description": "",
+  "step_count": 3,
+  "steps": [
+    "打开目标应用",
+    "执行演示操作",
+    "完成并保存结果"
+  ],
+  "mode": "mock",
+  "saved_at": 1781270392.4865084
+}

@@ -19,12 +19,13 @@
 | **Agents** | 创建与管理智能体，支持角色、目标、工具绑定、**技能绑定**与自然语言生成 |
 | **Skills** | 可复用 SOP / 方法论沉淀（对齐 Cursor `SKILL.md`），在线技能库（约 1123 模板）、**中英双语展示**、运行时注入 |
 | **Digital Employees** | **数字员工**：岗位化绑定智能体，Cron / 间隔定时任务；**从模板一键创建**（含 11 个 bundled 岗位模板） |
-| **Operations Screen** | 运营大屏 **`/screen`**：KPI、员工状态、任务趋势；Dashboard API + SSE 实时刷新 |
+| **Operations Screen** | 运营大屏 **`/screen`**：KPI、员工状态、任务趋势；**按组织 RBAC 过滤**；Dashboard API + SSE（需登录） |
+| **Organization RBAC** | **8 角色**、部门树、**接口人 / 高管秘书** 分层赋权；数字员工与大屏按 scope 隔离 |
 | **Workflows** | n8n 风格可视化设计器（675+ 节点库）、**自然语言生成工作流**、节点 AI 配置助手 |
 | **Chat** | 多轮对话、流式输出、**附件上传与推荐问题**、会话删除、**存为技能 / 知识库** |
 | **Knowledge** | 文档上传、向量检索（RAG）；平台路线图文档自动种子与 **content_sha256 再索引** |
 | **Model Hub** | 模型配置 **增删改查**、设默认、**推理参数**（temperature / top_p / max_tokens 等）、OpenAI 兼容 Base URL |
-| **用户与权限** | 工号 / 邮箱登录、JWT、**按用户隔离**数据、**个人模型 API Key** |
+| **用户与权限** | 工号 / 邮箱登录、JWT、**组织 RBAC + 分层赋权**、个人模型 API Key |
 | **Tools** | 内置计算器、HTTP 请求、网页搜索、日期时间等工具 |
 | **Orchestrator** | 多智能体协同编排（CrewAI 风格 sequential 流程） |
 
@@ -83,15 +84,16 @@
 - **会话管理**：单条删除、**清空全部**；超过 **30 天**（可配置 `CONVERSATION_RETENTION_DAYS`）的会话自动清理
 - **沉淀导出**：当前会话可 **存为技能**（AI 提炼 SOP）或 **存入知识库**（写入 Markdown 文档并索引）
 
-### 用户登录与数据隔离
+### 用户登录、组织权限与数据隔离
 
 - **登录**：工号或邮箱 + 密码；首次启动自动创建默认管理员（工号 `admin`，密码 `admin123`，可在 `.env` 覆盖）
 - **JWT 鉴权**：除 `/login`、`/register`、`/health` 外，API 与前端页面需登录后访问
-- **按用户隔离**：智能体、技能、工作流、知识库、对话、数字员工等带 `owner_id`，各用户仅见/改自己的数据
-- **共享模板**：历史种子数据中 `owner_id` 为空的项目为平台模板，全员可见、普通用户不可编辑
-- **个人模型 Key**：在 **设置** 页配置各 provider 的 API Key / Base URL，调用 LLM 时优先于全局 `.env` 密钥
+- **组织 RBAC**：部门树 + 8 角色；**部门接口人**（本部门权限）、**高管秘书**（高管权限）分层赋权
+- **数字员工 / 大屏**：普通 `operator` 仅见自己的员工且无大屏；部门负责人见子树；高管见全公司
+- **赋权审计**：`GET /organization/audit-logs`
+- **个人模型 Key**：在 **设置** 页配置各 provider 的 API Key / Base URL
 
-> 详细操作步骤见 **[用户操作手册](docs/用户操作手册.md)**。
+> 组织权限详见 **[组织权限与赋权说明](docs/组织权限与赋权说明.md)**；操作步骤见 **[用户操作手册](docs/用户操作手册.md)**。
 
 ---
 
@@ -384,3 +386,4 @@ docker run -p 3000:3000 aiagnet-frontend
 - 仓库：[https://github.com/oymclihui/AI-Agent](https://github.com/oymclihui/AI-Agent)
 - 英文说明：[README.en.md](README.en.md)
 - 用户操作手册：[docs/用户操作手册.md](docs/用户操作手册.md)
+- 桌面自动化与 Harness：[docs/桌面自动化与Harness说明.md](docs/桌面自动化与Harness说明.md)

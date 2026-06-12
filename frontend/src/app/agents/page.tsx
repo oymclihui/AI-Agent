@@ -1,47 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Plus, Bot, Trash2, Sparkles, PenLine, Loader2, RefreshCw,
-  Search, Code2, Megaphone, BarChart2, ShieldCheck, Layers, Globe, Server,
+  Search, Layers,
 } from "lucide-react";
 import { agentsApi, modelsApi, skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
+import {
+  AGENT_CATEGORIES,
+  FEATURED_SCENES,
+  agentAvatarTone,
+  agentCategory,
+  agentPopularity,
+  agentTags,
+  isCustomAgent,
+  type AgentCategoryId,
+} from "@/lib/agentCatalog";
 
 interface Agent {
   id: string; name: string; role: string; goal: string;
   status: string; llm_provider: string | null; llm_model: string | null;
   temperature: number; tools_config: Array<{ tool_name: string }> | null;
   skills_config?: Array<{ skill_id: string }> | null;
+  created_at?: string;
+  metadata?: { from_deposit?: boolean; source_conversation_id?: string };
 }
 
 interface SkillOption { id: string; display_name: string; slug: string; status: string; }
 
 interface ModelOption { provider: string; model_id: string; is_default?: boolean; }
 
-const BUILTIN_TOOLS = ["web_search", "calculator", "http_request", "datetime"];
-
-const ROLE_ICONS: Record<string, typeof Bot> = {
-  research: Search, code: Code2, marketing: Megaphone, data: BarChart2,
-  security: ShieldCheck, product: Layers, translate: Globe, devops: Server,
-};
-
-function pickIcon(role: string) {
-  const r = role.toLowerCase();
-  if (r.includes("research") || r.includes("analyst")) return ROLE_ICONS.research;
-  if (r.includes("engineer") || r.includes("code") || r.includes("developer")) return ROLE_ICONS.code;
-  if (r.includes("content") || r.includes("marketing") || r.includes("copy")) return ROLE_ICONS.marketing;
-  if (r.includes("data")) return ROLE_ICONS.data;
-  if (r.includes("security") || r.includes("cyber")) return ROLE_ICONS.security;
-  if (r.includes("product")) return ROLE_ICONS.product;
-  if (r.includes("translat") || r.includes("local")) return ROLE_ICONS.translate;
-  if (r.includes("devops") || r.includes("sre")) return ROLE_ICONS.devops;
-  return Bot;
-}
+const BUILTIN_TOOLS = ["web_search", "calculator", "http_request", "datetime", "desktop_list_demos", "desktop_replay", "desktop_capture"];
 
 export default function AgentsPage() {
+  const router = useRouter();
   const { lang } = useLangStore();
   const a = translations.agents;
   const c = translations.common;
@@ -50,6 +47,10 @@ export default function AgentsPage() {
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [category, setCategory] = useState<AgentCategoryId>("all");
+  const [sortBy, setSortBy] = useState<"hot" | "new">("hot");
+  const [myExpertsOnly, setMyExpertsOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showSkillEdit, setShowSkillEdit] = useState<string | null>(null);
   const [skillEditIds, setSkillEditIds] = useState<string[]>([]);
@@ -169,6 +170,44 @@ export default function AgentsPage() {
 
   const skillName = (id: string) => skills.find((s) => s.id === id)?.display_name ?? id.slice(0, 8);
 
+  const filteredAgents = useMemo(() => {
+    let list = [...agents];
+    if (myExpertsOnly) {
+      list = list.filter(isCustomAgent);
+    }
+    if (category !== "all") {
+      list = list.filter((agent) => agentCategory(agent) === category);
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (agent) =>
+          agent.name.toLowerCase().includes(q) ||
+          agent.role.toLowerCase().includes(q) ||
+          agent.goal.toLowerCase().includes(q),
+      );
+    }
+    if (sortBy === "hot") {
+      list.sort((x, y) => agentPopularity(y) - agentPopularity(x));
+    } else {
+      list.sort((x, y) => {
+        const ta = x.created_at ? new Date(x.created_at).getTime() : 0;
+        const tb = y.created_at ? new Date(y.created_at).getTime() : 0;
+        return tb - ta;
+      });
+    }
+    return list;
+  }, [agents, category, myExpertsOnly, searchQuery, sortBy]);
+
+  const sceneAgents = (sceneId: AgentCategoryId) =>
+    agents.filter((agent) => agentCategory(agent) === sceneId).slice(0, 4);
+
+  const summonAgent = (agentId: string) => {
+    router.push(`/chat?agent=${agentId}`);
+  };
+
+  const agentInitial = (name: string) => (name.trim()[0] || "A").toUpperCase();
+
   const seedTemplates = async () => {
     try {
       await agentsApi.seedTemplates();
@@ -202,88 +241,190 @@ export default function AgentsPage() {
   };
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="agents-hub">
+      <div className="agents-hub-header">
         <div>
-          <h1 className="text-2xl font-bold text-white">{a.title[lang]}</h1>
-          <p className="text-slate-400">{a.subtitle[lang]}</p>
+          <h1>{a.title[lang]}</h1>
+          <p>{a.subtitle[lang]}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="agents-hub-actions">
           <button
+            type="button"
             onClick={importAgencyLibrary}
             disabled={agencyLoading}
-            className="flex items-center gap-2 rounded-lg border border-purple-500/40 px-4 py-2 text-sm text-purple-300 hover:bg-purple-500/10 transition-colors disabled:opacity-50"
+            className="agents-btn-secondary agents-btn-purple disabled:opacity-50"
           >
             {agencyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             {a.agencyImportAll[lang]}
           </button>
-          <button
-            onClick={seedTemplates}
-            className="flex items-center gap-2 rounded-lg border border-[#2d2d4e] px-4 py-2 text-sm text-slate-300 hover:bg-white/5 transition-colors"
-          >
+          <button type="button" onClick={seedTemplates} className="agents-btn-secondary">
             <RefreshCw className="h-4 w-4" /> {a.seedTemplates[lang]}
           </button>
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition-colors"
-          >
+          <button type="button" onClick={openCreate} className="agents-btn-primary">
             <Plus className="h-4 w-4" /> {a.newAgent[lang]}
           </button>
         </div>
       </div>
 
+      <div className="agents-hub-toolbar">
+        <div className="agents-hub-tabs">
+          <span className="agents-hub-tab agents-hub-tab-active">{a.tabExpert[lang]}</span>
+          <Link href="/skills" className="agents-hub-tab">{a.tabSkill[lang]}</Link>
+          <Link href="/chat" className="agents-hub-tab">{a.tabConnector[lang]}</Link>
+        </div>
+        <div className="agents-hub-search">
+          <Search className="h-4 w-4 shrink-0 theme-muted" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={a.searchPlaceholder[lang]}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => setMyExpertsOnly((v) => !v)}
+          className={`agents-hub-my-btn${myExpertsOnly ? " agents-hub-my-btn-active" : ""}`}
+        >
+          {a.myExperts[lang]}
+        </button>
+      </div>
+
+      {!loading && agents.length > 0 && (
+        <section className="agents-featured">
+          <h2 className="agents-featured-title">{a.featuredScenes[lang]}</h2>
+          <div className="agents-featured-scroll">
+            {FEATURED_SCENES.map((scene) => {
+              const items = sceneAgents(scene.id);
+              return (
+                <button
+                  key={scene.id}
+                  type="button"
+                  className={`agents-scene-card ${scene.tone}`}
+                  onClick={() => setCategory(scene.id)}
+                >
+                  <div>
+                    <h3>{lang === "zh" ? scene.title.zh : scene.title.en}</h3>
+                    <p>{lang === "zh" ? scene.subtitle.zh : scene.subtitle.en}</p>
+                  </div>
+                  <ul className="agents-scene-list">
+                    {items.length > 0 ? (
+                      items.map((item) => <li key={item.id}>{item.name}</li>)
+                    ) : (
+                      <li>{lang === "zh" ? "暂无，点击筛选" : "None yet — click to filter"}</li>
+                    )}
+                  </ul>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <div className="agents-filter-row">
+        <div className="agents-filter-scroll">
+          {AGENT_CATEGORIES.map((cat) => (
+            <button
+              key={cat.id}
+              type="button"
+              onClick={() => setCategory(cat.id)}
+              className={`agents-filter-pill${category === cat.id ? " agents-filter-pill-active" : ""}`}
+            >
+              {lang === "zh" ? cat.label.zh : cat.label.en}
+            </button>
+          ))}
+        </div>
+        <div className="agents-sort">
+          <button
+            type="button"
+            onClick={() => setSortBy("hot")}
+            className={`agents-sort-btn${sortBy === "hot" ? " agents-sort-btn-active" : ""}`}
+          >
+            {a.sortHot[lang]}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy("new")}
+            className={`agents-sort-btn${sortBy === "new" ? " agents-sort-btn-active" : ""}`}
+          >
+            {a.sortNew[lang]}
+          </button>
+        </div>
+      </div>
+
       {loading ? (
-        <div className="text-slate-400">{c.loading[lang]}</div>
-      ) : agents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#2d2d4e] py-16 text-center">
-          <Bot className="mb-4 h-12 w-12 text-slate-600" />
-          <p className="text-slate-400">{a.noAgents[lang]}</p>
+        <div className="theme-muted text-sm">{c.loading[lang]}</div>
+      ) : filteredAgents.length === 0 ? (
+        <div className="agents-empty">
+          <Bot className="mb-4 h-12 w-12 opacity-40" />
+          <p>{agents.length === 0 ? a.noAgents[lang] : (lang === "zh" ? "没有匹配的专家" : "No matching experts")}</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {agents.map((agent) => {
-            const Icon = pickIcon(agent.role);
+        <div className="agents-grid">
+          {filteredAgents.map((agent) => {
+            const tags = agentTags(agent);
+            const fromChat = agent.metadata?.from_deposit || agent.metadata?.source_conversation_id;
+            const isSenior = (agent.skills_config?.length ?? 0) >= 2;
             return (
-              <div key={agent.id} className="rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-5">
-                <div className="mb-3 flex items-start justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/20">
-                      <Icon className="h-4 w-4 text-blue-400" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-white">{agent.name}</h3>
-                      <p className="text-xs text-blue-400">{agent.role}</p>
-                    </div>
+              <article key={agent.id} className="agents-card">
+                <div className="agents-card-top">
+                  <div className={`agents-avatar ${agentAvatarTone(agent.id)}`} aria-hidden>
+                    {agentInitial(agent.name)}
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${agent.status === "active" ? "bg-green-500/20 text-green-400" : "bg-slate-500/20 text-slate-400"}`}>
-                    {agent.status === "active" ? c.active[lang] : c.inactive[lang]}
+                  <div className="agents-card-head">
+                    <div className="agents-card-title-row">
+                      <h3 title={agent.name}>{agent.name}</h3>
+                      {fromChat ? (
+                        <span className="agents-badge agents-badge-chat">{a.fromChat[lang]}</span>
+                      ) : isSenior ? (
+                        <span className="agents-badge agents-badge-master">{a.badgeMaster[lang]}</span>
+                      ) : (
+                        <span className="agents-badge agents-badge-beta">{a.badgeBeta[lang]}</span>
+                      )}
+                    </div>
+                    <p className="agents-card-role">{agent.role}</p>
+                  </div>
+                </div>
+                <p className="agents-card-desc">{agent.goal}</p>
+                <div className="agents-card-tags">
+                  {tags.map((tag) => (
+                    <span key={`${agent.id}-${tag}`} className="agents-tag">{tag}</span>
+                  ))}
+                  {(agent.skills_config ?? []).slice(0, 2).map((sk) => (
+                    <span key={sk.skill_id} className="agents-tag">{skillName(sk.skill_id)}</span>
+                  ))}
+                </div>
+                <div className="agents-card-footer">
+                  <span className="agents-card-meta">
+                    {agent.llm_provider}/{agent.llm_model}
                   </span>
+                  <div className="agents-card-actions">
+                    <button
+                      type="button"
+                      onClick={() => openSkillEdit(agent)}
+                      className="agents-icon-btn"
+                      title={a.editSkills[lang]}
+                    >
+                      <Layers className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteAgent(agent.id)}
+                      className="agents-icon-btn agents-icon-btn-danger"
+                      title={c.delete[lang]}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => summonAgent(agent.id)}
+                      className="agents-summon-btn"
+                    >
+                      {a.summon[lang]}
+                    </button>
+                  </div>
                 </div>
-                <p className="mb-4 line-clamp-2 text-sm text-slate-400">{agent.goal}</p>
-                <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-500">
-                  <span className="rounded bg-slate-700/50 px-2 py-0.5">{agent.llm_provider}/{agent.llm_model}</span>
-                  {(agent.tools_config ?? []).map((t) => (
-                    <span key={t.tool_name} className="rounded bg-purple-500/10 px-2 py-0.5 text-purple-400">{t.tool_name}</span>
-                  ))}
-                  {(agent.skills_config ?? []).map((sk) => (
-                    <span key={sk.skill_id} className="rounded bg-teal-500/10 px-2 py-0.5 text-teal-400">{skillName(sk.skill_id)}</span>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => openSkillEdit(agent)}
-                    className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-teal-400 hover:bg-teal-500/10 transition-colors"
-                  >
-                    {a.editSkills[lang]}
-                  </button>
-                  <button
-                    onClick={() => deleteAgent(agent.id)}
-                    className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
-                  >
-                    <Trash2 className="h-3 w-3" /> {c.delete[lang]}
-                  </button>
-                </div>
-              </div>
+              </article>
             );
           })}
         </div>
@@ -291,8 +432,8 @@ export default function AgentsPage() {
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-            <h2 className="mb-4 text-lg font-semibold text-white">{a.newAgent[lang]}</h2>
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-4 text-lg font-semibold theme-text">{a.newAgent[lang]}</h2>
 
             <div className="mb-4 flex rounded-lg border border-[#2d2d4e] p-0.5 text-sm">
               <button
@@ -439,8 +580,8 @@ export default function AgentsPage() {
 
       {showSkillEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-            <h2 className="mb-2 text-lg font-semibold text-white">{a.editSkills[lang]}</h2>
+          <div className="theme-card w-full max-w-md p-6">
+            <h2 className="mb-2 text-lg font-semibold theme-text">{a.editSkills[lang]}</h2>
             <p className="mb-4 text-xs text-slate-500">{a.skillsHint[lang]}</p>
             <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
               {skills.map((skill) => (

@@ -5,23 +5,26 @@ import {
   Bot, Workflow, MessageSquare, Database, Cpu, Zap, Users, BookOpen, Briefcase,
 } from "lucide-react";
 import { useLangStore } from "@/lib/langStore";
+import { useAuthStore } from "@/lib/authStore";
 import { translations } from "@/lib/i18n";
+import { canReadEmployees, canViewDashboard } from "@/lib/permissions";
 
 export default function HomePage() {
   const { lang } = useLangStore();
+  const user = useAuthStore((s) => s.user);
   const d = translations.dashboard;
   const f = d.features;
 
   const features = [
-    { icon: Users,         titleKey: "employees", descKey: "employeesD", href: "/employees", color: "text-cyan-400",   bg: "bg-cyan-400/10" },
-    { icon: Bot,           titleKey: "agents",    descKey: "agentsD",    href: "/agents",    color: "text-blue-400",   bg: "bg-blue-400/10" },
-    { icon: BookOpen,      titleKey: "skills",    descKey: "skillsD",    href: "/skills",    color: "text-indigo-400", bg: "bg-indigo-400/10" },
-    { icon: Workflow,      titleKey: "workflow",  descKey: "workflowD",  href: "/workflows", color: "text-purple-400", bg: "bg-purple-400/10" },
-    { icon: Database,      titleKey: "rag",       descKey: "ragD",       href: "/knowledge", color: "text-yellow-400", bg: "bg-yellow-400/10" },
-    { icon: MessageSquare, titleKey: "chat",      descKey: "chatD",      href: "/chat",      color: "text-green-400",  bg: "bg-green-400/10" },
-    { icon: Cpu,           titleKey: "modelHub",  descKey: "modelHubD",  href: "/models",    color: "text-pink-400",   bg: "bg-pink-400/10" },
-    { icon: Zap,           titleKey: "tools",     descKey: "toolsD",     href: "/tools",     color: "text-orange-400", bg: "bg-orange-400/10" },
-  ] as const;
+    { icon: Users,         titleKey: "employees", descKey: "employeesD", href: "/employees", color: "text-cyan-400",   bg: "bg-cyan-400/10", show: canReadEmployees(user) },
+    { icon: Bot,           titleKey: "agents",    descKey: "agentsD",    href: "/agents",    color: "text-blue-400",   bg: "bg-blue-400/10", show: true },
+    { icon: BookOpen,      titleKey: "skills",    descKey: "skillsD",    href: "/skills",    color: "text-indigo-400", bg: "bg-indigo-400/10", show: true },
+    { icon: Workflow,      titleKey: "workflow",  descKey: "workflowD",  href: "/workflows", color: "text-purple-400", bg: "bg-purple-400/10", show: true },
+    { icon: Database,      titleKey: "rag",       descKey: "ragD",       href: "/knowledge", color: "text-yellow-400", bg: "bg-yellow-400/10", show: true },
+    { icon: MessageSquare, titleKey: "chat",      descKey: "chatD",      href: "/chat",      color: "text-green-400",  bg: "bg-green-400/10", show: true },
+    { icon: Cpu,           titleKey: "modelHub",  descKey: "modelHubD",  href: "/models",    color: "text-pink-400",   bg: "bg-pink-400/10", show: true },
+    { icon: Zap,           titleKey: "tools",     descKey: "toolsD",     href: "/tools",     color: "text-orange-400", bg: "bg-orange-400/10", show: true },
+  ].filter((item) => item.show);
 
   return (
     <div className="min-h-screen p-8">
@@ -34,6 +37,7 @@ export default function HomePage() {
           <h1 className="mb-4 text-5xl font-bold text-white">{d.title[lang]}</h1>
           <p className="max-w-2xl text-lg text-slate-400">{d.subtitle[lang]}</p>
         </div>
+        {canViewDashboard(user) && (
         <Link
           href="/screen"
           className="group flex items-center gap-3 rounded-xl border border-cyan-500/40 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 px-5 py-3 transition-all hover:border-cyan-400/60 hover:from-cyan-500/20"
@@ -46,6 +50,7 @@ export default function HomePage() {
             <p className="text-xs text-slate-500">{d.screenHint[lang]}</p>
           </div>
         </Link>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">

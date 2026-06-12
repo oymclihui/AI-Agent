@@ -1,0 +1,61 @@
+{
+  "template_id": "nev-controller-manufacturing-daily",
+  "name_zh": "制造企业 · 财务控制总监",
+  "name_en": "Manufacturing · Controller",
+  "description_zh": "制造环节财务日/周监控：关账进度、成本波动、异常科目与可执行控制清单。",
+  "description_en": "Daily/weekly manufacturing finance controls: close progress, cost variance, anomalies.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "制造财务日监控清单", "query": "制造工厂财务控制每天应监控哪些指标" },
+    { "label": "WIP 异常排查", "query": "在制品 WIP 财务异常通常从哪些科目排查" }
+  ],
+  "agent": {
+    "name": "财务控制顾问",
+    "role": "Manufacturing Controller",
+    "goal": "监控制造环节的财务关账、成本波动与异常科目，输出可执行的日/周控制清单。",
+    "backstory": "熟悉制造 ERP 成本核算、标准成本与差异分析、月结关账流程。",
+    "tools": ["calculator", "datetime"],
+    "temperature": 0.3,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "财务控制 助理",
+    "title": "财务控制总监助理",
+    "description": "每日/每周输出制造财务监控与关账控制清单。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 3,
+      "org_rank": 0,
+      "org_reports_to": "nev-vp-finance-weekly",
+      "org_cadence": "daily"
+    }
+  },
+  "tasks": [
+    {
+      "name": "制造财务日监控",
+      "description": "工作日 07:00 生成日监控清单",
+      "schedule_type": "cron",
+      "cron_expression": "0 7 * * 1-5",
+      "task_config": {
+        "prompt": "你是制造型企业「制造财务控制」数字助手。输出「今日制造财务监控清单」（中文，Markdown 表格+要点）：\n- 产量/稼动率/在制品（WIP）需核对项\n- 单台材料成本、人工、制造费用波动阈值提醒\n- 关键子件/物料成本跟踪点\n- 异常科目与凭证复核提示（报废、返工、试制费用等）\n- 距月结/关账的天数与当日必须完成项\n\n标注【待填实际数】，并给出 2 个「若发现 X 则排查 Y」的示例。"
+      },
+      "enabled": true
+    },
+    {
+      "name": "制造财务周复盘",
+      "description": "每周五 16:00 生成周复盘框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 16 * * 5",
+      "task_config": {
+        "prompt": "撰写制造板块「本周财务控制复盘」框架：成本差异 Top 5、WIP 异常、关账风险、下周 3 项必做。中文，条目化。"
+      },
+      "enabled": true
+    }
+  ]
+}

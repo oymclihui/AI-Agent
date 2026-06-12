@@ -7,6 +7,7 @@ from app.db.models import User, UserModelCredential, UserMailboxCredential
 from app.db.base import generate_uuid
 from app.core.auth.security import hash_password, verify_password, create_access_token
 from app.core.auth.deps import get_current_user, get_current_admin_user
+from app.core.auth.profile import build_user_response
 from app.core.email.password_reset import create_and_send_reset, validate_reset_token, consume_reset_token
 from app.core.email.mailbox_service import fetch_user_mailbox, get_user_mailbox, mailbox_imap_settings
 from app.schemas.auth import (
@@ -66,7 +67,8 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User inactive")
     token = create_access_token(user.id)
-    return TokenResponse(access_token=token, user=UserResponse.model_validate(user))
+    profile = await build_user_response(db, user)
+    return TokenResponse(access_token=token, user=profile)
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -91,13 +93,35 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     db.add(user)
     await db.flush()
     await db.refresh(user)
+
+    from app.db.models import Department, UserDepartment, UserRole
+    root = (
+        await db.execute(select(Department).where(Department.code == "root").limit(1))
+    ).scalar_one_or_none()
+    if root:
+        user.primary_department_id = root.id
+        db.add(UserDepartment(
+            id=generate_uuid(),
+            user_id=user.id,
+            department_id=root.id,
+            is_primary=True,
+        ))
+    db.add(UserRole(
+        id=generate_uuid(),
+        user_id=user.id,
+        role_code="operator",
+        scope_department_id=root.id if root else None,
+    ))
+    await db.flush()
+
     token = create_access_token(user.id)
-    return TokenResponse(access_token=token, user=UserResponse.model_validate(user))
+    profile = await build_user_response(db, user)
+    return TokenResponse(access_token=token, user=profile)
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(user: User = Depends(get_current_user)):
-    return user
+async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await build_user_response(db, user)
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -209,19 +233,23 @@ async def save_my_mailbox(
         raise HTTPException(status_code=400, detail="Valid email is required")
 
     row = await get_user_mailbox(db, user.id)
+    password = (payload.mailbox_password or "").strip()
     if row:
         row.email = email
-        row.mailbox_password = payload.mailbox_password.strip()
+        if password:
+            row.mailbox_password = password
         row.imap_host = (payload.imap_host or "").strip() or None
         row.imap_port = payload.imap_port
         row.imap_use_ssl = True if payload.imap_use_ssl is None else payload.imap_use_ssl
         row.is_active = True
     else:
+        if not password:
+            raise HTTPException(status_code=400, detail="Mailbox password is required")
         row = UserMailboxCredential(
             id=generate_uuid(),
             user_id=user.id,
             email=email,
-            mailbox_password=payload.mailbox_password.strip(),
+            mailbox_password=password,
             imap_host=(payload.imap_host or "").strip() or None,
             imap_port=payload.imap_port,
             imap_use_ssl=True if payload.imap_use_ssl is None else payload.imap_use_ssl,

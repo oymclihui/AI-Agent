@@ -1,0 +1,67 @@
+{
+  "template_id": "weekly-sales-12w",
+  "name_zh": "十二周销量对比分析",
+  "name_en": "12-Week Sales Analysis",
+  "description_zh": "读取 Excel（事业部×国家×12周销量）→ 代码节点计算环比/汇总/趋势 → LLM 生成对比分析报告。运行时在 input 中传入 file_path（服务器可访问的 .xlsx 绝对路径）。",
+  "description_en": "Excel (BU × country × 12 weeks) → metrics code node → LLM comparison report. Pass file_path in input_data.",
+  "process_type": "sequential",
+  "input_schema": {
+    "file_path": "Excel 文件绝对路径（必填）",
+    "input": "可选说明，如「生成本周销量对比报告」"
+  },
+  "input_example": {
+    "file_path": "E:/AIAGNET/backend/scripts/sample_data/weekly_sales_12w.xlsx",
+    "input": "请基于附件 Excel 生成十二周销量对比分析报告"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "start",
+        "type": "startNode",
+        "label": "开始",
+        "position": { "x": 80, "y": 40 },
+        "config": {}
+      },
+      {
+        "id": "compute_metrics",
+        "type": "codeNode",
+        "label": "读取 Excel · 计算指标",
+        "position": { "x": 80, "y": 160 },
+        "config": {
+          "code": "path = input_data.get('file_path') or input_data.get('excel_path')\nresult = compute_weekly_sales_metrics(path)"
+        }
+      },
+      {
+        "id": "report_llm",
+        "type": "llmNode",
+        "label": "生成对比分析报告",
+        "position": { "x": 80, "y": 300 },
+        "config": {
+          "prompt": "你是 FP&A 销量分析专家。根据以下 Excel 销量数据（事业部 × 国家 × 12 周）撰写《十二周销量对比分析报告》（中文 Markdown）。\n\n## 已计算的统计指标\n{metrics_summary}\n\n---\n\n报告须包含：\n1. **执行摘要**（3 条结论）\n2. **整体趋势**：12 周走势、周环比亮点/风险\n3. **事业部对比**与**国家/区域对比**\n4. **同环比解读**（基于上下半程与周环比）\n5. **异常波动**与【待核实】项\n6. **下阶段行动建议**\n\n语气：专业、可发给管理层。只输出报告正文。"
+        }
+      },
+      {
+        "id": "finalize",
+        "type": "codeNode",
+        "label": "整理输出",
+        "position": { "x": 80, "y": 440 },
+        "config": {
+          "code": "report = str(agent_outputs.get('report_llm', '')).strip()\nif not report:\n    report = str(context.get('metrics_summary', ''))\nresult = {\n    'final_output': report,\n    'report_markdown': report,\n}"
+        }
+      },
+      {
+        "id": "end",
+        "type": "endNode",
+        "label": "完成",
+        "position": { "x": 80, "y": 580 },
+        "config": {}
+      }
+    ],
+    "edges": [
+      { "id": "start->compute", "source": "start", "target": "compute_metrics" },
+      { "id": "compute->llm", "source": "compute_metrics", "target": "report_llm" },
+      { "id": "llm->finalize", "source": "report_llm", "target": "finalize" },
+      { "id": "finalize->end", "source": "finalize", "target": "end" }
+    ]
+  }
+}

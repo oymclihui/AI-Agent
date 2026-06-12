@@ -98,6 +98,8 @@ NODE_ZH: dict[str, dict[str, str]] = {
     "start": {"name": "开始", "description": "工作流入口"},
     "end": {"name": "结束", "description": "工作流出口"},
     "stickyNote": {"name": "便签", "description": "可视化注释"},
+    "desktopCapture": {"name": "桌面录制", "description": "通过本机 Sidecar 录制桌面 GUI 演示"},
+    "desktopReplay": {"name": "桌面回放", "description": "通过本机 Sidecar 回放已录制的桌面演示"},
     "manualTrigger": {"name": "手动触发", "description": "手动或从界面启动工作流"},
     "webhookTrigger": {"name": "Webhook", "description": "通过 HTTP Webhook 启动工作流"},
     "cronTrigger": {"name": "Cron", "description": "按 Cron 表达式定时运行"},

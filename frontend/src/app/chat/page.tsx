@@ -1,16 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { chatApi, agentsApi, streamResponse, streamResponseForm } from "@/lib/api";
+import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi } from "@/lib/api";
 import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 import { clsx } from "clsx";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { SegmentedControl } from "@/components/SegmentedControl";
+import {
+  CHAT_SCENES,
+  capsulesForScene,
+  matchAgentByHint,
+  type ChatScene,
+  type QuickCapsule,
+} from "@/lib/chatScenarios";
+import { INSPIRE_SESSION_KEY } from "@/lib/inspirationCatalog";
+import type { InspirePendingPayload } from "@/lib/launchInspiration";
+import {
+  CHAT_CONNECTORS,
+  connectorLabel,
+  connectorMatchesMailbox,
+  type ChatConnectorPreset,
+} from "@/lib/chatConnectors";
 
 interface AttachmentMeta {
   filename: string;
@@ -23,11 +40,104 @@ interface Message {
   role: string;
   content: string;
   created_at: string;
-  metadata?: { attachments?: AttachmentMeta[] };
+  metadata?: { attachments?: AttachmentMeta[]; thinking?: string };
 }
 
-interface Conversation { id: string; title: string | null; agent_id: string | null; created_at: string; }
-interface Agent { id: string; name: string; role: string; }
+interface Conversation {
+  id: string;
+  title: string | null;
+  agent_id: string | null;
+  model_config_id?: string | null;
+  connector_id?: string | null;
+  created_at: string;
+}
+interface ModelConfigOption {
+  id: string;
+  name: string;
+  provider: string;
+  model_id: string;
+  is_default: boolean;
+}
+interface Agent {
+  id: string;
+  name: string;
+  role: string;
+  skills_config?: { skill_id: string }[];
+}
+interface SkillOption { id: string; display_name: string; status: string; }
+interface KnowledgeOption { id: string; name: string; source_type?: string; }
+
+interface DepositSuggestion {
+  type: string;
+  recommended: boolean;
+  title?: string;
+  reason: string;
+  confidence: number;
+}
+
+interface DepositTaskPreview {
+  name: string;
+  schedule_type?: string;
+  cron_expression?: string;
+  schedule_label?: string;
+  prompt_preview?: string;
+}
+
+function ThinkingBlock({
+  content,
+  lang,
+  streaming = false,
+}: {
+  content: string;
+  lang: "zh" | "en";
+  streaming?: boolean;
+}) {
+  const t = translations.chat;
+  const [open, setOpen] = useState(streaming);
+
+  useEffect(() => {
+    if (streaming) setOpen(true);
+  }, [streaming]);
+
+  if (!content.trim()) return null;
+
+  return (
+    <div className="mb-2 rounded-lg border border-violet-500/25 bg-violet-950/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-violet-300 hover:text-violet-200"
+      >
+        <ChevronRight className={clsx("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <Sparkles className="h-3.5 w-3.5 shrink-0 opacity-80" />
+        <span>{streaming ? t.thinking[lang] : t.thinkingProcess[lang]}</span>
+      </button>
+      {open && (
+        <div className="max-h-64 overflow-y-auto border-t border-violet-500/20 px-3 py-2 text-xs leading-relaxed text-violet-200/85">
+          <div className="prose prose-xs prose-invert max-w-none whitespace-pre-wrap">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          </div>
+          {streaming && <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-violet-400" />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface DepositOffer {
+  worth_deposit: boolean;
+  draft_id: string;
+  suggestions: DepositSuggestion[];
+  draft?: {
+    skill_title?: string;
+    knowledge_title?: string;
+    agent_name?: string;
+    employee_name?: string;
+    employee_title?: string;
+    employee_description?: string;
+    tasks?: DepositTaskPreview[];
+  };
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -36,6 +146,7 @@ function formatFileSize(bytes: number): string {
 }
 
 export default function ChatPage() {
+  const router = useRouter();
   const { lang } = useLangStore();
   const t = translations.chat;
 
@@ -50,7 +161,38 @@ export default function ChatPage() {
   const suggestAbortRef = useRef<AbortController | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingThinking, setStreamingThinking] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
+  const [selectedSkill, setSelectedSkill] = useState<string>("");
+  const [selectedKbId, setSelectedKbId] = useState<string>("");
+  const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>("");
+  const [selectedConnector, setSelectedConnector] = useState<string>("");
+  const [modelConfigs, setModelConfigs] = useState<ModelConfigOption[]>([]);
+  const [mailboxSaved, setMailboxSaved] = useState<{
+    email: string;
+    imap_host: string;
+    imap_port: number;
+  } | null>(null);
+  const [connectorSetup, setConnectorSetup] = useState<ChatConnectorPreset | null>(null);
+  const [connectorEmail, setConnectorEmail] = useState("");
+  const [connectorPassword, setConnectorPassword] = useState("");
+  const [depositOffer, setDepositOffer] = useState<DepositOffer | null>(null);
+  const [depositLoading, setDepositLoading] = useState(false);
+  const [depositConfirming, setDepositConfirming] = useState(false);
+  const [depositSelected, setDepositSelected] = useState<Set<string>>(new Set());
+  const [depositDraftOnly, setDepositDraftOnly] = useState(false);
+  const depositDismissedRef = useRef<Set<string>>(new Set());
+  const [pendingDesktopTasks, setPendingDesktopTasks] = useState<Array<{
+    id: string; demo_name?: string | null; action: string; instructions?: string | null;
+  }>>([]);
+  const [desktopConfirmBusy, setDesktopConfirmBusy] = useState<string | null>(null);
+  const [pendingHarnessActions, setPendingHarnessActions] = useState<Array<{
+    id: string; tool_name: string; tool_args?: Record<string, unknown>; risk_level?: string;
+  }>>([]);
+  const [harnessConfirmBusy, setHarnessConfirmBusy] = useState<string | null>(null);
+  const [scene, setScene] = useState<ChatScene>("office");
+  const [skills, setSkills] = useState<SkillOption[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeOption[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -78,14 +220,140 @@ export default function ChatPage() {
     }
   };
 
+  const inspirePendingRef = useRef<InspirePendingPayload | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const agentId = params.get("agent");
+    if (agentId) setSelectedAgent(agentId);
+
+    if (params.get("from") === "inspire") {
+      try {
+        const raw = sessionStorage.getItem(INSPIRE_SESSION_KEY);
+        if (raw) {
+          inspirePendingRef.current = JSON.parse(raw) as InspirePendingPayload;
+          sessionStorage.removeItem(INSPIRE_SESSION_KEY);
+          window.history.replaceState({}, "", "/chat");
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const payload = inspirePendingRef.current;
+    if (!payload) return;
+    setInput(payload.prompt);
+    if (payload.scene) setScene(payload.scene as ChatScene);
+    if (payload.agentHint && agents.length) {
+      const id = matchAgentByHint(agents, payload.agentHint);
+      if (id) setSelectedAgent(id);
+    }
+    inspirePendingRef.current = null;
+    toast.success(translations.inspiration.loadedInChat[lang], { duration: 4000 });
+  }, [agents, lang]);
+
   useEffect(() => {
     chatApi.listConversations().then(({ data }) => setConversations(data)).catch(() => {});
     agentsApi.list(lang).then(({ data }) => setAgents(data)).catch(() => {});
+    skillsApi.list(lang).then(({ data }) => {
+      setSkills((data as SkillOption[]).filter((s) => s.status === "active"));
+    }).catch(() => {});
+    knowledgeApi.list().then(({ data }) => setKnowledgeBases(data)).catch(() => {});
+    modelsApi.listConfigs().then(({ data }) => {
+      const configs = data as ModelConfigOption[];
+      setModelConfigs(configs);
+      setSelectedModelConfigId((prev) => prev || configs.find((c) => c.is_default)?.id || "");
+    }).catch(() => {});
+    authApi.getMailbox().then(({ data }) => {
+      if (data) setMailboxSaved(data);
+    }).catch(() => {});
   }, [lang]);
+
+  const loadPendingDesktop = useCallback(async () => {
+    try {
+      const { data } = await desktopAutomationApi.listAwaitingConfirmation();
+      setPendingDesktopTasks((data as typeof pendingDesktopTasks) || []);
+    } catch {
+      setPendingDesktopTasks([]);
+    }
+  }, []);
+
+  const loadPendingHarness = useCallback(async () => {
+    try {
+      const { data } = await harnessApi.listAwaitingActions();
+      setPendingHarnessActions((data as typeof pendingHarnessActions) || []);
+    } catch {
+      setPendingHarnessActions([]);
+    }
+  }, []);
+
+  const loadPendingActions = useCallback(async () => {
+    await Promise.all([loadPendingDesktop(), loadPendingHarness()]);
+  }, [loadPendingDesktop, loadPendingHarness]);
+
+  useEffect(() => {
+    loadPendingActions();
+    const timer = setInterval(loadPendingActions, 8000);
+    return () => clearInterval(timer);
+  }, [loadPendingActions, activeConv]);
+
+  const approveDesktopTask = async (taskId: string) => {
+    setDesktopConfirmBusy(taskId);
+    try {
+      await desktopAutomationApi.confirmTask(taskId);
+      toast.success(t.desktopConfirmOk[lang]);
+      await loadPendingActions();
+    } catch {
+      toast.error(translations.common.actionFailed[lang]);
+    } finally {
+      setDesktopConfirmBusy(null);
+    }
+  };
+
+  const rejectDesktopTask = async (taskId: string) => {
+    setDesktopConfirmBusy(taskId);
+    try {
+      await desktopAutomationApi.rejectTask(taskId);
+      toast.success(t.desktopConfirmRejected[lang]);
+      await loadPendingActions();
+    } catch {
+      toast.error(translations.common.actionFailed[lang]);
+    } finally {
+      setDesktopConfirmBusy(null);
+    }
+  };
+
+  const approveHarnessAction = async (actionId: string) => {
+    setHarnessConfirmBusy(actionId);
+    try {
+      await harnessApi.confirmAction(actionId);
+      toast.success(t.harnessConfirmOk[lang]);
+      await loadPendingActions();
+    } catch {
+      toast.error(translations.common.actionFailed[lang]);
+    } finally {
+      setHarnessConfirmBusy(null);
+    }
+  };
+
+  const rejectHarnessAction = async (actionId: string) => {
+    setHarnessConfirmBusy(actionId);
+    try {
+      await harnessApi.rejectAction(actionId);
+      toast.success(t.harnessConfirmRejected[lang]);
+      await loadPendingActions();
+    } catch {
+      toast.error(translations.common.actionFailed[lang]);
+    } finally {
+      setHarnessConfirmBusy(null);
+    }
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, streamingThinking]);
 
   const fetchSuggestions = useCallback(async (files: File[]) => {
     suggestAbortRef.current?.abort();
@@ -129,15 +397,190 @@ export default function ChatPage() {
     return () => suggestAbortRef.current?.abort();
   }, []);
 
+  const sceneOptions = CHAT_SCENES.map((s) => ({
+    value: s.value,
+    label: lang === "zh" ? s.label.zh : s.label.en,
+  }));
+  const visibleCapsules = capsulesForScene(scene);
+
+  const applyCapsule = (cap: QuickCapsule) => {
+    setInput(lang === "zh" ? cap.prompt.zh : cap.prompt.en);
+    const agentId = matchAgentByHint(agents, cap.agentHint);
+    if (agentId) setSelectedAgent(agentId);
+  };
+
+  const depositTypeLabel = (type: string) => {
+    const map: Record<string, { zh: string; en: string }> = {
+      skill: t.depositTypeSkill,
+      knowledge: t.depositTypeKnowledge,
+      agent: t.depositTypeAgent,
+      employee: t.depositTypeEmployee,
+    };
+    return map[type]?.[lang] ?? type;
+  };
+
+  const fetchDepositSuggestion = useCallback(async (convId: string, force = false) => {
+    if (!force && depositDismissedRef.current.has(convId)) return;
+    setDepositLoading(true);
+    try {
+      const { data } = await chatApi.suggestDeposit(convId, lang);
+      if (!data.worth_deposit || !data.draft_id) {
+        setDepositOffer(null);
+        return;
+      }
+      const offer = data as DepositOffer;
+      const recommended = offer.suggestions.filter((s) => s.recommended).map((s) => s.type);
+      setDepositSelected(
+        new Set(recommended.length > 0 ? recommended : offer.suggestions.map((s) => s.type)),
+      );
+      setDepositDraftOnly(false);
+      setDepositOffer(offer);
+    } catch {
+      setDepositOffer(null);
+    } finally {
+      setDepositLoading(false);
+    }
+  }, [lang]);
+
+  const dismissDeposit = () => {
+    if (activeConv) depositDismissedRef.current.add(activeConv);
+    setDepositOffer(null);
+  };
+
+  const toggleDepositType = (type: string) => {
+    setDepositSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
+
+  const confirmDeposit = async () => {
+    if (!activeConv || !depositOffer?.draft_id || depositSelected.size === 0) return;
+    setDepositConfirming(true);
+    try {
+      const { data } = await chatApi.confirmDeposit(activeConv, {
+        draft_id: depositOffer.draft_id,
+        types: Array.from(depositSelected),
+        activate_employee: !depositDraftOnly,
+      });
+      toast.success(t.depositConfirmOk[lang]);
+      setDepositOffer(null);
+      depositDismissedRef.current.add(activeConv);
+      if (data.employee_id) {
+        toast(
+          (toastInstance) => (
+            <span className="flex items-center gap-2 text-sm">
+              {t.depositEmployeeLink[lang]}
+              <button
+                type="button"
+                className="text-blue-400 underline"
+                onClick={() => {
+                  router.push(`/employees/${data.employee_id}`);
+                  toast.dismiss(toastInstance.id);
+                }}
+              >
+                →
+              </button>
+            </span>
+          ),
+          { duration: 6000 },
+        );
+      } else if (data.agent_id) {
+        router.push("/agents");
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ? `${t.depositConfirmFailed[lang]}: ${detail}` : t.depositConfirmFailed[lang]);
+    } finally {
+      setDepositConfirming(false);
+    }
+  };
+
+  const onSkillChange = (skillId: string) => {
+    setSelectedSkill(skillId);
+    if (!skillId) return;
+    const bound = agents.find((a) =>
+      (a.skills_config || []).some((b) => b.skill_id === skillId),
+    );
+    if (bound) setSelectedAgent(bound.id);
+  };
+
+  const onConnectorChange = (connectorId: string) => {
+    setSelectedConnector(connectorId);
+    if (!connectorId) return;
+    const preset = CHAT_CONNECTORS.find((c) => c.id === connectorId);
+    if (!preset) return;
+    if (!connectorMatchesMailbox(connectorId, mailboxSaved)) {
+      setConnectorSetup(preset);
+      setConnectorEmail(mailboxSaved?.email || "");
+      setConnectorPassword("");
+    }
+  };
+
+  const saveConnectorSetup = async () => {
+    if (!connectorSetup) return;
+    if (!connectorPassword.trim() && !mailboxSaved) {
+      toast.error(t.connectorNeedPassword[lang]);
+      return;
+    }
+    try {
+      await authApi.saveMailbox({
+        email: connectorEmail.trim() || undefined,
+        mailbox_password: connectorPassword.trim() || undefined,
+        imap_host: connectorSetup.imap_host,
+        imap_port: connectorSetup.imap_port,
+        imap_use_ssl: connectorSetup.imap_use_ssl,
+      });
+      const { data } = await authApi.getMailbox();
+      if (data) setMailboxSaved(data);
+      setSelectedConnector(connectorSetup.id);
+      setConnectorSetup(null);
+      setConnectorPassword("");
+      toast.success(t.connectorSaved[lang]);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ? `${t.connectorSaveFailed[lang]}: ${detail}` : t.connectorSaveFailed[lang]);
+    }
+  };
+
+  const conversationContext = () => ({
+    agent_id: selectedAgent || null,
+    knowledge_base_ids: selectedKbId ? [selectedKbId] : [],
+    model_config_id: selectedModelConfigId || null,
+    connector_id: selectedConnector || null,
+  });
+
+  const messageExtras = () => ({
+    model_config_id: selectedModelConfigId || null,
+    connector_id: selectedConnector || null,
+  });
+
+  const contextSummary = () => {
+    const parts: string[] = [];
+    const modelCfg = modelConfigs.find((m) => m.id === selectedModelConfigId);
+    if (modelCfg) parts.push(modelCfg.name);
+    const agent = agents.find((a) => a.id === selectedAgent);
+    if (agent) parts.push(agent.name);
+    const skill = skills.find((s) => s.id === selectedSkill);
+    if (skill) parts.push(skill.display_name);
+    const kb = knowledgeBases.find((k) => k.id === selectedKbId);
+    if (kb) parts.push(kb.name);
+    if (selectedConnector) parts.push(connectorLabel(selectedConnector, lang));
+    return parts.join(" · ");
+  };
+
   const newConversation = async () => {
     try {
       const { data } = await chatApi.createConversation({
         title: t.newChat[lang],
-        agent_id: selectedAgent || null,
+        ...conversationContext(),
       });
       setConversations((c) => [data, ...c]);
       setActiveConv(data.id);
       setMessages([]);
+      setDepositOffer(null);
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(detail ? `${t.createFailed[lang]}: ${detail}` : t.createFailed[lang]);
@@ -146,6 +589,13 @@ export default function ChatPage() {
 
   const loadMessages = async (convId: string) => {
     setActiveConv(convId);
+    setDepositOffer(null);
+    const conv = conversations.find((c) => c.id === convId);
+    if (conv) {
+      if (conv.agent_id) setSelectedAgent(conv.agent_id);
+      if (conv.model_config_id) setSelectedModelConfigId(conv.model_config_id);
+      if (conv.connector_id) setSelectedConnector(conv.connector_id);
+    }
     try {
       const { data } = await chatApi.getMessages(convId);
       setMessages(data);
@@ -186,7 +636,7 @@ export default function ChatPage() {
     }
   };
 
-  const appendAssistant = (content: string) => {
+  const appendAssistant = (content: string, thinking?: string) => {
     setMessages((m) => [
       ...m,
       {
@@ -194,6 +644,7 @@ export default function ChatPage() {
         role: "assistant",
         content: content || t.emptyResponse[lang],
         created_at: new Date().toISOString(),
+        metadata: thinking ? { thinking } : undefined,
       },
     ]);
   };
@@ -252,7 +703,7 @@ export default function ChatPage() {
         const title = hasText ? input.slice(0, 40) : pendingFiles[0]?.name || t.newChat[lang];
         const { data } = await chatApi.createConversation({
           title,
-          agent_id: selectedAgent || null,
+          ...conversationContext(),
         });
         convId = data.id;
         setActiveConv(convId);
@@ -284,23 +735,38 @@ export default function ChatPage() {
     setSuggestedQuestions([]);
     setStreaming(true);
     setStreamingContent("");
+    setStreamingThinking("");
 
     let full = "";
+    let thinking = "";
     let streamError = "";
     try {
       if (filesToSend.length > 0) {
-        const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true);
-        for await (const token of streamResponseForm(`/chat/conversations/${convId}/messages`, form)) {
-          full += token;
-          setStreamingContent(full);
+        const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true, messageExtras());
+        for await (const event of streamChatResponseForm(`/chat/conversations/${convId}/messages`, form)) {
+          if (event.thinking) {
+            thinking += event.thinking;
+            setStreamingThinking(thinking);
+          }
+          if (event.token) {
+            full += event.token;
+            setStreamingContent(full);
+          }
         }
       } else {
-        for await (const token of streamResponse(`/chat/conversations/${convId}/messages`, {
+        for await (const event of streamChatResponse(`/chat/conversations/${convId}/messages`, {
           message: msg,
           stream: true,
+          ...messageExtras(),
         })) {
-          full += token;
-          setStreamingContent(full);
+          if (event.thinking) {
+            thinking += event.thinking;
+            setStreamingThinking(thinking);
+          }
+          if (event.token) {
+            full += event.token;
+            setStreamingContent(full);
+          }
         }
       }
     } catch (err: unknown) {
@@ -312,11 +778,12 @@ export default function ChatPage() {
         toast.error(`${t.replyFailed[lang]}: ${streamError}`);
         setStreaming(false);
         setStreamingContent("");
+        setStreamingThinking("");
         return;
       }
       try {
         if (filesToSend.length > 0) {
-          const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, false);
+          const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, false, messageExtras());
           const response = await fetch(`/api/v1/chat/conversations/${convId}/messages`, {
             method: "POST",
             body: form,
@@ -334,9 +801,11 @@ export default function ChatPage() {
           }
           const data = await response.json();
           full = data?.content ?? "";
+          thinking = data?.thinking ?? thinking;
         } else {
-          const { data } = await chatApi.sendMessage(convId!, { message: msg, stream: false });
+          const { data } = await chatApi.sendMessage(convId!, { message: msg, stream: false, ...messageExtras() });
           full = data?.content ?? "";
+          thinking = data?.thinking ?? thinking;
         }
       } catch (err: unknown) {
         const detail =
@@ -346,13 +815,19 @@ export default function ChatPage() {
         toast.error(detail ? `${t.replyFailed[lang]}: ${detail}` : t.replyFailed[lang]);
         setStreaming(false);
         setStreamingContent("");
+        setStreamingThinking("");
         return;
       }
     }
 
-    appendAssistant(full);
+    appendAssistant(full, thinking || undefined);
     setStreamingContent("");
+    setStreamingThinking("");
     setStreaming(false);
+    void loadPendingActions();
+    if (convId && full.trim()) {
+      void fetchDepositSuggestion(convId);
+    }
   };
 
   const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming;
@@ -361,21 +836,13 @@ export default function ChatPage() {
     <div className="flex h-screen">
       <div className="theme-surface flex w-56 flex-col border-r theme-border">
         <div className="p-3">
-          <div className="mb-3 flex gap-2">
-            <select
-              className="flex-1 rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-2 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none"
-              value={selectedAgent}
-              onChange={(e) => setSelectedAgent(e.target.value)}
-            >
-              <option value="">{t.noAgent[lang]}</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-            <button onClick={newConversation} className="rounded-lg bg-blue-600 p-1.5 text-white hover:bg-blue-700 transition-colors">
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
+          <button
+            onClick={newConversation}
+            className="mb-3 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 py-2 text-sm text-white hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            {t.newChat[lang]}
+          </button>
           {conversations.length > 0 && (
             <button
               type="button"
@@ -419,12 +886,12 @@ export default function ChatPage() {
 
       <div className="flex flex-1 flex-col">
         {activeConv && messages.length > 0 && (
-          <div className="flex gap-2 border-b border-[#2d2d4e] bg-[#1a1a2e]/80 px-6 py-2">
+          <div className="chat-export-bar">
             <button
               type="button"
               onClick={saveAsSkill}
               disabled={streaming}
-              className="rounded-lg border border-[#2d2d4e] px-3 py-1 text-xs text-slate-300 hover:border-blue-500/40 hover:text-blue-300 disabled:opacity-40"
+              className="chat-export-btn chat-export-btn-skill"
             >
               {t.saveAsSkill[lang]}
             </button>
@@ -432,18 +899,49 @@ export default function ChatPage() {
               type="button"
               onClick={saveToKnowledge}
               disabled={streaming}
-              className="rounded-lg border border-[#2d2d4e] px-3 py-1 text-xs text-slate-300 hover:border-green-500/40 hover:text-green-300 disabled:opacity-40"
+              className="chat-export-btn chat-export-btn-kb"
             >
               {t.saveToKnowledge[lang]}
+            </button>
+            <button
+              type="button"
+              onClick={() => activeConv && fetchDepositSuggestion(activeConv, true)}
+              disabled={streaming || depositLoading}
+              className="chat-export-btn chat-export-btn-skill ml-auto"
+            >
+              <span className="inline-flex items-center gap-1">
+                <Layers className="h-3 w-3" />
+                {depositLoading ? t.depositAnalyzing[lang] : t.depositTitle[lang]}
+              </span>
             </button>
           </div>
         )}
         <div className="flex-1 space-y-4 overflow-y-auto p-6">
           {messages.length === 0 && !streaming && (
-            <div className="flex h-full flex-col items-center justify-center text-center">
-              <MessageSquare className="mb-4 h-12 w-12 text-slate-600" />
-              <p className="text-slate-400">{t.empty[lang]}</p>
-              <p className="mt-1 text-sm text-slate-500">{t.emptyHint[lang]}</p>
+            <div className="flex h-full flex-col items-center justify-center px-4 text-center">
+              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-500/10">
+                <MessageSquare className="h-8 w-8 text-blue-400" />
+              </div>
+              <h2 className="mb-2 text-xl font-semibold text-white">{t.heroTitle[lang]}</h2>
+              <p className="mb-6 max-w-md text-sm text-slate-400">{t.heroSubtitle[lang]}</p>
+              <SegmentedControl
+                value={scene}
+                onChange={setScene}
+                options={sceneOptions}
+                className="mb-6"
+              />
+              <div className="chat-capsule-scroll max-w-2xl w-full justify-center pb-1">
+                {visibleCapsules.map((cap) => (
+                  <button
+                    key={cap.id}
+                    type="button"
+                    onClick={() => applyCapsule(cap)}
+                    className="chat-capsule-chip"
+                  >
+                    {lang === "zh" ? cap.label.zh : cap.label.en}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {messages.map((msg) => (
@@ -473,6 +971,9 @@ export default function ChatPage() {
                     ))}
                   </div>
                 )}
+                {msg.role === "assistant" && msg.metadata?.thinking && (
+                  <ThinkingBlock content={msg.metadata.thinking} lang={lang} />
+                )}
                 {msg.role === "assistant" ? (
                   <div className="prose prose-sm prose-invert max-w-none">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -481,7 +982,14 @@ export default function ChatPage() {
               </div>
             </div>
           ))}
-          {streaming && !streamingContent && (
+          {streaming && streamingThinking && (
+            <div className="flex justify-start">
+              <div className="max-w-2xl">
+                <ThinkingBlock content={streamingThinking} lang={lang} streaming />
+              </div>
+            </div>
+          )}
+          {streaming && !streamingContent && !streamingThinking && (
             <div className="flex justify-start">
               <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-400">
                 <span className="flex gap-1">
@@ -507,6 +1015,29 @@ export default function ChatPage() {
         </div>
 
         <div className="border-t border-[#2d2d4e] bg-[#1a1a2e] p-4">
+          {messages.length > 0 && (
+            <div className="mb-3 flex items-center gap-2">
+              <SegmentedControl
+                value={scene}
+                onChange={setScene}
+                options={sceneOptions}
+                size="sm"
+              />
+              <div className="chat-capsule-scroll flex-1 min-w-0">
+                {visibleCapsules.map((cap) => (
+                  <button
+                    key={cap.id}
+                    type="button"
+                    onClick={() => applyCapsule(cap)}
+                    className="chat-capsule-chip text-xs py-1"
+                  >
+                    {lang === "zh" ? cap.label.zh : cap.label.en}
+                  </button>
+                ))}
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-slate-600" aria-hidden />
+            </div>
+          )}
           {pendingFiles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
               {pendingFiles.map((file, idx) => (
@@ -552,7 +1083,216 @@ export default function ChatPage() {
               )}
             </div>
           )}
-          <div className="flex items-end gap-2 rounded-xl border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-3">
+          {pendingDesktopTasks.length > 0 && (
+            <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-3">
+              <h4 className="mb-2 text-sm font-medium text-amber-100">{t.desktopConfirmTitle[lang]}</h4>
+              <div className="space-y-2">
+                {pendingDesktopTasks.map((task) => (
+                  <div key={task.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-[#0d0d1a] px-3 py-2 text-xs">
+                    <span className="text-slate-200">
+                      {task.demo_name || task.action}
+                      {task.instructions ? ` · ${task.instructions}` : ""}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={desktopConfirmBusy === task.id}
+                        onClick={() => approveDesktopTask(task.id)}
+                        className="rounded bg-emerald-600 px-2 py-1 text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {t.desktopConfirmApprove[lang]}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={desktopConfirmBusy === task.id}
+                        onClick={() => rejectDesktopTask(task.id)}
+                        className="rounded border border-slate-600 px-2 py-1 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {t.desktopConfirmReject[lang]}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {pendingHarnessActions.length > 0 && (
+            <div className="mb-3 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-3">
+              <h4 className="mb-2 text-sm font-medium text-violet-100">{t.harnessConfirmTitle[lang]}</h4>
+              <div className="space-y-2">
+                {pendingHarnessActions.map((action) => (
+                  <div key={action.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet-500/20 bg-[#0d0d1a] px-3 py-2 text-xs">
+                    <span className="text-slate-200">
+                      {action.tool_name}
+                      {action.risk_level ? ` · ${action.risk_level}` : ""}
+                      {action.tool_args && Object.keys(action.tool_args).length > 0
+                        ? ` · ${JSON.stringify(action.tool_args).slice(0, 80)}`
+                        : ""}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={harnessConfirmBusy === action.id}
+                        onClick={() => approveHarnessAction(action.id)}
+                        className="rounded bg-emerald-600 px-2 py-1 text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {t.harnessConfirmApprove[lang]}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={harnessConfirmBusy === action.id}
+                        onClick={() => rejectHarnessAction(action.id)}
+                        className="rounded border border-slate-600 px-2 py-1 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {t.harnessConfirmReject[lang]}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {(depositLoading || depositOffer) && messages.length > 0 && (
+            <div className="chat-deposit-panel">
+              <h4 className="flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-blue-400" />
+                {depositLoading ? t.depositAnalyzing[lang] : t.depositTitle[lang]}
+              </h4>
+              {!depositLoading && depositOffer && (
+                <>
+                  <p>{t.depositSubtitle[lang]}</p>
+                  <div className="chat-deposit-options">
+                    {depositOffer.suggestions.map((s) => (
+                      <label key={s.type} className="chat-deposit-option">
+                        <input
+                          type="checkbox"
+                          checked={depositSelected.has(s.type)}
+                          onChange={() => toggleDepositType(s.type)}
+                          disabled={depositConfirming}
+                        />
+                        <span>
+                          <strong>{s.title || depositTypeLabel(s.type)}</strong>
+                          {" · "}
+                          {depositTypeLabel(s.type)}
+                          <small>{s.reason}</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {depositOffer.draft?.tasks && depositOffer.draft.tasks.length > 0 && (
+                    <ul className="chat-deposit-tasks">
+                      {depositOffer.draft.tasks.map((task) => (
+                        <li key={`${task.name}-${task.cron_expression}`}>
+                          {task.name}
+                          {task.schedule_label ? ` · ${t.depositSchedule[lang]}: ${task.schedule_label}` : ""}
+                          {task.cron_expression ? ` (${task.cron_expression})` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {depositSelected.has("employee") && (
+                    <label className="chat-deposit-draft-toggle mb-2">
+                      <input
+                        type="checkbox"
+                        checked={depositDraftOnly}
+                        onChange={(e) => setDepositDraftOnly(e.target.checked)}
+                        disabled={depositConfirming}
+                      />
+                      {t.depositDraftOnly[lang]}
+                    </label>
+                  )}
+                  <div className="chat-deposit-actions">
+                    <button
+                      type="button"
+                      onClick={dismissDeposit}
+                      disabled={depositConfirming}
+                      className="chat-export-btn"
+                    >
+                      {t.depositDismiss[lang]}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDeposit}
+                      disabled={depositConfirming || depositSelected.size === 0}
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-40"
+                    >
+                      {depositConfirming ? t.depositAnalyzing[lang] : t.depositConfirm[lang]}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <div className="rounded-xl border border-[#2d2d4e] bg-[#0d0d1a]">
+            <div className="chat-input-toolbar">
+              <Cpu className="h-3.5 w-3.5 text-slate-500" />
+              <select
+                value={selectedModelConfigId}
+                onChange={(e) => setSelectedModelConfigId(e.target.value)}
+                disabled={streaming}
+                title={t.selectModel[lang]}
+              >
+                <option value="">{t.noModel[lang]}</option>
+                {modelConfigs.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}{m.is_default ? " ★" : ""}
+                  </option>
+                ))}
+              </select>
+              <Bot className="h-3.5 w-3.5 text-slate-500" />
+              <select
+                value={selectedAgent}
+                onChange={(e) => setSelectedAgent(e.target.value)}
+                disabled={streaming}
+                title={t.selectAgent[lang]}
+              >
+                <option value="">{t.noAgent[lang]}</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+              <Sparkles className="h-3.5 w-3.5 text-slate-500" />
+              <select
+                value={selectedSkill}
+                onChange={(e) => onSkillChange(e.target.value)}
+                disabled={streaming}
+                title={t.selectSkill[lang]}
+              >
+                <option value="">{t.noSkill[lang]}</option>
+                {skills.map((s) => (
+                  <option key={s.id} value={s.id}>{s.display_name}</option>
+                ))}
+              </select>
+              <FolderOpen className="h-3.5 w-3.5 text-slate-500" />
+              <select
+                value={selectedKbId}
+                onChange={(e) => setSelectedKbId(e.target.value)}
+                disabled={streaming}
+                title={t.selectWorkspace[lang]}
+              >
+                <option value="">{t.noWorkspace[lang]}</option>
+                {knowledgeBases.map((kb) => (
+                  <option key={kb.id} value={kb.id}>
+                    {kb.name}{kb.source_type === "byd_kms" ? (lang === "zh" ? " · 企业" : " · Ent") : (lang === "zh" ? " · 本地" : " · Local")}
+                  </option>
+                ))}
+              </select>
+              <PlugZap className="h-3.5 w-3.5 text-slate-500" />
+              <select
+                value={selectedConnector}
+                onChange={(e) => onConnectorChange(e.target.value)}
+                disabled={streaming}
+                title={t.selectConnector[lang]}
+              >
+                <option value="">{t.noConnector[lang]}</option>
+                {CHAT_CONNECTORS.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {lang === "zh" ? c.label.zh : c.label.en}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-end gap-2 px-3 py-3">
             <input
               ref={fileInputRef}
               type="file"
@@ -611,7 +1351,14 @@ export default function ChatPage() {
             >
               <Send className="h-4 w-4" />
             </button>
+            </div>
           </div>
+          {contextSummary() && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+              <BookOpen className="h-3 w-3 shrink-0" />
+              <span>{t.workspaceHint[lang]}: {contextSummary()}</span>
+            </p>
+          )}
           <p className="mt-1.5 text-center text-xs text-slate-600">
             {isRecording
               ? t.voiceRecording[lang]
@@ -621,6 +1368,64 @@ export default function ChatPage() {
           </p>
         </div>
       </div>
+
+      {connectorSetup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-5 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-white">{t.connectorSetupTitle[lang]}</h3>
+                <p className="mt-1 text-xs text-slate-400">{t.connectorSetupDesc[lang]}</p>
+                <p className="mt-2 text-xs text-blue-300">
+                  {lang === "zh" ? connectorSetup.label.zh : connectorSetup.label.en}
+                  {" · "}
+                  {connectorSetup.imap_host}:{connectorSetup.imap_port}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConnectorSetup(null)}
+                className="rounded p-1 text-slate-500 hover:bg-white/5 hover:text-slate-300"
+                aria-label={translations.common.cancel[lang]}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <input
+                type="email"
+                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50"
+                placeholder={connectorSetup.emailHint?.[lang] || t.connectorEmail[lang]}
+                value={connectorEmail}
+                onChange={(e) => setConnectorEmail(e.target.value)}
+              />
+              <input
+                type="password"
+                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50"
+                placeholder={connectorSetup.passwordHint?.[lang] || t.connectorPassword[lang]}
+                value={connectorPassword}
+                onChange={(e) => setConnectorPassword(e.target.value)}
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConnectorSetup(null)}
+                className="rounded-lg border border-[#2d2d4e] px-4 py-2 text-sm text-slate-300 hover:bg-white/5"
+              >
+                {translations.common.cancel[lang]}
+              </button>
+              <button
+                type="button"
+                onClick={saveConnectorSetup}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+              >
+                {t.connectorSave[lang]}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

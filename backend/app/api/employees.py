@@ -15,7 +15,13 @@ from app.db.models import (
     User,
 )
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_list_visible
+from app.core.auth.permissions import (
+    assert_permission,
+    require_employee_read,
+    require_employee_write,
+    resolve_data_scope,
+    scope_employees_query,
+)
 from app.db.base import generate_uuid
 from app.schemas.employee import (
     EmployeeCreate,
@@ -50,6 +56,7 @@ def _employee_response(emp: DigitalEmployee, task_count: int = 0) -> EmployeeRes
         knowledge_base_ids=emp.knowledge_base_ids or [],
         timezone=emp.timezone,
         task_count=task_count,
+        metadata=emp.metadata_ or {},
         created_at=emp.created_at,
         updated_at=emp.updated_at,
     )
@@ -87,7 +94,7 @@ def _task_run_response(run: EmployeeTaskRun, task_name: str | None = None) -> Ta
 
 
 @router.get("/scheduler/status")
-async def scheduler_status():
+async def scheduler_status(user: User = Depends(get_current_user)):
     return EmployeeScheduler.get_instance().status()
 
 
@@ -96,9 +103,11 @@ async def list_employees(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    scope = await resolve_data_scope(db, user)
+    assert_permission(scope, "employees:read")
     result = await db.execute(
         select(DigitalEmployee)
-        .where(scope_list_visible(DigitalEmployee, user))
+        .where(scope_employees_query(DigitalEmployee, scope))
         .order_by(DigitalEmployee.updated_at.desc())
     )
     employees = result.scalars().all()
@@ -128,6 +137,9 @@ async def import_employee_template(
 ):
     from app.core.employees.importer import import_template
 
+    scope = await resolve_data_scope(db, user)
+    assert_permission(scope, "employees:write")
+
     try:
         emp, task_count = await import_template(
             db,
@@ -148,13 +160,22 @@ async def import_employee_template(
 
 
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
-async def create_employee(payload: EmployeeCreate, db: AsyncSession = Depends(get_db)):
+async def create_employee(
+    payload: EmployeeCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    scope = await resolve_data_scope(db, user)
+    assert_permission(scope, "employees:write")
+
     agent = await db.get(AgentModel, payload.agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     emp = DigitalEmployee(
         id=generate_uuid(),
+        owner_id=user.id,
+        department_id=user.primary_department_id,
         name=payload.name,
         title=payload.title,
         description=payload.description,
@@ -171,10 +192,12 @@ async def create_employee(payload: EmployeeCreate, db: AsyncSession = Depends(ge
 
 
 @router.get("/{employee_id}", response_model=EmployeeResponse)
-async def get_employee(employee_id: str, db: AsyncSession = Depends(get_db)):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+async def get_employee(
+    employee_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    emp = await require_employee_read(db, user, employee_id)
     count_result = await db.execute(
         select(func.count()).where(EmployeeScheduledTask.employee_id == employee_id)
     )
@@ -186,10 +209,9 @@ async def update_employee(
     employee_id: str,
     payload: EmployeeUpdate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    emp, _scope = await require_employee_write(db, user, employee_id)
 
     data = payload.model_dump(exclude_none=True)
     if "agent_id" in data:
@@ -212,18 +234,22 @@ async def update_employee(
 
 
 @router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_employee(employee_id: str, db: AsyncSession = Depends(get_db)):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+async def delete_employee(
+    employee_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    emp, _scope = await require_employee_write(db, user, employee_id)
     await db.delete(emp)
 
 
 @router.get("/{employee_id}/tasks", response_model=list[ScheduledTaskResponse])
-async def list_tasks(employee_id: str, db: AsyncSession = Depends(get_db)):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+async def list_tasks(
+    employee_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await require_employee_read(db, user, employee_id)
     result = await db.execute(
         select(EmployeeScheduledTask)
         .where(EmployeeScheduledTask.employee_id == employee_id)
@@ -237,10 +263,9 @@ async def create_task(
     employee_id: str,
     payload: ScheduledTaskCreate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    emp, _scope = await require_employee_write(db, user, employee_id)
 
     tz = payload.timezone or emp.timezone
     try:
@@ -276,7 +301,9 @@ async def update_task(
     task_id: str,
     payload: ScheduledTaskUpdate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    await require_employee_write(db, user, employee_id)
     task = await _get_task(db, employee_id, task_id)
     data = payload.model_dump(exclude_none=True)
     for field, value in data.items():
@@ -295,16 +322,25 @@ async def update_task(
 
 
 @router.delete("/{employee_id}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(employee_id: str, task_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_task(
+    employee_id: str,
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await require_employee_write(db, user, employee_id)
     task = await _get_task(db, employee_id, task_id)
     await db.delete(task)
 
 
 @router.post("/{employee_id}/tasks/{task_id}/run", response_model=TaskRunResponse)
-async def run_task_manually(employee_id: str, task_id: str, db: AsyncSession = Depends(get_db)):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+async def run_task_manually(
+    employee_id: str,
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    emp, scope = await require_employee_write(db, user, employee_id)
     task = await _get_task(db, employee_id, task_id)
     try:
         run = await run_scheduled_task(db, task, emp, triggered_by="manual")
@@ -321,10 +357,9 @@ async def list_employee_runs(
     employee_id: str,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    await require_employee_read(db, user, employee_id)
     result = await db.execute(
         select(EmployeeTaskRun, EmployeeScheduledTask.name)
         .join(EmployeeScheduledTask, EmployeeTaskRun.task_id == EmployeeScheduledTask.id)
@@ -336,7 +371,13 @@ async def list_employee_runs(
 
 
 @router.get("/{employee_id}/runs/{run_id}", response_model=TaskRunResponse)
-async def get_employee_run(employee_id: str, run_id: str, db: AsyncSession = Depends(get_db)):
+async def get_employee_run(
+    employee_id: str,
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await require_employee_read(db, user, employee_id)
     run, task = await _get_run_with_task(db, employee_id, run_id)
     return _task_run_response(run, task.name if task else None)
 
@@ -346,10 +387,9 @@ async def download_employee_run(
     employee_id: str,
     run_id: str,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    emp = await require_employee_read(db, user, employee_id)
     run, task = await _get_run_with_task(db, employee_id, run_id)
     markdown = _run_markdown(run, task, emp.name)
     filename = (run.output_data or {}).get("report_filename") or f"run_{run.id[:8]}.md"
@@ -368,9 +408,10 @@ async def save_employee_run_to_knowledge(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    emp = await db.get(DigitalEmployee, employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    emp = await require_employee_read(db, user, employee_id)
+    scope = await resolve_data_scope(db, user)
+    if not scope.can_write_employee(emp):
+        raise HTTPException(status_code=403, detail="Forbidden")
     run, task = await _get_run_with_task(db, employee_id, run_id)
     try:
         kb, doc = await export_run_to_knowledge(

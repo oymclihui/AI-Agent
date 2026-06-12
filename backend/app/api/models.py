@@ -12,6 +12,8 @@ from app.schemas.model import (
     ModelConfigCreate,
     ModelConfigUpdate,
     ModelConfigResponse,
+    ModelConnectionTestRequest,
+    ModelConnectionTestResponse,
     build_config_payload,
     response_inference_params,
 )
@@ -169,6 +171,46 @@ async def set_default_model_config(config_id: str, db: AsyncSession = Depends(ge
     await db.refresh(cfg)
     ModelRouter.clear_cache()
     return _to_response(cfg)
+
+
+@router.post("/test-connection", response_model=ModelConnectionTestResponse)
+async def test_model_connection_preview(
+    payload: ModelConnectionTestRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.models_hub.connectivity import test_model_connection
+
+    result = await test_model_connection(
+        provider=payload.provider,
+        model_id=payload.model_id,
+        base_url=(payload.base_url or "").strip() or None,
+        db=db,
+        user_id=user.id,
+    )
+    return ModelConnectionTestResponse(**result)
+
+
+@router.post("/configs/{config_id}/test-connection", response_model=ModelConnectionTestResponse)
+async def test_model_config_connection(
+    config_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.models_hub.connectivity import test_model_connection
+
+    cfg = await db.get(ModelConfig, config_id)
+    if not cfg or not cfg.is_active:
+        raise HTTPException(status_code=404, detail="Model config not found")
+
+    result = await test_model_connection(
+        provider=cfg.provider,
+        model_id=cfg.model_id,
+        base_url=cfg.base_url,
+        db=db,
+        user_id=user.id,
+    )
+    return ModelConnectionTestResponse(**result)
 
 
 @router.delete("/configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,0 +1,52 @@
+{
+  "template_id": "desktop-replay-demo",
+  "name_zh": "桌面演示回放",
+  "name_en": "Desktop Demo Replay",
+  "description_zh": "通过本机 Sidecar 回放已录制的桌面 GUI 演示。在 input 中传入 demo_name（演示名称）。需先启动 scripts/desktop_sidecar.py。",
+  "description_en": "Replay a recorded desktop GUI demo via local sidecar. Pass demo_name in input_data. Requires desktop_sidecar.py running.",
+  "process_type": "sequential",
+  "input_schema": {
+    "demo_name": "演示名称（必填）",
+    "input": "可选说明，会作为回放 instructions"
+  },
+  "input_example": {
+    "demo_name": "SAP 月结导出",
+    "input": "按标准流程导出本月报表"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "start",
+        "type": "startNode",
+        "catalog_id": "start",
+        "label": "开始",
+        "position": { "x": 80, "y": 40 },
+        "config": {}
+      },
+      {
+        "id": "replay",
+        "type": "desktop_replay",
+        "catalog_id": "desktopReplay",
+        "label": "桌面回放",
+        "position": { "x": 80, "y": 180 },
+        "config": {
+          "demo_name": "{demo_name}",
+          "instructions": "{input}",
+          "wait_timeout": 120
+        }
+      },
+      {
+        "id": "end",
+        "type": "endNode",
+        "catalog_id": "end",
+        "label": "完成",
+        "position": { "x": 80, "y": 320 },
+        "config": {}
+      }
+    ],
+    "edges": [
+      { "id": "start->replay", "source": "start", "target": "replay" },
+      { "id": "replay->end", "source": "replay", "target": "end" }
+    ]
+  }
+}

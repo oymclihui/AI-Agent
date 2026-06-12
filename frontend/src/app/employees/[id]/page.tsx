@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History, Eye, Download, BookOpen,
 } from "lucide-react";
-import { employeesApi, knowledgeApi } from "@/lib/api";
+import { employeesApi, knowledgeApi, desktopAutomationApi } from "@/lib/api";
 import { resolveRunArtifacts, downloadAuthed, type RunArtifact } from "@/lib/artifacts";
 import { getAuthToken } from "@/lib/authStore";
 import { ArtifactDownloadButton } from "@/components/ArtifactDownloadButton";
@@ -22,9 +22,13 @@ interface Employee {
 interface Task {
   id: string; name: string; description: string | null; enabled: boolean;
   schedule_type: "cron" | "interval"; cron_expression: string | null;
-  interval_seconds: number | null; timezone: string; task_config: { prompt?: string };
+  interval_seconds: number | null; timezone: string;
+  task_type?: string;
+  task_config: { prompt?: string; demo_name?: string; demo_id?: string; instructions?: string };
   last_run_at: string | null; next_run_at: string | null; last_status: string | null;
 }
+
+interface DemoOption { id: string; name: string; }
 
 interface Run {
   id: string; status: string; triggered_by: string; task_name?: string | null;
@@ -32,6 +36,7 @@ interface Run {
     output?: string;
     artifacts?: Array<{ filename: string; download_url: string }>;
     saved_to_kb_id?: string;
+    report_filename?: string;
   } | null;
   error_message: string | null;
   duration_ms: number | null; created_at: string;
@@ -73,9 +78,13 @@ export default function EmployeeDetailPage() {
     schedule_type: "cron" as "cron" | "interval",
     cron_expression: "0 9 * * 1-5",
     interval_seconds: 3600,
+    task_type: "agent" as "agent" | "desktop_automation",
     prompt: "",
+    demo_name: "",
+    instructions: "",
     enabled: true,
   });
+  const [demoOptions, setDemoOptions] = useState<DemoOption[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -102,16 +111,37 @@ export default function EmployeeDetailPage() {
     }).catch(() => { /* optional */ });
   }, []);
 
+  useEffect(() => {
+    if (!showTaskModal) return;
+    desktopAutomationApi.listDemos()
+      .then(({ data }) => setDemoOptions((data as DemoOption[]) || []))
+      .catch(() => setDemoOptions([]));
+  }, [showTaskModal]);
+
   const createTask = async () => {
-    if (!taskForm.name.trim() || !taskForm.prompt.trim()) return;
+    if (!taskForm.name.trim()) return;
+    if (taskForm.task_type === "agent" && !taskForm.prompt.trim()) return;
+    if (taskForm.task_type === "desktop_automation" && !taskForm.demo_name.trim()) {
+      toast.error(e.demoNameRequired[lang]);
+      return;
+    }
     try {
+      const task_config =
+        taskForm.task_type === "desktop_automation"
+          ? {
+              demo_name: taskForm.demo_name.trim(),
+              instructions: taskForm.instructions.trim() || undefined,
+              timeout_s: 120,
+            }
+          : { prompt: taskForm.prompt };
       await employeesApi.createTask(id, {
         name: taskForm.name,
         description: taskForm.description,
         schedule_type: taskForm.schedule_type,
         cron_expression: taskForm.schedule_type === "cron" ? taskForm.cron_expression : null,
         interval_seconds: taskForm.schedule_type === "interval" ? taskForm.interval_seconds : null,
-        task_config: { prompt: taskForm.prompt },
+        task_type: taskForm.task_type,
+        task_config,
         enabled: taskForm.enabled,
       });
       setShowTaskModal(false);
@@ -268,7 +298,14 @@ export default function EmployeeDetailPage() {
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <h3 className="font-medium text-white">{task.name}</h3>
-                      <p className="mt-1 line-clamp-2 text-xs text-slate-400">{task.task_config?.prompt}</p>
+                      <p className="mt-0.5 text-[10px] uppercase text-teal-500/80">
+                        {task.task_type === "desktop_automation" ? e.taskTypeDesktop[lang] : e.taskTypeAgent[lang]}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-xs text-slate-400">
+                        {task.task_type === "desktop_automation"
+                          ? (task.task_config?.demo_name || task.task_config?.demo_id || "—")
+                          : task.task_config?.prompt}
+                      </p>
                       <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-500">
                         <span>{task.schedule_type === "cron" ? task.cron_expression : `${task.interval_seconds}s`}</span>
                         <span>{e.nextRun[lang]}: {fmtTime(task.next_run_at)}</span>
@@ -489,9 +526,45 @@ export default function EmployeeDetailPage() {
                     onChange={(ev) => setTaskForm((f) => ({ ...f, interval_seconds: Number(ev.target.value) }))} />
                 )}
               </div>
-              <textarea placeholder={e.prompt[lang]} rows={4}
-                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
-                value={taskForm.prompt} onChange={(ev) => setTaskForm((f) => ({ ...f, prompt: ev.target.value }))} />
+              <div>
+                <label className="mb-1 block text-xs text-slate-500">{e.taskType[lang]}</label>
+                <select
+                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  value={taskForm.task_type}
+                  onChange={(ev) => setTaskForm((f) => ({
+                    ...f,
+                    task_type: ev.target.value as "agent" | "desktop_automation",
+                  }))}
+                >
+                  <option value="agent">{e.taskTypeAgent[lang]}</option>
+                  <option value="desktop_automation">{e.taskTypeDesktop[lang]}</option>
+                </select>
+              </div>
+              {taskForm.task_type === "desktop_automation" ? (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">{e.demoName[lang]}</label>
+                    <select
+                      className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      value={taskForm.demo_name}
+                      onChange={(ev) => setTaskForm((f) => ({ ...f, demo_name: ev.target.value }))}
+                    >
+                      <option value="">{e.selectDemo[lang]}</option>
+                      {demoOptions.map((d) => (
+                        <option key={d.id} value={d.name}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <textarea placeholder={e.instructions[lang]} rows={3}
+                    className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                    value={taskForm.instructions}
+                    onChange={(ev) => setTaskForm((f) => ({ ...f, instructions: ev.target.value }))} />
+                </>
+              ) : (
+                <textarea placeholder={e.prompt[lang]} rows={4}
+                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  value={taskForm.prompt} onChange={(ev) => setTaskForm((f) => ({ ...f, prompt: ev.target.value }))} />
+              )}
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button onClick={() => setShowTaskModal(false)} className="text-sm text-slate-400">{c.cancel[lang]}</button>

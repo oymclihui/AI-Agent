@@ -1,0 +1,51 @@
+{
+  "template_id": "nev-cost-accounting-weekly",
+  "name_zh": "制造企业 · 制造成本分析",
+  "name_en": "Manufacturing · Cost Analysis",
+  "description_zh": "单台成本拆解、BOM 变动与降本项目财务验证。",
+  "description_en": "Unit cost breakdown, BOM changes, and cost-down project validation.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "单台成本拆解", "query": "制造产品单台成本应如何拆解到材料人工制造费用" },
+    { "label": "降本财务验证", "query": "采购降本项目如何用财务数据验证效果" }
+  ],
+  "agent": {
+    "name": "成本会计顾问",
+    "role": "Cost Accountant (Manufacturing)",
+    "goal": "分析制造业务的单台成本、BOM 变动与降本项目财务验证。",
+    "backstory": "熟悉标准成本、实际成本差异与制造费用分摊。",
+    "tools": ["calculator", "datetime"],
+    "temperature": 0.3,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "成本会计 助理",
+    "title": "成本会计助理",
+    "description": "每周生成制造成本分析与差异说明框架。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 4,
+      "org_rank": 0,
+      "org_reports_to": "nev-controller-manufacturing-daily",
+      "org_cadence": "weekly"
+    }
+  },
+  "tasks": [
+    {
+      "name": "制造成本分析周报",
+      "description": "每周一 11:00 生成成本分析框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 11 * * 1",
+      "task_config": {
+        "prompt": "你是制造企业成本会计数字助手。撰写「制造成本分析周报」框架（中文）：\n1. 主销产品单台成本 waterfall（材料/人工/制造费用/关键子件占比）【待填】\n2. 本周 BOM/工艺变更对成本的影响清单\n3. 材料价格与采购降本贡献（正/负向）\n4. 工费与稼动率差异（固定/变动）\n5. 降本项目里程碑与财务验证点\n6. 需财务与制造联合澄清的 3 个差异项\n\n附表示例列名，便于对接 ERP 导出。"
+      },
+      "enabled": true
+    }
+  ]
+}

@@ -29,6 +29,7 @@ const ICONS: Record<string, LucideIcon> = {
   database: Database, search: Search, "hard-drive": HardDrive, users: Users,
   video: Video, twitter: Twitter, linkedin: Linkedin, radio: Radio,
   "sticky-note": StickyNote, play: Play, layers: Layers,
+  "mouse-pointer": Gamepad2,
 };
 
 export default function GenericWorkflowNode({ data, selected }: NodeProps) {

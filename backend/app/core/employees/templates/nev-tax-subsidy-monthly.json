@@ -1,0 +1,51 @@
+{
+  "template_id": "nev-tax-subsidy-monthly",
+  "name_zh": "制造企业 · 税务与政策财务",
+  "name_en": "Manufacturing · Tax & Policy Finance",
+  "description_zh": "行业财税政策、出口退税与优惠合规的月度跟踪与财务影响评估。",
+  "description_en": "Monthly tracking of tax incentives, export rebates, and compliance impacts.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "政策财务影响", "query": "行业财税政策变动对制造企业报表有何影响" },
+    { "label": "出口退税核对", "query": "出口业务退税与收汇财务核对清单" }
+  ],
+  "agent": {
+    "name": "税务政策顾问",
+    "role": "Tax & Policy Finance (Manufacturing)",
+    "goal": "跟踪制造相关企业财税政策变化，评估对报表、现金流与合规的影响。",
+    "backstory": "熟悉制造业增值税、出口退税、研发加计扣除等政策财务处理。",
+    "tools": ["calculator", "datetime", "web_search"],
+    "temperature": 0.3,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "税务政策 助理",
+    "title": "税务与政策财务助理",
+    "description": "每月生成财税政策跟踪与合规影响评估框架。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 3,
+      "org_rank": 3,
+      "org_reports_to": "nev-vp-finance-weekly",
+      "org_cadence": "monthly"
+    }
+  },
+  "tasks": [
+    {
+      "name": "财税政策月报",
+      "description": "每月 5 日 09:00 生成政策月报框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 9 5 * *",
+      "task_config": {
+        "prompt": "你是制造企业税务与政策财务助手。撰写「财税政策与合规月报」框架（中文）：\n1. 本月政策/监管动态摘要（补贴、出口、研发优惠等；注明信息需复核来源）\n2. 对 P&L / 现金流 / 递延收益的潜在影响路径\n3. 本月申报与合规关键日期日历\n4. 出口业务退税与收汇核对清单\n5. 需外部顾问或集团税务确认的问题 3 条\n\n免责声明：政策解读供内部讨论，不构成法律意见。"
+      },
+      "enabled": true
+    }
+  ]
+}

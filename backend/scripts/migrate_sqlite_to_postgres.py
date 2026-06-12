@@ -22,13 +22,11 @@ Flags:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_ROOT))
@@ -36,123 +34,13 @@ sys.path.insert(0, str(BACKEND_ROOT))
 load_dotenv(BACKEND_ROOT / ".env")
 
 from app.config import settings  # noqa: E402
-from app.db.base import Base  # noqa: E402
-from app.db import models  # noqa: F401, E402
 from app.database_url import is_postgresql_url, is_sqlite_url, to_sync_url  # noqa: E402
-
-TABLES_IN_ORDER = [
-    "users",
-    "password_reset_tokens",
-    "model_configs",
-    "agents",
-    "skills",
-    "tool_definitions",
-    "knowledge_bases",
-    "workflows",
-    "user_mailbox_credentials",
-    "user_model_credentials",
-    "conversations",
-    "messages",
-    "documents",
-    "agent_executions",
-    "workflow_executions",
-    "digital_employees",
-    "employee_scheduled_tasks",
-    "employee_task_runs",
-]
-
-
-def _normalize_value(value, col_type: str | None = None):
-    if isinstance(value, memoryview):
-        return bytes(value)
-    if col_type == "BOOLEAN" and value is not None:
-        if isinstance(value, bool):
-            return value
-        return bool(int(value))
-    if col_type in ("JSON", "JSONB"):
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, ensure_ascii=False)
-        if isinstance(value, str):
-            try:
-                json.loads(value)
-                return value
-            except json.JSONDecodeError:
-                return value
-    return value
-
-
-def _row_to_params(row: dict, bool_cols: set[str] | None = None, json_cols: set[str] | None = None) -> dict:
-    bool_cols = bool_cols or set()
-    json_cols = json_cols or set()
-    out = {}
-    for key, val in row.items():
-        if key in bool_cols:
-            out[key] = _normalize_value(val, "BOOLEAN")
-        elif key in json_cols:
-            out[key] = _normalize_value(val, "JSON")
-        else:
-            out[key] = _normalize_value(val)
-    return out
-
-
-def count_rows(engine: Engine, table: str) -> int:
-    with engine.connect() as conn:
-        if not inspect(conn).has_table(table):
-            return 0
-        return conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar_one()
-
-
-def list_tables(engine: Engine) -> set[str]:
-    return set(inspect(engine).get_table_names())
-
-
-def truncate_target(engine: Engine, tables: list[str]) -> None:
-    existing = list_tables(engine)
-    ordered = [t for t in reversed(tables) if t in existing]
-    if not ordered:
-        return
-    joined = ", ".join(f'"{t}"' for t in ordered)
-    with engine.begin() as conn:
-        conn.execute(text(f"TRUNCATE TABLE {joined} RESTART IDENTITY CASCADE"))
-
-
-def copy_table(src: Engine, tgt: Engine, table: str, dry_run: bool) -> int:
-    src_insp = inspect(src)
-    tgt_insp = inspect(tgt)
-    if not src_insp.has_table(table):
-        return 0
-    if not tgt_insp.has_table(table):
-        raise RuntimeError(f"Target missing table: {table}")
-
-    columns = [c["name"] for c in src_insp.get_columns(table)]
-    tgt_cols = {c["name"]: c for c in tgt_insp.get_columns(table)}
-    bool_cols = {
-        name for name in columns
-        if str(tgt_cols.get(name, {}).get("type", "")).upper().startswith("BOOLEAN")
-    }
-    json_cols = {
-        name for name in columns
-        if "JSON" in str(tgt_cols.get(name, {}).get("type", "")).upper()
-    }
-    col_list = ", ".join(f'"{c}"' for c in columns)
-    placeholders = ", ".join(f":{c}" for c in columns)
-    insert_sql = text(
-        f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders}) '
-        f'ON CONFLICT ("id") DO NOTHING'
-    )
-
-    with src.connect() as src_conn:
-        rows = src_conn.execute(text(f'SELECT {col_list} FROM "{table}"')).mappings().all()
-
-    if dry_run:
-        return len(rows)
-
-    copied = 0
-    with tgt.begin() as tgt_conn:
-        for row in rows:
-            tgt_conn.execute(insert_sql, _row_to_params(dict(row), bool_cols, json_cols))
-            copied += 1
-    return copied
+from scripts.migrate_common import (  # noqa: E402
+    copy_all_tables,
+    print_row_counts,
+    resolve_tables,
+    test_connection,
+)
 
 
 def main() -> int:
@@ -202,46 +90,29 @@ def main() -> int:
     tgt_engine = create_engine(tgt_url)
 
     try:
-        with tgt_engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        print("Target PostgreSQL connection: OK")
+        test_connection(tgt_engine, "Target PostgreSQL")
     except Exception as exc:
         print(f"ERROR: Cannot connect to PostgreSQL: {exc}", file=sys.stderr)
         return 1
 
-    src_tables = list_tables(src_engine)
-    tables = [t for t in TABLES_IN_ORDER if t in src_tables]
-    extra = sorted(src_tables - set(TABLES_IN_ORDER))
+    tables, extra = resolve_tables(src_engine)
     if extra:
         print(f"Note: skipping unknown SQLite tables: {', '.join(extra)}")
 
-    summary = {}
-    for table in tables:
-        summary[table] = count_rows(src_engine, table)
+    print_row_counts(src_engine, tables, title="Source row counts:")
 
-    print("\nSource row counts:")
-    for table, n in summary.items():
-        print(f"  {table}: {n}")
-    print(f"  TOTAL: {sum(summary.values())}")
+    copied_total = copy_all_tables(
+        src_engine,
+        tgt_engine,
+        tables,
+        dry_run=args.dry_run,
+        clear=args.clear,
+        skip_create=args.skip_create,
+    )
 
     if args.dry_run:
         print("\nDry run — no data written.")
         return 0
-
-    if not args.skip_create:
-        print("\nCreating/updating PostgreSQL schema (create_all)...")
-        Base.metadata.create_all(tgt_engine)
-
-    if args.clear:
-        print("Truncating target tables...")
-        truncate_target(tgt_engine, tables)
-
-    print("\nCopying data...")
-    copied_total = 0
-    for table in tables:
-        n = copy_table(src_engine, tgt_engine, table, dry_run=False)
-        copied_total += n
-        print(f"  {table}: {n} rows")
 
     print(f"\nDone. Copied {copied_total} rows to PostgreSQL.")
     print(

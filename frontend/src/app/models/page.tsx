@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Cpu, CheckCircle, Server, Cloud, Plus, Pencil, Trash2, Star } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Cpu, CheckCircle, Server, Cloud, Plus, Pencil, Trash2, Star, Loader2, PlugZap, Search } from "lucide-react";
 import { modelsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
+import { agentAvatarTone } from "@/lib/agentCatalog";
 import toast from "react-hot-toast";
 
 interface Model {
@@ -36,11 +37,48 @@ interface Config {
 
 const PROVIDERS = ["ollama", "openai", "anthropic", "azure"] as const;
 
-const providerColors: Record<string, string> = {
-  openai:    "text-green-400 bg-green-400/10 border-green-400/30",
-  anthropic: "text-orange-400 bg-orange-400/10 border-orange-400/30",
-  ollama:    "text-purple-400 bg-purple-400/10 border-purple-400/30",
-  azure:     "text-blue-400 bg-blue-400/10 border-blue-400/30",
+type ProviderFilter = "all" | (typeof PROVIDERS)[number];
+
+const PROVIDER_SCENES: Array<{
+  id: ProviderFilter;
+  title: { zh: string; en: string };
+  subtitle: { zh: string; en: string };
+  tone: string;
+}> = [
+  {
+    id: "ollama",
+    title: { zh: "Ollama 本地", en: "Ollama Local" },
+    subtitle: { zh: "私有化部署 · 离线推理", en: "Private deployment · offline inference" },
+    tone: "agents-scene-finance",
+  },
+  {
+    id: "openai",
+    title: { zh: "OpenAI", en: "OpenAI" },
+    subtitle: { zh: "GPT 系列云端模型", en: "GPT family cloud models" },
+    tone: "agents-scene-data",
+  },
+  {
+    id: "anthropic",
+    title: { zh: "Anthropic", en: "Anthropic" },
+    subtitle: { zh: "Claude 系列模型", en: "Claude family models" },
+    tone: "agents-scene-content",
+  },
+  {
+    id: "azure",
+    title: { zh: "Azure OpenAI", en: "Azure OpenAI" },
+    subtitle: { zh: "企业级 Azure 接入", en: "Enterprise Azure access" },
+    tone: "agents-scene-tech",
+  },
+];
+
+const providerBadgeClass = (provider: string) => {
+  const map: Record<string, string> = {
+    openai: "agents-badge agents-badge-chat",
+    anthropic: "agents-badge agents-badge-master",
+    ollama: "agents-badge agents-badge-beta",
+    azure: "agents-badge",
+  };
+  return map[provider] ?? "agents-badge";
 };
 
 const emptyInference = {
@@ -131,6 +169,10 @@ export default function ModelsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testingForm, setTestingForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState<ProviderFilter>("all");
 
   const load = useCallback(async () => {
     try {
@@ -147,6 +189,36 @@ export default function ModelsPage() {
   }, [lang]);
 
   useEffect(() => { load(); }, [load]);
+
+  const filteredConfigs = useMemo(() => {
+    let list = [...configs];
+    if (providerFilter !== "all") list = list.filter((cfg) => cfg.provider === providerFilter);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (cfg) =>
+          cfg.name.toLowerCase().includes(q) ||
+          cfg.model_id.toLowerCase().includes(q) ||
+          cfg.provider.toLowerCase().includes(q),
+      );
+    }
+    return list.sort((a, b) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0));
+  }, [configs, providerFilter, searchQuery]);
+
+  const filteredModels = useMemo(() => {
+    let list = [...models];
+    if (providerFilter !== "all") list = list.filter((mod) => mod.provider === providerFilter);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) list = list.filter((mod) => mod.model.toLowerCase().includes(q) || mod.provider.toLowerCase().includes(q));
+    return list;
+  }, [models, providerFilter, searchQuery]);
+
+  const sceneModels = (provider: ProviderFilter) => {
+    const source = provider === "all" ? models : models.filter((mod) => mod.provider === provider);
+    return source.slice(0, 4).map((mod) => mod.model);
+  };
+
+  const modelInitial = (name: string) => (name.trim()[0] || "M").toUpperCase();
 
   const openCreate = () => {
     setEditingId(null);
@@ -234,160 +306,303 @@ export default function ModelsPage() {
     }
   };
 
+  const showTestResult = (data: { ok: boolean; message?: string; latency_ms?: number; preview?: string | null }) => {
+    if (data.ok) {
+      const extra = data.preview ? `: ${String(data.preview).slice(0, 80)}` : "";
+      toast.success(`${m.testOk[lang]} (${data.latency_ms ?? 0}ms)${extra}`);
+    } else {
+      toast.error(data.message ? `${m.testFail[lang]}: ${data.message}` : m.testFail[lang]);
+    }
+  };
+
+  const testConfig = async (cfg: Config) => {
+    setTestingId(cfg.id);
+    try {
+      const { data } = await modelsApi.testConfigConnection(cfg.id);
+      showTestResult(data);
+    } catch (err: unknown) {
+      const res = (err as { response?: { status?: number; data?: { detail?: string } } })?.response;
+      const detail = res?.data?.detail;
+      if (res?.status === 404 && (detail === "Not Found" || !detail)) {
+        toast.error(
+          lang === "zh"
+            ? "测试接口未找到，请重启后端（start_backend.ps1）后重试"
+            : "Test API not found — restart the backend and try again",
+        );
+      } else {
+        toast.error(detail ? `${m.testFail[lang]}: ${detail}` : m.testFail[lang]);
+      }
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const testFormConnection = async () => {
+    if (!form.provider.trim() || !form.model_id.trim()) {
+      toast.error(m.testNeedFields[lang]);
+      return;
+    }
+    setTestingForm(true);
+    try {
+      const { data } = await modelsApi.testConnection({
+        provider: form.provider,
+        model_id: form.model_id.trim(),
+        base_url: form.base_url.trim() || undefined,
+      });
+      showTestResult(data);
+    } catch (err: unknown) {
+      const res = (err as { response?: { status?: number; data?: { detail?: string } } })?.response;
+      const detail = res?.data?.detail;
+      if (res?.status === 404 && (detail === "Not Found" || !detail)) {
+        toast.error(
+          lang === "zh"
+            ? "测试接口未找到，请重启后端（start_backend.ps1）后重试"
+            : "Test API not found — restart the backend and try again",
+        );
+      } else {
+        toast.error(detail ? `${m.testFail[lang]}: ${detail}` : m.testFail[lang]);
+      }
+    } finally {
+      setTestingForm(false);
+    }
+  };
+
   const infField = (key: keyof typeof emptyInference, placeholder: string, step = "any") => (
     <input
       type="number"
       step={step}
       placeholder={placeholder}
-      className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+      className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
       value={form[key]}
       onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
     />
   );
 
+  const providerFilters: ProviderFilter[] = ["all", ...PROVIDERS];
+
   return (
-    <div className="p-8">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div className="agents-hub">
+      <div className="agents-hub-header">
         <div>
-          <h1 className="text-2xl font-bold text-white">{m.title[lang]}</h1>
-          <p className="text-slate-400">{m.subtitle[lang]}</p>
+          <h1>{m.title[lang]}</h1>
+          <p>{m.subtitle[lang]}</p>
         </div>
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-        >
-          <Plus className="h-4 w-4" /> {m.newConfig[lang]}
-        </button>
+        <div className="agents-hub-actions">
+          <button type="button" onClick={openCreate} className="agents-btn-primary">
+            <Plus className="h-4 w-4" /> {m.newConfig[lang]}
+          </button>
+        </div>
       </div>
 
       {ollamaOnline && (
-        <div className="mb-6 flex items-center gap-2 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-400">
+        <div className="hub-status-banner">
           <Server className="h-4 w-4" />
           {m.serverOnline[lang]}
         </div>
       )}
 
-      <div className="mb-8">
-        <h2 className="mb-4 text-lg font-semibold text-white">{m.activeConfigs[lang]}</h2>
+      <div className="agents-hub-toolbar">
+        <div className="agents-hub-search">
+          <Search className="h-4 w-4 shrink-0 theme-muted" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={m.searchPlaceholder[lang]}
+          />
+        </div>
+      </div>
+
+      {models.length > 0 && (
+        <section className="agents-featured">
+          <h2 className="agents-featured-title">{m.featuredTitle[lang]}</h2>
+          <div className="agents-featured-scroll">
+            {PROVIDER_SCENES.map((scene) => {
+              const items = sceneModels(scene.id);
+              return (
+                <button
+                  key={scene.id}
+                  type="button"
+                  className={`agents-scene-card ${scene.tone}`}
+                  onClick={() => setProviderFilter(scene.id)}
+                >
+                  <div>
+                    <h3>{lang === "zh" ? scene.title.zh : scene.title.en}</h3>
+                    <p>{lang === "zh" ? scene.subtitle.zh : scene.subtitle.en}</p>
+                  </div>
+                  <ul className="agents-scene-list">
+                    {items.length > 0 ? (
+                      items.map((name) => <li key={name}>{name}</li>)
+                    ) : (
+                      <li>{lang === "zh" ? "暂无模型" : "No models"}</li>
+                    )}
+                  </ul>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <div className="agents-filter-row">
+        <div className="agents-filter-scroll">
+          {providerFilters.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setProviderFilter(id)}
+              className={`agents-filter-pill${providerFilter === id ? " agents-filter-pill-active" : ""}`}
+            >
+              {id === "all" ? m.filterAll[lang] : id}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <section className="hub-section">
+        <h2 className="hub-section-title">{m.activeConfigs[lang]}</h2>
         {configs.length === 0 ? (
-          <p className="text-sm text-slate-500">{lang === "zh" ? "暂无配置，点击「新建配置」添加。" : "No configs yet. Click New Config."}</p>
+          <div className="agents-empty py-12">
+            <Cpu className="mb-4 h-10 w-10 opacity-40" />
+            <p>{lang === "zh" ? "暂无配置，点击「新建配置」添加。" : "No configs yet. Click New Config."}</p>
+          </div>
+        ) : filteredConfigs.length === 0 ? (
+          <p className="text-sm theme-muted">{lang === "zh" ? "没有匹配的配置" : "No matching configs"}</p>
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {configs.map((cfg) => {
+          <div className="agents-grid">
+            {filteredConfigs.map((cfg) => {
               const summary = inferenceSummary(cfg.inference_params);
               return (
-                <div key={cfg.id} className="rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-4">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className={`rounded-full border px-2 py-0.5 text-xs ${providerColors[cfg.provider] || "text-slate-400 bg-slate-400/10 border-slate-400/30"}`}>
-                      {cfg.provider}
-                    </span>
-                    {cfg.is_default && (
-                      <span className="flex items-center gap-1 text-xs text-green-400">
-                        <CheckCircle className="h-3 w-3" /> {m.defaultBadge[lang]}
-                      </span>
-                    )}
+                <article key={cfg.id} className="agents-card">
+                  <div className="agents-card-top">
+                    <div className={`agents-avatar ${agentAvatarTone(cfg.id)}`} aria-hidden>
+                      {modelInitial(cfg.model_id)}
+                    </div>
+                    <div className="agents-card-head">
+                      <div className="agents-card-title-row">
+                        <h3 title={cfg.model_id}>{cfg.model_id}</h3>
+                        {cfg.is_default && (
+                          <span className="agents-badge agents-badge-chat">
+                            <CheckCircle className="mr-0.5 inline h-3 w-3" />
+                            {m.defaultBadge[lang]}
+                          </span>
+                        )}
+                      </div>
+                      <p className="agents-card-role">{cfg.name}</p>
+                    </div>
                   </div>
-                  <p className="font-medium text-white">{cfg.model_id}</p>
-                  <p className="text-xs text-slate-400">{cfg.name}</p>
+                  <div className="agents-card-tags">
+                    <span className={providerBadgeClass(cfg.provider)}>{cfg.provider}</span>
+                    {cfg.context_window && (
+                      <span className="agents-tag">{(cfg.context_window / 1000).toFixed(0)}K {m.contextWindow[lang]}</span>
+                    )}
+                    {summary && <span className="agents-tag">{summary}</span>}
+                  </div>
                   {cfg.base_url && (
-                    <p className="mt-1 truncate text-[10px] text-slate-500">{cfg.base_url}</p>
+                    <p className="agents-card-desc truncate">{cfg.base_url}</p>
                   )}
-                  {cfg.context_window && (
-                    <p className="mt-1 text-xs text-slate-500">{(cfg.context_window / 1000).toFixed(0)}K {m.contextWindow[lang]}</p>
-                  )}
-                  {summary && (
-                    <p className="mt-1 text-[10px] text-cyan-400/80">{summary}</p>
-                  )}
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {!cfg.is_default && (
+                  <div className="agents-card-footer">
+                    <span className="agents-card-meta">{cfg.provider}/{cfg.model_id}</span>
+                    <div className="agents-card-actions">
                       <button
-                        onClick={() => setDefault(cfg)}
-                        className="flex items-center gap-1 rounded-lg bg-amber-600/15 px-2 py-1 text-xs text-amber-300 hover:bg-amber-600/25"
+                        type="button"
+                        onClick={() => testConfig(cfg)}
+                        disabled={testingId === cfg.id}
+                        className="agents-icon-btn"
+                        title={m.testConnection[lang]}
                       >
-                        <Star className="h-3 w-3" /> {m.setDefault[lang]}
+                        {testingId === cfg.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
                       </button>
-                    )}
-                    <button
-                      onClick={() => openEdit(cfg)}
-                      className="flex items-center gap-1 rounded-lg bg-slate-600/20 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600/30"
-                    >
-                      <Pencil className="h-3 w-3" /> {m.editConfig[lang]}
-                    </button>
-                    <button
-                      onClick={() => deleteConfig(cfg)}
-                      className="flex items-center gap-1 rounded-lg bg-red-600/15 px-2 py-1 text-xs text-red-400 hover:bg-red-600/25"
-                    >
-                      <Trash2 className="h-3 w-3" /> {m.deleteConfig[lang]}
-                    </button>
+                      {!cfg.is_default && (
+                        <button type="button" onClick={() => setDefault(cfg)} className="agents-icon-btn" title={m.setDefault[lang]}>
+                          <Star className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      <button type="button" onClick={() => openEdit(cfg)} className="agents-icon-btn" title={m.editConfig[lang]}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => deleteConfig(cfg)} className="agents-icon-btn agents-icon-btn-danger" title={m.deleteConfig[lang]}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
-                </div>
+                </article>
               );
             })}
           </div>
         )}
-      </div>
+      </section>
 
-      <h2 className="mb-4 text-lg font-semibold text-white">{m.available[lang]}</h2>
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {models.map((mod, i) => {
-          const isCloud = mod.type === "cloud" || mod.model.includes(":cloud");
-          return (
-            <div key={i} className="rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Cpu className="h-4 w-4 text-slate-400" />
-                  <span className={`rounded-full border px-2 py-0.5 text-xs ${providerColors[mod.provider] || "text-slate-400 bg-slate-400/10 border-slate-400/30"}`}>
-                    {mod.provider}
-                  </span>
+      <section className="hub-section">
+        <h2 className="hub-section-title">{m.available[lang]}</h2>
+        <div className="agents-grid">
+          {filteredModels.map((mod, i) => {
+            const isCloud = mod.type === "cloud" || mod.model.includes(":cloud");
+            return (
+              <article key={`${mod.provider}-${mod.model}-${i}`} className="agents-card">
+                <div className="agents-card-top">
+                  <div className={`agents-avatar ${agentAvatarTone(mod.model)}`} aria-hidden>
+                    <Cpu className="h-4 w-4" />
+                  </div>
+                  <div className="agents-card-head">
+                    <div className="agents-card-title-row">
+                      <h3 title={mod.model}>{mod.model}</h3>
+                      <span className={providerBadgeClass(mod.provider)}>{mod.provider}</span>
+                    </div>
+                    <p className="agents-card-role">
+                      {isCloud ? m.cloudModel[lang] : mod.size_gb != null && mod.size_gb > 0 ? m.localModel[lang] : mod.provider}
+                    </p>
+                  </div>
                 </div>
-                {isCloud ? (
-                  <span className="flex items-center gap-1 text-[10px] text-cyan-400"><Cloud className="h-3 w-3" />{m.cloudModel[lang]}</span>
-                ) : mod.size_gb != null && mod.size_gb > 0 ? (
-                  <span className="flex items-center gap-1 text-[10px] text-purple-400"><Server className="h-3 w-3" />{m.localModel[lang]}</span>
-                ) : null}
-              </div>
-              <p className="font-medium text-white">{mod.model}</p>
-              {mod.context_window && (
-                <p className="mt-1 text-xs text-slate-500">{(mod.context_window / 1000).toFixed(0)}K {m.contextWindow[lang]}</p>
-              )}
-              {mod.size_gb != null && mod.size_gb > 0 && (
-                <p className="text-xs text-slate-500">{mod.size_gb.toFixed(1)} GB</p>
-              )}
-              {mod.note && <p className="mt-1 text-xs text-yellow-500">{mod.note}</p>}
-            </div>
-          );
-        })}
-      </div>
+                <div className="agents-card-tags">
+                  {mod.context_window && (
+                    <span className="agents-tag">{(mod.context_window / 1000).toFixed(0)}K {m.contextWindow[lang]}</span>
+                  )}
+                  {mod.size_gb != null && mod.size_gb > 0 && (
+                    <span className="agents-tag">{mod.size_gb.toFixed(1)} GB</span>
+                  )}
+                  {isCloud && (
+                    <span className="agents-tag"><Cloud className="mr-0.5 inline h-3 w-3" />{m.cloudModel[lang]}</span>
+                  )}
+                </div>
+                {mod.note && <p className="agents-card-desc">{mod.note}</p>}
+              </article>
+            );
+          })}
+        </div>
+      </section>
 
-      <div className="mt-8 rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">{m.setupTitle[lang]}</h2>
-        <div className="space-y-4 text-sm text-slate-400">
-          <div>
-            <p className="mb-1 font-medium text-white">OpenAI</p>
-            <p>{m.setupOpenAI[lang]} <code className="rounded bg-slate-800 px-1 text-blue-400">OPENAI_API_KEY</code></p>
-          </div>
-          <div>
-            <p className="mb-1 font-medium text-white">Ollama</p>
-            <p>{m.setupOllama[lang]} <code className="rounded bg-slate-800 px-1 text-blue-400">ollama pull qwen3.6:35b</code></p>
+      <section className="hub-section">
+        <div className="agents-card p-5">
+          <h2 className="hub-section-title">{m.setupTitle[lang]}</h2>
+          <div className="space-y-4 text-sm theme-muted">
+            <div>
+              <p className="mb-1 font-medium theme-text">OpenAI</p>
+              <p>{m.setupOpenAI[lang]} <code className="rounded bg-[var(--hover)] px-1 text-[var(--primary)]">OPENAI_API_KEY</code></p>
+            </div>
+            <div>
+              <p className="mb-1 font-medium theme-text">Ollama</p>
+              <p>{m.setupOllama[lang]} <code className="rounded bg-[var(--hover)] px-1 text-[var(--primary)]">ollama pull qwen3.6:35b</code></p>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-            <h2 className="mb-4 text-lg font-semibold text-white">
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-4 text-lg font-semibold theme-text">
               {editingId ? m.editConfig[lang] : m.newConfig[lang]}
             </h2>
             <div className="space-y-3">
               <input
                 placeholder={m.configName[lang]}
-                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               />
               <select
-                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                 value={form.provider}
                 onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value }))}
               >
@@ -397,20 +612,20 @@ export default function ModelsPage() {
               </select>
               <input
                 placeholder={m.modelId[lang]}
-                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white font-mono"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 font-mono text-sm theme-text"
                 value={form.model_id}
                 onChange={(e) => setForm((f) => ({ ...f, model_id: e.target.value }))}
               />
               <input
                 placeholder={m.baseUrl[lang]}
-                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                 value={form.base_url}
                 onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
               />
               <input
                 type="number"
                 placeholder={m.contextWindow[lang]}
-                className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                 value={form.context_window}
                 onChange={(e) => setForm((f) => ({ ...f, context_window: e.target.value }))}
               />
@@ -419,7 +634,7 @@ export default function ModelsPage() {
                   type="number"
                   step="0.00001"
                   placeholder={m.costIn[lang]}
-                  className="flex-1 rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                   value={form.cost_per_1k_input}
                   onChange={(e) => setForm((f) => ({ ...f, cost_per_1k_input: e.target.value }))}
                 />
@@ -427,15 +642,15 @@ export default function ModelsPage() {
                   type="number"
                   step="0.00001"
                   placeholder={m.costOut[lang]}
-                  className="flex-1 rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                   value={form.cost_per_1k_output}
                   onChange={(e) => setForm((f) => ({ ...f, cost_per_1k_output: e.target.value }))}
                 />
               </div>
 
-              <div className="border-t border-[#2d2d4e] pt-3">
-                <h3 className="mb-1 text-sm font-medium text-white">{m.inferenceTitle[lang]}</h3>
-                <p className="mb-3 text-xs text-slate-500">{m.inferenceHint[lang]}</p>
+              <div className="border-t border-[var(--border)] pt-3">
+                <h3 className="mb-1 text-sm font-medium theme-text">{m.inferenceTitle[lang]}</h3>
+                <p className="mb-3 text-xs theme-muted">{m.inferenceHint[lang]}</p>
                 <div className="grid grid-cols-2 gap-2">
                   {infField("temperature", m.temperature[lang], "0.1")}
                   {infField("top_p", m.topP[lang], "0.05")}
@@ -450,13 +665,13 @@ export default function ModelsPage() {
                 </div>
                 <input
                   placeholder={m.stopSequences[lang]}
-                  className="mt-2 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  className="mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                   value={form.stop}
                   onChange={(e) => setForm((f) => ({ ...f, stop: e.target.value }))}
                 />
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-slate-300">
+              <label className="flex items-center gap-2 text-sm theme-muted">
                 <input
                   type="checkbox"
                   checked={form.is_default}
@@ -465,15 +680,22 @@ export default function ModelsPage() {
                 {m.asDefault[lang]}
               </label>
             </div>
-            <div className="mt-6 flex justify-end gap-3">
-              <button onClick={() => setShowModal(false)} className="text-sm text-slate-400">{c.cancel[lang]}</button>
+            <div className="mt-6 flex justify-between gap-3">
               <button
-                onClick={saveConfig}
-                disabled={saving}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+                type="button"
+                onClick={testFormConnection}
+                disabled={testingForm || saving}
+                className="agents-btn-secondary agents-btn-teal disabled:opacity-50"
               >
-                {saving ? c.loading[lang] : c.save[lang]}
+                {testingForm ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+                {m.testConnection[lang]}
               </button>
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setShowModal(false)} className="text-sm theme-muted">{c.cancel[lang]}</button>
+                <button type="button" onClick={saveConfig} disabled={saving} className="agents-btn-primary disabled:opacity-50">
+                  {saving ? c.loading[lang] : c.save[lang]}
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -6,6 +6,7 @@ import { getAuthToken, useAuthStore } from "@/lib/authStore";
 export const api = axios.create({
   baseURL: "/api/v1",
   headers: { "Content-Type": "application/json" },
+  timeout: 60000,
 });
 
 api.interceptors.request.use((config) => {
@@ -133,11 +134,23 @@ export const chatApi = {
   getMessages: (id: string) => api.get(`/chat/conversations/${id}/messages`),
   saveAsSkill: (id: string, data: object) => api.post(`/chat/conversations/${id}/save-as-skill`, data),
   saveToKnowledge: (id: string, data: object) => api.post(`/chat/conversations/${id}/save-to-knowledge`, data),
+  suggestDeposit: (id: string, lang: string) =>
+    api.post(`/chat/conversations/${id}/suggest-deposit`, { lang }),
+  confirmDeposit: (id: string, data: object) =>
+    api.post(`/chat/conversations/${id}/deposit/confirm`, data),
   sendMessage: (id: string, data: object) => api.post(`/chat/conversations/${id}/messages`, data),
-  sendMessageWithFiles: (id: string, message: string, files: File[], stream = true) => {
+  sendMessageWithFiles: (
+    id: string,
+    message: string,
+    files: File[],
+    stream = true,
+    extras?: { model_config_id?: string | null; connector_id?: string | null },
+  ) => {
     const form = new FormData();
     form.append("message", message);
     form.append("stream", stream ? "true" : "false");
+    form.append("model_config_id", extras?.model_config_id ?? "");
+    form.append("connector_id", extras?.connector_id ?? "");
     for (const file of files) {
       form.append("files", file);
     }
@@ -219,11 +232,39 @@ export const modelsApi = {
   updateConfig: (id: string, data: object) => api.patch(`/models/configs/${id}`, data),
   deleteConfig: (id: string) => api.delete(`/models/configs/${id}`),
   setDefaultConfig: (id: string) => api.post(`/models/configs/${id}/set-default`),
+  testConnection: (data: { provider: string; model_id: string; base_url?: string }) =>
+    api.post("/models/test-connection", data),
+  testConfigConnection: (id: string) => api.post(`/models/configs/${id}/test-connection`),
 };
 
 // ── Tools ─────────────────────────────────────────────
 export const toolsApi = {
   list: () => api.get("/tools"),
+};
+
+// ── Desktop Automation ────────────────────────────────
+export const desktopAutomationApi = {
+  listDemos: () => api.get("/desktop-automation/demos"),
+  createDemo: (data: object) => api.post("/desktop-automation/demos", data),
+  updateDemo: (id: string, data: object) => api.patch(`/desktop-automation/demos/${id}`, data),
+  deleteDemo: (id: string) => api.delete(`/desktop-automation/demos/${id}`),
+  listTasks: () => api.get("/desktop-automation/tasks"),
+  listAwaitingConfirmation: () => api.get("/desktop-automation/tasks/awaiting-confirmation"),
+  confirmTask: (id: string) => api.post(`/desktop-automation/tasks/${id}/confirm`),
+  rejectTask: (id: string) => api.post(`/desktop-automation/tasks/${id}/reject`),
+  replay: (data: object) => api.post("/desktop-automation/tasks/replay", data),
+  captureStart: (data?: object) => api.post("/desktop-automation/tasks/capture/start", data || {}),
+  captureStop: (data: object) => api.post("/desktop-automation/tasks/capture/stop", data),
+  sidecarStatus: () => api.get("/desktop-automation/sidecar/status"),
+  depositDemo: (id: string, data: object) => api.post(`/desktop-automation/demos/${id}/deposit`, data),
+};
+
+// ── Harness (tool policy & confirmation) ─────────────
+export const harnessApi = {
+  listAwaitingActions: () => api.get("/harness/actions/awaiting-confirmation"),
+  confirmAction: (id: string) => api.post(`/harness/actions/${id}/confirm`),
+  rejectAction: (id: string) => api.post(`/harness/actions/${id}/reject`),
+  listToolRisks: () => api.get("/harness/tools/risk"),
 };
 
 // ── Skills ────────────────────────────────────────────
@@ -250,7 +291,34 @@ export const skillsApi = {
 // ── Dashboard / Screen ─────────────────────────────
 export const dashboardApi = {
   overview: () => api.get<DashboardOverview>("/dashboard/overview"),
-  streamUrl: (interval = 30) => `/api/v1/dashboard/stream?interval=${interval}`,
+  streamUrl: (interval = 30) => {
+    const token = getAuthToken();
+    const qs = new URLSearchParams({ interval: String(interval) });
+    if (token) qs.set("token", token);
+    return `${API_BASE}/dashboard/stream?${qs.toString()}`;
+  },
+};
+
+// ── Organization / RBAC ────────────────────────────
+export const organizationApi = {
+  listRoles: () => api.get("/organization/roles"),
+  listDepartments: () => api.get("/organization/departments"),
+  createDepartment: (data: object) => api.post("/organization/departments", data),
+  updateDepartment: (id: string, data: object) => api.patch(`/organization/departments/${id}`, data),
+  deleteDepartment: (id: string) => api.delete(`/organization/departments/${id}`),
+  listUsers: () => api.get("/organization/users"),
+  updateUser: (id: string, data: object) => api.patch(`/organization/users/${id}`, data),
+  previewPermissions: (userId: string) => api.get(`/organization/permissions/preview/${userId}`),
+  delegationContext: () => api.get("/organization/delegation/context"),
+  delegatableRoles: () => api.get("/organization/roles/delegatable"),
+  delegationDepartments: () => api.get("/organization/delegation/departments"),
+  delegationDeptUsers: () => api.get("/organization/delegation/dept-users"),
+  delegationExecutiveUsers: () => api.get("/organization/delegation/executive-users"),
+  updateDeptDelegation: (userId: string, data: object) =>
+    api.patch(`/organization/delegation/dept-users/${userId}`, data),
+  updateExecDelegation: (userId: string, data: object) =>
+    api.patch(`/organization/delegation/executive-users/${userId}`, data),
+  auditLogs: (limit = 50) => api.get("/organization/audit-logs", { params: { limit } }),
 };
 
 // ── Digital Employees ───────────────────────────────
@@ -278,10 +346,16 @@ export const employeesApi = {
 };
 
 // ── Streaming helper ──────────────────────────────────
-export async function* streamResponse(
+export interface ChatStreamEvent {
+  token?: string;
+  thinking?: string;
+  error?: string;
+}
+
+export async function* streamChatResponse(
   url: string,
   body: object,
-): AsyncGenerator<string> {
+): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}${url}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -293,13 +367,13 @@ export async function* streamResponse(
     throw new Error(err || `Stream failed (${response.status})`);
   }
 
-  yield* readSseStream(response);
+  yield* readChatSseStream(response);
 }
 
-export async function* streamResponseForm(
+export async function* streamChatResponseForm(
   url: string,
   form: FormData,
-): AsyncGenerator<string> {
+): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}${url}`, {
     method: "POST",
     headers: authHeaders(),
@@ -311,10 +385,28 @@ export async function* streamResponseForm(
     throw new Error(err || `Stream failed (${response.status})`);
   }
 
-  yield* readSseStream(response);
+  yield* readChatSseStream(response);
 }
 
-async function* readSseStream(response: Response): AsyncGenerator<string> {
+export async function* streamResponse(
+  url: string,
+  body: object,
+): AsyncGenerator<string> {
+  for await (const event of streamChatResponse(url, body)) {
+    if (event.token) yield event.token;
+  }
+}
+
+export async function* streamResponseForm(
+  url: string,
+  form: FormData,
+): AsyncGenerator<string> {
+  for await (const event of streamChatResponseForm(url, form)) {
+    if (event.token) yield event.token;
+  }
+}
+
+async function* readChatSseStream(response: Response): AsyncGenerator<ChatStreamEvent> {
   const reader = response.body?.getReader();
   if (!reader) return;
 
@@ -332,8 +424,12 @@ async function* readSseStream(response: Response): AsyncGenerator<string> {
       if (data === "[DONE]") return;
       try {
         const parsed = JSON.parse(data);
-        if (parsed.token) yield parsed.token;
-        if (parsed.error) throw new Error(parsed.error);
+        const event: ChatStreamEvent = {};
+        if (parsed.token) event.token = parsed.token;
+        if (parsed.thinking) event.thinking = parsed.thinking;
+        if (parsed.error) event.error = parsed.error;
+        if (event.error) throw new Error(event.error);
+        if (event.token || event.thinking) yield event;
       } catch (e) {
         if (e instanceof SyntaxError) continue;
         throw e;

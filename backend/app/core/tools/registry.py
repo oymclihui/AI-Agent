@@ -31,6 +31,11 @@ class ToolRegistry:
         from app.core.tools.builtin.datetime_tool import DatetimeTool
         from app.core.tools.builtin.create_presentation import CreatePresentationTool
         from app.core.tools.builtin.fetch_mail import FetchMailTool
+        from app.core.tools.builtin.desktop_automation import (
+            DesktopListDemosTool,
+            DesktopReplayTool,
+            DesktopCaptureTool,
+        )
 
         builtins = [
             WebSearchTool,
@@ -39,6 +44,9 @@ class ToolRegistry:
             DatetimeTool,
             CreatePresentationTool,
             FetchMailTool,
+            DesktopListDemosTool,
+            DesktopReplayTool,
+            DesktopCaptureTool,
         ]
         for tool in builtins:
             self.register(tool)

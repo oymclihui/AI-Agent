@@ -17,6 +17,7 @@ class ScheduleType(str, Enum):
 
 class EmployeeTaskType(str, Enum):
     agent = "agent"
+    desktop_automation = "desktop_automation"
 
 
 class SkillBinding(BaseModel):
@@ -58,6 +59,7 @@ class EmployeeResponse(BaseModel):
     knowledge_base_ids: list[str]
     timezone: str
     task_count: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

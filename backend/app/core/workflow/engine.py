@@ -165,6 +165,7 @@ class WorkflowBuilder:
             LLMNode, HttpNode, CodeNode, NoteNode, TriggerNode, SwitchNode,
             SetNode, MergeNode, SplitNode, FilterNode, WaitNode, TransformNode,
             IntegrationNode, SubWorkflowNode, RespondWebhookNode, StopErrorNode,
+            DesktopCaptureNode, DesktopReplayNode,
         )
         from app.core.workflow.node_catalog import get_node_definition, catalog_type_to_exec_type
         from app.core.agents.executor import AgentExecutor
@@ -183,6 +184,7 @@ class WorkflowBuilder:
             "noop": "note", "manualtrigger": "trigger", "webhooktrigger": "trigger",
             "crontrigger": "trigger", "scheduletrigger": "trigger", "emailtrigger": "trigger",
             "chattrigger": "trigger",
+            "desktopcapture": "desktop_capture", "desktopreplay": "desktop_replay",
         }
 
         def _normalize_type(raw: str, catalog_id: str | None = None) -> str:
@@ -270,6 +272,10 @@ class WorkflowBuilder:
                 node = RespondWebhookNode(nid, config)
             elif ntype == "stop_error":
                 node = StopErrorNode(nid, config)
+            elif ntype == "desktop_capture":
+                node = DesktopCaptureNode(nid, config)
+            elif ntype == "desktop_replay":
+                node = DesktopReplayNode(nid, config)
             else:
                 logger.warning("unknown_workflow_node_type", node_id=nid, type=node_def.get("type"))
                 continue

@@ -1,0 +1,51 @@
+{
+  "template_id": "nev-treasury-weekly",
+  "name_zh": "制造企业 · 司库资金周报",
+  "name_en": "Manufacturing · Treasury Weekly",
+  "description_zh": "集团司库周度监控：现金头寸、融资到期、汇兑敞口与付款风险。",
+  "description_en": "Weekly treasury monitoring: cash position, maturities, FX exposure, payment risk.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "司库周报框架", "query": "制造集团司库每周应汇报哪些资金与风险指标" },
+    { "label": "13 周现金预测", "query": "如何搭建 13 周滚动现金预测结构" }
+  ],
+  "agent": {
+    "name": "司库顾问",
+    "role": "Treasury Manager (Manufacturing Group)",
+    "goal": "为制造集团的司库团队提供现金、融资、汇兑与付款风险的周度监控框架。",
+    "backstory": "熟悉制造业集团资金池、票据、跨境收付与融资结构管理。",
+    "tools": ["calculator", "datetime", "web_search"],
+    "temperature": 0.3,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "司库 助理",
+    "title": "司库助理",
+    "description": "每周生成司库资金与风险监控材料框架。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 3,
+      "org_rank": 1,
+      "org_reports_to": "nev-vp-finance-weekly",
+      "org_cadence": "weekly"
+    }
+  },
+  "tasks": [
+    {
+      "name": "司库资金周报",
+      "description": "每周一 09:00 生成司库周报框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 9 * * 1",
+      "task_config": {
+        "prompt": "作为制造集团司库助手，撰写「司库资金周报」Markdown 框架（中文）：\n1. 现金及等价物头寸与 13 周滚动预测结构【待填】\n2. 本周大额收付与异常（含 capex 付款、供应商票据）\n3. 融资到期墙与续作建议要点\n4. 外汇敞口（出口应收、进口设备/原料）与 hedging 讨论点\n5. 资金成本与 idle cash 机会\n6. 下周 3 个需 CFO/VP 知晓的资金事项\n\n给出示例数字格式，强调合规与审批链。"
+      },
+      "enabled": true
+    }
+  ]
+}

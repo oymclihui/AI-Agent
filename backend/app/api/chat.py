@@ -7,19 +7,22 @@ import structlog
 
 from app.db.session import get_db
 from app.db.models import (
-    Conversation, Message, Agent as AgentModel, MessageRole, User,
+    Conversation, Message, Agent as AgentModel, MessageRole, User, ModelConfig,
 )
 from app.db.base import generate_uuid
 from app.schemas.chat import (
     ConversationCreate, ConversationResponse,
     MessageResponse, ChatRequest, SuggestQuestionsResponse, TranscribeResponse,
     SaveAsSkillRequest, SaveToKnowledgeRequest, DeleteOkResponse,
+    DepositSuggestRequest, DepositSuggestResponse, DepositConfirmRequest, DepositConfirmResponse,
+    DepositSuggestionItem, DepositDraftPreview, DepositTaskPreview,
 )
 from app.core.auth.deps import get_current_user
 from app.core.auth.scoping import scope_owned_only, assert_mutable_by_user
 from app.core.chat.cleanup import cleanup_stale_conversations
 from app.core.chat.export import export_conversation_to_skill, export_conversation_to_knowledge
-from app.core.agents.base import AgentDefinition
+from app.core.agents.base import AgentDefinition, Task
+from app.core.skills.factory import build_agent_executor
 from app.core.dialogue.manager import DialogueManager
 from app.core.memory.manager import MemoryManager
 from app.core.skills.injector import SkillInjector
@@ -27,6 +30,8 @@ from app.core.chat.attachments import build_attachment_context
 from app.core.chat.storage import save_attachment_bytes, delete_conversation_uploads
 from app.core.chat.suggestions import generate_attachment_questions
 from app.core.speech.transcriber import transcribe_audio
+from app.core.chat.connectors import build_connector_messages
+from app.core.chat.deposit import analyze_conversation_deposit, confirm_conversation_deposit as execute_deposit_confirm
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 logger = structlog.get_logger(__name__)
@@ -75,6 +80,7 @@ async def _ensure_memory_loaded(conv_id: str, memory_type: str, db: AsyncSession
 
 async def _resolve_agent_context(db: AsyncSession, conv: Conversation):
     agent_definition = None
+    agent_model = None
     skill_messages = []
     if conv.agent_id:
         agent_model = await db.get(AgentModel, conv.agent_id)
@@ -88,9 +94,59 @@ async def _resolve_agent_context(db: AsyncSession, conv: Conversation):
                 llm_provider=agent_model.llm_provider,
                 llm_model=agent_model.llm_model,
                 temperature=agent_model.temperature,
+                max_iterations=agent_model.max_iterations,
             )
             skill_messages = await SkillInjector.build_messages(db, agent_model.skills_config)
-    return agent_definition, skill_messages
+
+    meta = conv.metadata_ or {}
+    model_config_id = meta.get("model_config_id")
+    if model_config_id:
+        cfg = await db.get(ModelConfig, model_config_id)
+        if cfg and cfg.is_active:
+            if agent_definition:
+                agent_definition.llm_provider = cfg.provider
+                agent_definition.llm_model = cfg.model_id
+            if agent_model:
+                agent_model.llm_provider = cfg.provider
+                agent_model.llm_model = cfg.model_id
+            elif not agent_definition:
+                agent_definition = AgentDefinition(
+                    id="chat-session",
+                    name="Assistant",
+                    role="AI Assistant",
+                    goal="Help the user with their questions and tasks",
+                    llm_provider=cfg.provider,
+                    llm_model=cfg.model_id,
+                )
+
+    return agent_definition, skill_messages, agent_model
+
+
+def _agent_has_tools(agent_model: AgentModel | None) -> bool:
+    if not agent_model:
+        return False
+    tools = agent_model.tools_config or []
+    return any(isinstance(t, dict) and t.get("tool_name") for t in tools)
+
+
+def _merge_conversation_preferences(
+    conv: Conversation,
+    *,
+    model_config_id: str | None = None,
+    connector_id: str | None = None,
+) -> None:
+    meta = dict(conv.metadata_ or {})
+    if model_config_id is not None:
+        if model_config_id:
+            meta["model_config_id"] = model_config_id
+        else:
+            meta.pop("model_config_id", None)
+    if connector_id is not None:
+        if connector_id:
+            meta["connector_id"] = connector_id
+        else:
+            meta.pop("connector_id", None)
+    conv.metadata_ = meta
 
 
 async def _get_user_conversation(db: AsyncSession, conv_id: str, user: User) -> Conversation:
@@ -114,12 +170,16 @@ async def _remove_conversation(db: AsyncSession, conv: Conversation) -> None:
     await db.flush()
 
 
-async def _parse_request_body(request: Request) -> tuple[str, bool, list[tuple[str, bytes]]]:
+async def _parse_request_body(
+    request: Request,
+) -> tuple[str, bool, list[tuple[str, bytes]], str | None, str | None]:
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type:
         form = await request.form()
         message = str(form.get("message") or "").strip()
         stream = str(form.get("stream", "false")).lower() in ("true", "1", "yes")
+        model_config_id = str(form.get("model_config_id") or "").strip() or None
+        connector_id = str(form.get("connector_id") or "").strip() or None
         file_items: list[tuple[str, bytes]] = []
         for item in form.getlist("files"):
             if hasattr(item, "read"):
@@ -132,13 +192,19 @@ async def _parse_request_body(request: Request) -> tuple[str, bool, list[tuple[s
             raise HTTPException(status_code=400, detail="message or files required")
         if not message:
             message = "请分析以上附件内容，给出结构化的分析结论与建议。"
-        return message, stream, file_items
+        return message, stream, file_items, model_config_id, connector_id
 
     try:
         payload = ChatRequest(**await request.json())
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {exc}") from exc
-    return payload.message.strip(), payload.stream, []
+    return (
+        payload.message.strip(),
+        payload.stream,
+        [],
+        payload.model_config_id,
+        payload.connector_id,
+    )
 
 
 async def _parse_suggest_form(request: Request) -> tuple[str, str | None, list[tuple[str, bytes]]]:
@@ -259,11 +325,17 @@ async def create_conversation(
         workflow_id=payload.workflow_id or None,
         knowledge_base_ids=payload.knowledge_base_ids or [],
         memory_type=payload.memory_type,
+        metadata_={},
+    )
+    _merge_conversation_preferences(
+        conv,
+        model_config_id=payload.model_config_id,
+        connector_id=payload.connector_id,
     )
     db.add(conv)
     await db.flush()
     await db.refresh(conv)
-    return conv
+    return ConversationResponse.from_conversation(conv)
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
@@ -277,7 +349,7 @@ async def list_conversations(
         .where(Conversation.is_active == True, scope_owned_only(Conversation, user.id))
         .order_by(Conversation.created_at.desc())
     )
-    return result.scalars().all()
+    return [ConversationResponse.from_conversation(c) for c in result.scalars().all()]
 
 
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageResponse])
@@ -332,8 +404,25 @@ async def send_message(
 ):
     conv = await _get_user_conversation(db, conv_id, user)
 
-    message, stream, file_items = await _parse_request_body(request)
-    agent_definition, skill_messages = await _resolve_agent_context(db, conv)
+    message, stream, file_items, model_config_id, connector_id = await _parse_request_body(request)
+    _merge_conversation_preferences(
+        conv,
+        model_config_id=model_config_id,
+        connector_id=connector_id,
+    )
+    await db.flush()
+
+    agent_definition, skill_messages, agent_model = await _resolve_agent_context(db, conv)
+    connector_id_active = (conv.metadata_ or {}).get("connector_id")
+    if connector_id_active:
+        skill_messages = [
+            *skill_messages,
+            *await build_connector_messages(
+                connector_id_active,
+                user_id=user.id,
+                db=db,
+            ),
+        ]
     memory = await _ensure_memory_loaded(conv_id, conv.memory_type, db)
     dialogue = DialogueManager(memory_manager=memory)
 
@@ -366,11 +455,72 @@ async def send_message(
     db.add(user_msg)
     await db.flush()
 
+    use_agent_tools = _agent_has_tools(agent_model)
+
+    if use_agent_tools and agent_model:
+        from app.core.auth.context import set_current_user_id, reset_current_user_id
+        from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+
+        ctx_token = set_current_user_id(user.id)
+        harness_token = set_harness_context(
+            HarnessContext(user_id=user.id, source="chat", source_id=conv_id)
+        )
+        try:
+            executor = await build_agent_executor(db, agent_model, memory_manager=memory)
+            if skill_messages:
+                executor.skill_messages = [*executor.skill_messages, *skill_messages]
+            task_prompt = message
+            if attachment_context:
+                task_prompt = f"{message}\n\n{attachment_context}"
+            result = await executor.run(
+                Task(description=task_prompt),
+                memory_session_id=conv_id,
+                db=db,
+            )
+            assistant_content = str(result.get("output") or "").strip()
+            token_usage = result.get("token_usage", {})
+            harness_trace = result.get("harness_trace", [])
+        except Exception as exc:
+            logger.exception("chat_agent_tools_failed", conversation_id=conv_id)
+            raise HTTPException(status_code=502, detail=_friendly_llm_error(exc)) from exc
+        finally:
+            reset_current_user_id(ctx_token)
+            reset_harness_context(harness_token)
+
+        assistant_msg = Message(
+            id=generate_uuid(),
+            conversation_id=conv_id,
+            role=MessageRole.assistant,
+            content=assistant_content,
+            token_usage=token_usage,
+            metadata_={"harness_trace": harness_trace} if harness_trace else {},
+        )
+        db.add(assistant_msg)
+        await db.flush()
+
+        if stream:
+            async def sse_agent_stream():
+                yield f"data: {json.dumps({'token': assistant_content})}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(sse_agent_stream(), media_type="text/event-stream")
+
+        return {
+            "message_id": assistant_msg.id,
+            "content": assistant_content,
+            "token_usage": token_usage,
+            "rag_used": False,
+            "attachments": stored_attachments,
+            "agent_tools_used": True,
+            "harness_trace": harness_trace,
+        }
+
     if stream:
         async def sse_stream():
             full = ""
+            thinking = ""
             try:
-                async for token in dialogue.stream(
+                async for event in dialogue.stream(
                     session_id=conv_id,
                     user_message=message,
                     agent_definition=agent_definition,
@@ -379,8 +529,12 @@ async def send_message(
                     db=db,
                     user_id=user.id,
                 ):
-                    full += token
-                    yield f"data: {json.dumps({'token': token})}\n\n"
+                    if event.get("thinking"):
+                        thinking += event["thinking"]
+                        yield f"data: {json.dumps({'thinking': event['thinking']})}\n\n"
+                    if event.get("token"):
+                        full += event["token"]
+                        yield f"data: {json.dumps({'token': event['token']})}\n\n"
             except Exception as exc:
                 detail = _friendly_llm_error(exc)
                 logger.exception("chat_stream_failed", conversation_id=conv_id)
@@ -390,11 +544,13 @@ async def send_message(
 
             from app.db.session import AsyncSessionLocal
             async with AsyncSessionLocal() as session:
+                meta = {"thinking": thinking} if thinking else {}
                 assistant_msg = Message(
                     id=generate_uuid(),
                     conversation_id=conv_id,
                     role=MessageRole.assistant,
                     content=full,
+                    metadata_=meta,
                 )
                 session.add(assistant_msg)
                 await session.commit()
@@ -417,12 +573,14 @@ async def send_message(
         logger.exception("chat_failed", conversation_id=conv_id)
         raise HTTPException(status_code=502, detail=_friendly_llm_error(exc)) from exc
 
+    thinking = result.get("thinking")
     assistant_msg = Message(
         id=generate_uuid(),
         conversation_id=conv_id,
         role=MessageRole.assistant,
         content=result["message"],
         token_usage=result.get("token_usage"),
+        metadata_={"thinking": thinking} if thinking else {},
     )
     db.add(assistant_msg)
     await db.flush()
@@ -430,6 +588,7 @@ async def send_message(
     return {
         "message_id": assistant_msg.id,
         "content": assistant_msg.content,
+        "thinking": thinking,
         "token_usage": result.get("token_usage"),
         "rag_used": result.get("rag_used", False),
         "attachments": stored_attachments,
@@ -473,6 +632,78 @@ async def save_conversation_to_knowledge(
         "document_id": doc.id,
         "filename": doc.filename,
     }
+
+
+@router.post("/conversations/{conv_id}/suggest-deposit", response_model=DepositSuggestResponse)
+async def suggest_conversation_deposit(
+    conv_id: str,
+    payload: DepositSuggestRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await _get_user_conversation(db, conv_id, user)
+    lang = payload.lang if payload.lang in ("zh", "en") else "zh"
+    try:
+        raw = await analyze_conversation_deposit(db, conv, user.id, lang=lang)
+    except Exception as exc:
+        logger.exception("deposit_suggest_failed", conversation_id=conv_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    draft_preview = None
+    if raw.get("draft"):
+        d = raw["draft"]
+        draft_preview = DepositDraftPreview(
+            skill_title=d.get("skill_title"),
+            knowledge_title=d.get("knowledge_title"),
+            agent_name=d.get("agent_name"),
+            employee_name=d.get("employee_name"),
+            employee_title=d.get("employee_title"),
+            employee_description=d.get("employee_description"),
+            tasks=[DepositTaskPreview(**t) for t in d.get("tasks") or []],
+        )
+
+    suggestions = [
+        DepositSuggestionItem(**s) for s in raw.get("suggestions") or []
+        if isinstance(s, dict) and s.get("type")
+    ]
+    return DepositSuggestResponse(
+        worth_deposit=bool(raw.get("worth_deposit")),
+        draft_id=raw.get("draft_id"),
+        suggestions=suggestions,
+        draft=draft_preview,
+    )
+
+
+@router.post("/conversations/{conv_id}/deposit/confirm", response_model=DepositConfirmResponse)
+async def confirm_conversation_deposit_route(
+    conv_id: str,
+    payload: DepositConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await _get_user_conversation(db, conv_id, user)
+    allowed = {"skill", "knowledge", "agent", "employee"}
+    types = [t for t in payload.types if t in allowed]
+    if not types:
+        raise HTTPException(status_code=400, detail="At least one valid deposit type required")
+    try:
+        result = await execute_deposit_confirm(
+            db,
+            conv,
+            user.id,
+            draft_id=payload.draft_id,
+            types=types,  # type: ignore[arg-type]
+            activate_employee=payload.activate_employee,
+            kb_id=payload.kb_id,
+            kb_name=payload.kb_name,
+            skill_title=payload.skill_title,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("deposit_confirm_failed", conversation_id=conv_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return DepositConfirmResponse(**result)
 
 
 @router.post("/quick")

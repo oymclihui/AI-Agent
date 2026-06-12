@@ -41,8 +41,40 @@ async def _migrate_schema(engine: AsyncEngine) -> None:
 
         await conn.run_sync(_add_skills_config)
         await conn.run_sync(_add_user_isolation_columns)
+        await conn.run_sync(_add_org_rbac_columns)
         await conn.run_sync(_add_users_admin_column)
         await conn.run_sync(_ensure_users_table)
+        await conn.run_sync(_ensure_postgres_enum_values)
+
+
+def _ensure_postgres_enum_values(sync_conn) -> None:
+    """Add new enum labels to existing PostgreSQL types (create_all does not alter enums)."""
+    from sqlalchemy import text
+
+    if sync_conn.dialect.name != "postgresql":
+        return
+
+    patches = {
+        "executionstatus": ["awaiting_confirmation"],
+    }
+    for type_name, labels in patches.items():
+        for label in labels:
+            row = sync_conn.execute(
+                text(
+                    "SELECT 1 FROM pg_enum e "
+                    "JOIN pg_type t ON e.enumtypid = t.oid "
+                    "WHERE t.typname = :type_name AND e.enumlabel = :label"
+                ),
+                {"type_name": type_name, "label": label},
+            ).fetchone()
+            if row:
+                continue
+            try:
+                sync_conn.execute(
+                    text(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{label}'")
+                )
+            except Exception:
+                sync_conn.execute(text(f"ALTER TYPE {type_name} ADD VALUE '{label}'"))
 
 
 async def seed_default_admin(session) -> None:
@@ -66,6 +98,181 @@ async def seed_default_admin(session) -> None:
     )
     session.add(admin)
     await session.commit()
+
+
+async def seed_org_rbac(session) -> None:
+    """Ensure root department, default roles, and admin privileges (idempotent)."""
+    from sqlalchemy import select, func
+    from app.config import settings
+    from app.core.auth.permissions import compute_department_path
+    from app.db.models import (
+        Department,
+        DigitalEmployee,
+        User,
+        UserDepartment,
+        UserRole,
+    )
+
+    root = (
+        await session.execute(
+            select(Department).where(Department.code == "root").limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if not root:
+        root_id = generate_uuid()
+        path, level = compute_department_path(None, root_id)
+        root = Department(
+            id=root_id,
+            name="全公司",
+            code="root",
+            parent_id=None,
+            path=path,
+            level=level,
+            sort_order=0,
+            is_active=True,
+        )
+        session.add(root)
+        await session.flush()
+
+    admin_no = settings.DEFAULT_ADMIN_EMPLOYEE_NO
+    admin = (
+        await session.execute(select(User).where(User.employee_no == admin_no).limit(1))
+    ).scalar_one_or_none()
+    if admin:
+        admin.is_admin = True
+        if not admin.primary_department_id:
+            admin.primary_department_id = root.id
+
+        has_super = (
+            await session.execute(
+                select(UserRole.id).where(
+                    UserRole.user_id == admin.id,
+                    UserRole.role_code == "super_admin",
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if not has_super:
+            session.add(UserRole(
+                id=generate_uuid(),
+                user_id=admin.id,
+                role_code="super_admin",
+                scope_department_id=None,
+            ))
+
+        membership = (
+            await session.execute(
+                select(UserDepartment).where(
+                    UserDepartment.user_id == admin.id,
+                    UserDepartment.is_primary == True,
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if not membership:
+            session.add(UserDepartment(
+                id=generate_uuid(),
+                user_id=admin.id,
+                department_id=root.id,
+                is_primary=True,
+            ))
+
+    users = (await session.execute(select(User))).scalars().all()
+    for user in users:
+        role_count = (
+            await session.execute(
+                select(func.count()).select_from(UserRole).where(UserRole.user_id == user.id)
+            )
+        ).scalar() or 0
+        if role_count == 0:
+            code = "super_admin" if user.is_admin else "operator"
+            session.add(UserRole(
+                id=generate_uuid(),
+                user_id=user.id,
+                role_code=code,
+                scope_department_id=root.id if code == "operator" else None,
+            ))
+        if not user.primary_department_id:
+            user.primary_department_id = root.id
+            existing = (
+                await session.execute(
+                    select(UserDepartment).where(
+                        UserDepartment.user_id == user.id,
+                        UserDepartment.is_primary == True,
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if not existing:
+                session.add(UserDepartment(
+                    id=generate_uuid(),
+                    user_id=user.id,
+                    department_id=root.id,
+                    is_primary=True,
+                ))
+
+    emps = (
+        await session.execute(
+            select(DigitalEmployee).where(DigitalEmployee.department_id.is_(None))
+        )
+    ).scalars().all()
+    for emp in emps:
+        if emp.owner_id:
+            owner = await session.get(User, emp.owner_id)
+            if owner and owner.primary_department_id:
+                emp.department_id = owner.primary_department_id
+
+    await session.commit()
+
+
+def _add_org_rbac_columns(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if inspector.has_table("users"):
+        cols = {c["name"] for c in inspector.get_columns("users")}
+        if "primary_department_id" not in cols:
+            if sync_conn.dialect.name == "sqlite":
+                sync_conn.execute(text("ALTER TABLE users ADD COLUMN primary_department_id VARCHAR(36)"))
+            else:
+                sync_conn.execute(
+                    text("ALTER TABLE users ADD COLUMN IF NOT EXISTS primary_department_id VARCHAR(36)")
+                )
+                sync_conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_users_primary_department_id ON users (primary_department_id)")
+                )
+
+    if inspector.has_table("digital_employees"):
+        cols = {c["name"] for c in inspector.get_columns("digital_employees")}
+        if "department_id" not in cols:
+            if sync_conn.dialect.name == "sqlite":
+                sync_conn.execute(text("ALTER TABLE digital_employees ADD COLUMN department_id VARCHAR(36)"))
+            else:
+                sync_conn.execute(
+                    text("ALTER TABLE digital_employees ADD COLUMN IF NOT EXISTS department_id VARCHAR(36)")
+                )
+                sync_conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_digital_employees_department_id "
+                        "ON digital_employees (department_id)"
+                    )
+                )
+
+    _add_column(inspector, sync_conn, "users", "user_tier", "VARCHAR(32) DEFAULT 'staff' NOT NULL")
+    _add_column(inspector, sync_conn, "departments", "liaison_user_id", "VARCHAR(36)")
+    _add_column(inspector, sync_conn, "departments", "dept_tier", "VARCHAR(32) DEFAULT 'business' NOT NULL")
+
+
+def _add_column(inspector, sync_conn, table: str, col: str, col_def: str) -> None:
+    from sqlalchemy import text
+
+    if not inspector.has_table(table):
+        return
+    cols = {c["name"] for c in inspector.get_columns(table)}
+    if col in cols:
+        return
+    if sync_conn.dialect.name == "sqlite":
+        sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}"))
+    else:
+        sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_def}"))
 
 
 def _ensure_users_table(sync_conn) -> None:
@@ -295,6 +502,51 @@ async def seed_template_agents(session) -> None:
             metadata_=merge_agent_metadata_i18n({"template": "seed"}, i18n) if i18n else {},
         ))
 
+    await session.commit()
+
+
+async def seed_desktop_operator_agent(session) -> None:
+    from sqlalchemy import select
+    from app.db.models import Agent, AgentStatus
+    from app.config import settings
+    from app.core.agents.i18n import merge_agent_metadata_i18n
+    from app.core.agents.seed_i18n import seed_agent_i18n
+
+    result = await session.execute(select(Agent).where(Agent.name == "桌面操作员"))
+    if result.scalar_one_or_none():
+        return
+
+    tpl = dict(
+        name="桌面操作员",
+        role="Desktop GUI Automation Operator",
+        goal="根据用户目标选择并执行已录制的桌面 GUI 演示，完成 legacy 系统（SAP、Excel 桌面版等）操作；"
+             "录制新演示前先确认 Sidecar 在线。",
+        backstory="熟悉 Windows 桌面自动化与 GUI 演示回放；"
+                  "执行前会列出可用演示，执行后汇报结果与异常。",
+        tools_config=[
+            {"tool_name": "desktop_list_demos"},
+            {"tool_name": "desktop_replay"},
+            {"tool_name": "desktop_capture"},
+            {"tool_name": "datetime"},
+        ],
+        temperature=0.3,
+    )
+    i18n = seed_agent_i18n(tpl["name"])
+    session.add(Agent(
+        id=generate_uuid(),
+        name=tpl["name"],
+        role=tpl["role"],
+        goal=tpl["goal"],
+        backstory=tpl.get("backstory", ""),
+        llm_provider=settings.DEFAULT_LLM_PROVIDER,
+        llm_model=settings.DEFAULT_LLM_MODEL,
+        temperature=tpl.get("temperature", 0.3),
+        max_iterations=12,
+        tools_config=tpl.get("tools_config", []),
+        memory_config={},
+        status=AgentStatus.active,
+        metadata_=merge_agent_metadata_i18n({"template": "desktop_automation"}, i18n) if i18n else {"template": "desktop_automation"},
+    ))
     await session.commit()
 
 

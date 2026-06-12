@@ -28,6 +28,7 @@ class WorkflowStatus(str, enum.Enum):
 
 class ExecutionStatus(str, enum.Enum):
     pending = "pending"
+    awaiting_confirmation = "awaiting_confirmation"
     running = "running"
     completed = "completed"
     failed = "failed"
@@ -67,11 +68,71 @@ class User(Base, TimestampMixin):
     display_name = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    primary_department_id = Column(String(36), ForeignKey("departments.id"), nullable=True, index=True)
+    user_tier = Column(String(32), default="staff", nullable=False, index=True)
 
     model_credentials = relationship("UserModelCredential", back_populates="user", cascade="all, delete-orphan")
     mailbox_credential = relationship(
         "UserMailboxCredential", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    department_memberships = relationship(
+        "UserDepartment", back_populates="user", cascade="all, delete-orphan", foreign_keys="UserDepartment.user_id"
+    )
+    role_assignments = relationship(
+        "UserRole", back_populates="user", cascade="all, delete-orphan", foreign_keys="UserRole.user_id"
+    )
+
+
+class Department(Base, TimestampMixin):
+    __tablename__ = "departments"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    name = Column(String(255), nullable=False)
+    code = Column(String(64), nullable=True, unique=True, index=True)
+    parent_id = Column(String(36), ForeignKey("departments.id"), nullable=True, index=True)
+    path = Column(String(2048), nullable=False, index=True)
+    level = Column(Integer, default=0, nullable=False)
+    leader_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    liaison_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    dept_tier = Column(String(32), default="business", nullable=False, index=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    parent = relationship("Department", remote_side="Department.id", foreign_keys=[parent_id])
+    members = relationship("UserDepartment", back_populates="department", cascade="all, delete-orphan")
+
+
+class UserDepartment(Base, TimestampMixin):
+    __tablename__ = "user_departments"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    department_id = Column(String(36), ForeignKey("departments.id"), nullable=False, index=True)
+    is_primary = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="department_memberships", foreign_keys=[user_id])
+    department = relationship("Department", back_populates="members")
+
+
+class UserRole(Base, TimestampMixin):
+    __tablename__ = "user_roles"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    role_code = Column(String(64), nullable=False, index=True)
+    scope_department_id = Column(String(36), ForeignKey("departments.id"), nullable=True, index=True)
+
+    user = relationship("User", back_populates="role_assignments", foreign_keys=[user_id])
+
+
+class PermissionAuditLog(Base, TimestampMixin):
+    __tablename__ = "permission_audit_logs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    actor_user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    target_user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    action = Column(String(64), nullable=False)
+    details = Column(JSON, default=dict)
 
 
 class PasswordResetToken(Base, TimestampMixin):
@@ -335,6 +396,7 @@ class ScheduleType(str, enum.Enum):
 
 class EmployeeTaskType(str, enum.Enum):
     agent = "agent"
+    desktop_automation = "desktop_automation"
 
 
 class TaskTrigger(str, enum.Enum):
@@ -347,6 +409,7 @@ class DigitalEmployee(Base, TimestampMixin):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    department_id = Column(String(36), ForeignKey("departments.id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     title = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
@@ -408,6 +471,88 @@ class EmployeeTaskRun(Base, TimestampMixin):
 
     task = relationship("EmployeeScheduledTask", back_populates="runs")
     employee = relationship("DigitalEmployee", back_populates="task_runs")
+
+
+# ──────────────────────────────────────────────
+# Desktop automation (OpenAdapt integration)
+# ──────────────────────────────────────────────
+
+class DesktopDemoStatus(str, enum.Enum):
+    draft = "draft"
+    ready = "ready"
+    archived = "archived"
+
+
+class DesktopTaskAction(str, enum.Enum):
+    capture_start = "capture_start"
+    capture_stop = "capture_stop"
+    replay = "replay"
+
+
+class DesktopDemo(Base, TimestampMixin):
+    __tablename__ = "desktop_demos"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    app_name = Column(String(255), nullable=True)
+    tags = Column(JSON, default=list)
+    status = Column(SAEnum(DesktopDemoStatus), default=DesktopDemoStatus.draft, nullable=False)
+    step_count = Column(Integer, default=0)
+    metadata_ = Column("metadata", JSON, default=dict)
+
+    tasks = relationship("DesktopTask", back_populates="demo")
+
+
+class DesktopSidecar(Base, TimestampMixin):
+    __tablename__ = "desktop_sidecars"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    device_id = Column(String(128), nullable=False, index=True)
+    device_name = Column(String(255), nullable=False)
+    hostname = Column(String(255), nullable=True)
+    platform = Column(String(64), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_ = Column("metadata", JSON, default=dict)
+
+    tasks = relationship("DesktopTask", back_populates="sidecar")
+
+
+class DesktopTask(Base, TimestampMixin):
+    __tablename__ = "desktop_tasks"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    demo_id = Column(String(36), ForeignKey("desktop_demos.id"), nullable=True)
+    sidecar_id = Column(String(36), ForeignKey("desktop_sidecars.id"), nullable=True)
+    action = Column(SAEnum(DesktopTaskAction), nullable=False)
+    status = Column(SAEnum(ExecutionStatus), default=ExecutionStatus.pending, nullable=False)
+    instructions = Column(Text, nullable=True)
+    input_data = Column(JSON, default=dict)
+    output_data = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    demo = relationship("DesktopDemo", back_populates="tasks")
+    sidecar = relationship("DesktopSidecar", back_populates="tasks")
+
+
+class HarnessPendingAction(Base, TimestampMixin):
+    __tablename__ = "harness_pending_actions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    tool_name = Column(String(128), nullable=False)
+    tool_args = Column(JSON, default=dict)
+    risk_level = Column(String(16), nullable=False, default="L2")
+    status = Column(SAEnum(ExecutionStatus), default=ExecutionStatus.awaiting_confirmation, nullable=False)
+    source = Column(String(64), nullable=True)
+    source_id = Column(String(36), nullable=True)
+    result = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
 # ──────────────────────────────────────────────

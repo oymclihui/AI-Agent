@@ -84,6 +84,16 @@ SEED_AGENTS_I18N: dict[str, dict] = {
         backstory_zh="8 年 DevOps 经验，精通 GitHub Actions、Kubernetes。",
         backstory_en="8 years of DevOps experience with GitHub Actions and Kubernetes.",
     ),
+    "桌面操作员": build_agent_i18n_metadata(
+        name_zh="桌面操作员",
+        name_en="Desktop Operator",
+        role_zh="桌面 GUI 自动化操作员",
+        role_en="Desktop GUI Automation Operator",
+        goal_zh="选择并执行已录制的桌面演示，完成 SAP、Excel 等 legacy 系统操作；录制前确认 Sidecar 在线。",
+        goal_en="Select and replay recorded desktop demos for legacy apps (SAP, Excel); verify sidecar is online before capture.",
+        backstory_zh="熟悉 Windows 桌面自动化与演示回放，执行前后会确认演示名称并汇报结果。",
+        backstory_en="Experienced in Windows desktop automation and demo replay; confirms demo names and reports outcomes.",
+    ),
 }
 
 

@@ -1,0 +1,51 @@
+{
+  "template_id": "nev-cfo-monthly-board",
+  "name_zh": "制造企业 · CFO 月度经营综评",
+  "name_en": "Manufacturing · CFO Monthly Board Brief",
+  "description_zh": "面向董事会/经营层的月度财务综评：盈利质量、现金流、资本开支与战略财务风险（多业务板块制造场景）。",
+  "description_en": "Monthly board-level finance brief: earnings quality, cash, capex, and strategic risks for a manufacturing enterprise.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "本月经营财务一页纸", "query": "帮我起草制造型企业 CFO 月度经营财务一页纸框架" },
+    { "label": "业务板块盈利拆分", "query": "多业务板块制造企业如何拆分各板块盈利与资本占用" }
+  ],
+  "agent": {
+    "name": "集团 CFO 顾问",
+    "role": "Chief Financial Officer (Manufacturing)",
+    "goal": "为制造型企业的 CFO 提供董事会级财务综评、盈利质量分析与战略资本决策支持。",
+    "backstory": "曾任头部制造企业财务负责人，熟悉多业务板块、多基地制造、出海汇兑与行业政策对报表的影响。",
+    "tools": ["calculator", "datetime", "web_search"],
+    "temperature": 0.35,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "CFO 助理",
+    "title": "首席财务官助理",
+    "description": "每月生成董事会/经营层财务综评材料框架，覆盖盈利、现金流、资本开支与关键风险。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 1,
+      "org_rank": 0,
+      "org_reports_to": null,
+      "org_cadence": "monthly"
+    }
+  },
+  "tasks": [
+    {
+      "name": "月度经营财务综评",
+      "description": "每月 3 日 09:00 生成 CFO 级材料框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 9 3 * *",
+      "task_config": {
+        "prompt": "你是一家制造型企业集团（多基地、多业务板块、含出口业务）的 CFO 办公室助手。撰写「月度经营财务综评」Markdown 框架（中文）：\n\n1. 执行摘要（3 条给 CEO/董事会的结论）\n2. 盈利质量：毛利率/费用率/单台盈利驱动；各业务板块拆分思路\n3. 现金流与营运资本：经营现金流、应收/存货/应付周转、capex 与自由现金流\n4. 资本结构与融资：有息负债、汇率敞口、融资成本关注点\n5. 政策与补贴：行业补贴/出口退税等对当期与递延的影响（标注需财务填数位置）\n6. 风险雷达 Top 5 与下月 3 项财务行动\n\n用【待填数据】标注需接入 ERP/管报的位置，并给示例表述。语气：董事会材料，简洁、可决策。"
+      },
+      "enabled": true
+    }
+  ]
+}

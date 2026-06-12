@@ -217,7 +217,12 @@ class LLMNode(BaseNode):
 
         state.current_node = self.node_id
         prompt_tpl = self.config.get("prompt", "请处理以下内容：{input}")
-        prompt = prompt_tpl.format(**_template_vars(state))
+        vars_ = _template_vars(state)
+        try:
+            prompt = prompt_tpl.format(**vars_)
+        except KeyError:
+            from collections import defaultdict
+            prompt = prompt_tpl.format_map(defaultdict(lambda: "", vars_))
 
         model = self.config.get("model")
         provider = self.config.get("provider")
@@ -286,6 +291,8 @@ class CodeNode(BaseNode):
 
         import pandas as pd
 
+        from app.core.analytics.weekly_sales import compute_weekly_sales_metrics
+
         safe_builtins = {
             "len": len,
             "str": str,
@@ -314,6 +321,7 @@ class CodeNode(BaseNode):
             "Path": Path,
             "pd": pd,
             "pandas": pd,
+            "compute_weekly_sales_metrics": compute_weekly_sales_metrics,
         }
 
     async def __call__(self, state: WorkflowState) -> WorkflowState:
@@ -600,4 +608,115 @@ class StopErrorNode(BaseNode):
         msg = cfg.get("errorMessage", "Workflow stopped")
         state.errors.append(msg)
         state.is_complete = True
+        return state
+
+
+class DesktopCaptureNode(BaseNode):
+    """Start/stop desktop GUI capture via local sidecar."""
+    node_type = "desktop_capture"
+
+    async def __call__(self, state: WorkflowState) -> WorkflowState:
+        from app.core.desktop.service import (
+            enqueue_task,
+            get_primary_sidecar,
+            sidecar_is_online,
+            wait_for_task,
+        )
+        from app.db.models import DesktopTaskAction, ExecutionStatus
+        from app.db.session import AsyncSessionLocal
+
+        state.current_node = self.node_id
+        cfg = resolve_config(self.config, state)
+        user_id = state.context.get("_user_id")
+        if not user_id:
+            state.errors.append(f"DesktopCaptureNode {self.node_id}: missing user context")
+            return state
+
+        action = str(cfg.get("action", "start")).strip().lower()
+        if action not in ("start", "stop"):
+            state.errors.append(f"DesktopCaptureNode {self.node_id}: action must be start or stop")
+            return state
+
+        async with AsyncSessionLocal() as db:
+            sidecar = await get_primary_sidecar(db, user_id)
+            if not sidecar_is_online(sidecar):
+                state.errors.append(f"DesktopCaptureNode {self.node_id}: sidecar offline")
+                return state
+
+            task_action = (
+                DesktopTaskAction.capture_start if action == "start" else DesktopTaskAction.capture_stop
+            )
+            input_data = {
+                "demo_name": cfg.get("demo_name", ""),
+                "app_name": cfg.get("app_name", ""),
+                "description": cfg.get("description", ""),
+            }
+            if action == "stop" and not str(input_data.get("demo_name") or "").strip():
+                state.errors.append(f"DesktopCaptureNode {self.node_id}: demo_name required for stop")
+                return state
+
+            task = await enqueue_task(
+                db,
+                user_id,
+                action=task_action,
+                input_data=input_data,
+                sidecar_id=sidecar.id if sidecar else None,
+            )
+            await db.commit()
+            task_id = task.id
+
+        timeout = float(cfg.get("wait_timeout") or 90)
+        finished = await wait_for_task(task_id, user_id, timeout_s=timeout)
+        if not finished or finished.status != ExecutionStatus.completed:
+            err = finished.error_message if finished else "timeout"
+            state.errors.append(f"DesktopCaptureNode {self.node_id} failed: {err}")
+            return state
+
+        result = finished.output_data or {}
+        state.tool_results[self.node_id] = result
+        if finished.demo_id:
+            state.context["desktop_demo_id"] = finished.demo_id
+        state.add_message("tool", json.dumps(result, ensure_ascii=False), self.node_id)
+        return state
+
+
+class DesktopReplayNode(BaseNode):
+    """Replay a recorded desktop demo via local sidecar."""
+    node_type = "desktop_replay"
+
+    async def __call__(self, state: WorkflowState) -> WorkflowState:
+        from app.core.desktop.service import replay_demo_for_user
+
+        state.current_node = self.node_id
+        cfg = resolve_config(self.config, state)
+        user_id = state.context.get("_user_id")
+        if not user_id:
+            state.errors.append(f"DesktopReplayNode {self.node_id}: missing user context")
+            return state
+
+        demo_name = str(cfg.get("demo_name") or state.context.get("demo_name") or "").strip()
+        demo_id = str(cfg.get("demo_id") or state.context.get("desktop_demo_id") or "").strip() or None
+        if not demo_name and not demo_id:
+            state.errors.append(f"DesktopReplayNode {self.node_id}: demo_name or demo_id required")
+            return state
+
+        timeout = float(cfg.get("wait_timeout") or 120)
+        confirmed = bool(cfg.get("confirmed"))
+        result = await replay_demo_for_user(
+            user_id,
+            demo_id=demo_id,
+            demo_name=demo_name or None,
+            instructions=str(cfg.get("instructions") or "").strip() or None,
+            timeout_s=timeout,
+            confirmed=confirmed,
+            require_confirmation=False if confirmed else None,
+        )
+        state.tool_results[self.node_id] = result
+        if result.get("ok"):
+            state.context["desktop_replay_result"] = result
+            state.add_message("tool", str(result.get("message", "replay ok")), self.node_id)
+        else:
+            state.errors.append(
+                f"DesktopReplayNode {self.node_id}: {result.get('error', 'replay failed')}"
+            )
         return state

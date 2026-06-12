@@ -125,7 +125,59 @@ $env:AIAGNET_FRONTEND_PORT = "3000"
 
 ---
 
-## 五、相关文档
+## 五、桌面自动化 Sidecar（可选）
+
+若演示 **桌面 GUI 录放**，除平台外还需在 **演示机 Windows 桌面** 运行 Sidecar。
+
+### 1. 获取 Sidecar exe
+
+开发机打包：
+
+```powershell
+cd E:\AIAGNET
+.\scripts\build_desktop_sidecar.ps1
+```
+
+输出：`release\desktop-sidecar\AIAGNET-Desktop-Sidecar.exe` 与 `sidecar.env.example`
+
+将 `release\desktop-sidecar\` 整个目录复制到演示机（可与平台 zip 分开交付）。
+
+### 2. 配置 sidecar.env
+
+```env
+AIAGNET_BASE_URL=http://127.0.0.1:8000
+AIAGNET_FRONTEND_URL=http://localhost:3000
+AIAGNET_LOGIN=admin
+AIAGNET_PASSWORD=admin123
+AIAGNET_OPEN_BROWSER=1
+```
+
+若平台在局域网其他机器，将 `AIAGNET_BASE_URL` 改为 `http://<服务器IP>:8000`。
+
+### 3. 启动
+
+双击 `AIAGNET-Desktop-Sidecar.exe`，控制台显示 `Sidecar registered` 即成功。
+
+Web 端：**侧边栏 → 桌面自动化**，确认 **Sidecar 在线**。
+
+### 4. 平台侧配置（backend\.env）
+
+```env
+DESKTOP_REQUIRE_CONFIRMATION=true
+DESKTOP_OPENADAPT_DATA_DIR=./desktop_openadapt_data
+HARNESS_REQUIRE_TOOL_CONFIRMATION=true
+HARNESS_LLM_TIMEOUT_SEC=120
+HARNESS_MAX_ITERATIONS_CAP=25
+```
+
+> Sidecar **不能** 在 Docker 内运行；Docker 仅部署平台后端/前端。
+
+详细说明：[桌面自动化与 Harness 说明](./桌面自动化与Harness说明.md)
+
+---
+
+## 六、相关文档
 
 - [打包部署方案](./打包部署方案.md) — 完整部署策略（Docker / Linux / Windows）
 - [用户操作手册](./用户操作手册.md)
+- [桌面自动化与 Harness 说明](./桌面自动化与Harness说明.md)

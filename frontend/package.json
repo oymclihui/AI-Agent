@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:all": "npm run lowcode:build && next build",
+    "lowcode:install": "cd lowcode-designer && npm install --legacy-peer-deps",
+    "lowcode:build": "cd lowcode-designer && npm run build",
+    "lowcode:dev": "cd lowcode-designer && npm start",
     "start": "next start",
     "lint": "next lint"
   },

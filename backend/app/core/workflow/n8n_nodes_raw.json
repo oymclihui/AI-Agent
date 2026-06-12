@@ -50,6 +50,94 @@
       ]
     },
     {
+      "id": "desktopCapture",
+      "type": "desktop_capture",
+      "category": "tools",
+      "name": "Desktop Capture",
+      "description": "Record desktop GUI demonstration via local sidecar",
+      "icon": "mouse-pointer",
+      "color": "#0ea5e9",
+      "integration": null,
+      "properties": [
+        {
+          "name": "action",
+          "displayName": "Action",
+          "type": "options",
+          "default": "start",
+          "options": [
+            { "name": "Start", "value": "start" },
+            { "name": "Stop & Save", "value": "stop" }
+          ]
+        },
+        {
+          "name": "demo_name",
+          "displayName": "Demo Name",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "app_name",
+          "displayName": "Target App",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "description",
+          "displayName": "Description",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "wait_timeout",
+          "displayName": "Wait Timeout (seconds)",
+          "type": "number",
+          "default": 90
+        }
+      ],
+      "outputs": [
+        "main"
+      ]
+    },
+    {
+      "id": "desktopReplay",
+      "type": "desktop_replay",
+      "category": "tools",
+      "name": "Desktop Replay",
+      "description": "Replay a recorded desktop GUI demo via local sidecar",
+      "icon": "mouse-pointer",
+      "color": "#6366f1",
+      "integration": null,
+      "properties": [
+        {
+          "name": "demo_name",
+          "displayName": "Demo Name",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "demo_id",
+          "displayName": "Demo ID",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "instructions",
+          "displayName": "Instructions",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "wait_timeout",
+          "displayName": "Wait Timeout (seconds)",
+          "type": "number",
+          "default": 120
+        }
+      ],
+      "outputs": [
+        "main"
+      ]
+    },
+    {
       "id": "guardrails",
       "type": "llm",
       "category": "ai",

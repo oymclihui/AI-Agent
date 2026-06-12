@@ -15,6 +15,7 @@ from app.db.init_db import (
     init_db, seed_default_models, seed_template_agents,
     seed_template_workflows, seed_template_skills, seed_template_employees,
     seed_platform_knowledge_base, ensure_bundled_skills, seed_default_admin,
+    seed_desktop_operator_agent, seed_org_rbac,
 )
 from app.db.session import AsyncSessionLocal
 from app.core.tools.registry import ToolRegistry
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         await seed_default_models(session)
         await seed_template_agents(session)
+        await seed_desktop_operator_agent(session)
         await seed_template_workflows(session)
         from app.core.workflow.templates.loader import ensure_workflow_templates
         await ensure_workflow_templates(session)
@@ -43,6 +45,7 @@ async def lifespan(app: FastAPI):
         await seed_template_employees(session)
         await seed_platform_knowledge_base(session)
         await seed_default_admin(session)
+        await seed_org_rbac(session)
     logger.info("default_models_seeded")
 
     # Pre-load tool registry

@@ -1,0 +1,9 @@
+# Optional: install on the Windows PC that runs scripts/desktop_sidecar.py
+# OpenAdaptRunner auto-detects python packages, then openadapt CLI, else mock mode.
+#
+# pip install -r requirements-openadapt.txt
+#
+# Note: OpenAdapt packages evolve quickly; pin versions for production if needed.
+
+openadapt-capture
+openadapt-agent

@@ -59,3 +59,17 @@ def build_config_payload(
 
 def response_inference_params(config: dict | None) -> ModelInferenceParams:
     return extract_inference_params(config)
+
+
+class ModelConnectionTestRequest(BaseModel):
+    provider: str = Field(..., min_length=1, max_length=64)
+    model_id: str = Field(..., min_length=1, max_length=128)
+    base_url: Optional[str] = Field(None, max_length=512)
+
+
+class ModelConnectionTestResponse(BaseModel):
+    ok: bool
+    message: str
+    latency_ms: int = 0
+    endpoint: Optional[str] = None
+    preview: Optional[str] = None

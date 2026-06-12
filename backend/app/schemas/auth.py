@@ -46,7 +46,7 @@ class MessageResponse(BaseModel):
 
 class UserMailboxCreate(BaseModel):
     email: Optional[str] = Field(None, max_length=255)
-    mailbox_password: str = Field(..., min_length=1)
+    mailbox_password: Optional[str] = Field(None, min_length=1)
     imap_host: Optional[str] = Field(None, max_length=255)
     imap_port: Optional[int] = Field(None, ge=1, le=65535)
     imap_use_ssl: Optional[bool] = True
@@ -79,9 +79,27 @@ class UserResponse(BaseModel):
     is_active: bool
     is_admin: bool = False
     created_at: datetime
+    primary_department: Optional["DepartmentBrief"] = None
+    roles: list["RoleAssignmentResponse"] = []
+    permissions: list[str] = []
+    data_scope: str = "self"
 
     class Config:
         from_attributes = True
+
+
+class DepartmentBrief(BaseModel):
+    id: str
+    name: str
+    code: Optional[str] = None
+    path: str
+
+
+class RoleAssignmentResponse(BaseModel):
+    role_code: str
+    role_label_zh: str
+    role_label_en: str
+    scope_department_id: Optional[str] = None
 
 
 class TokenResponse(BaseModel):

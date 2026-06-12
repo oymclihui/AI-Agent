@@ -43,7 +43,8 @@ async def generate_agent(
     prompt = (
         "You are an agent designer. Given a user description, output ONLY valid JSON with keys: "
         "name (Chinese), role (English job title), goal (Chinese), backstory (Chinese), "
-        "tools (array of tool names from: web_search, calculator, http_request, datetime, fetch_mail), "
+        "tools (array of tool names from: web_search, calculator, http_request, datetime, fetch_mail, "
+        "desktop_list_demos, desktop_replay, desktop_capture), "
         "temperature (0.0-1.0).\n\n"
         f"Description: {payload.description}"
     )
@@ -264,6 +265,8 @@ async def run_agent(
     task = Task(description=payload.task)
 
     from app.core.auth.context import set_current_user_id, reset_current_user_id
+    from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+
     ctx = set_current_user_id(user.id)
 
     execution = AgentExecution(
@@ -275,6 +278,10 @@ async def run_agent(
     db.add(execution)
     await db.flush()
 
+    harness_token = set_harness_context(
+        HarnessContext(user_id=user.id, source="agent", source_id=execution.id)
+    )
+
     if payload.stream:
         async def token_stream():
             try:
@@ -283,21 +290,26 @@ async def run_agent(
                 yield "data: [DONE]\n\n"
             finally:
                 reset_current_user_id(ctx)
+                reset_harness_context(harness_token)
 
         return StreamingResponse(token_stream(), media_type="text/event-stream")
 
     try:
-        result = await executor.run(task, context=payload.context)
+        result = await executor.run(task, context=payload.context, db=db)
         execution.status = ExecutionStatus.completed
         execution.output = result["output"]
         execution.token_usage = result.get("token_usage", {})
-        execution.steps = result.get("steps", [])
+        trace = result.get("steps", [])
+        if result.get("harness_trace"):
+            trace = [*trace, {"harness_trace": result["harness_trace"]}]
+        execution.steps = trace
     except Exception as e:
         execution.status = ExecutionStatus.failed
         execution.error_message = str(e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(ctx)
+        reset_harness_context(harness_token)
         await db.flush()
 
     return {
@@ -305,4 +317,5 @@ async def run_agent(
         "output": execution.output,
         "token_usage": execution.token_usage,
         "steps": execution.steps,
+        "harness_trace": result.get("harness_trace", []),
     }

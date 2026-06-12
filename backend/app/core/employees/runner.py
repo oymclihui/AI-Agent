@@ -26,6 +26,7 @@ from app.db.models import (
     EmployeeScheduledTask,
     EmployeeTaskRun,
     EmployeeStatus,
+    EmployeeTaskType,
     ExecutionStatus,
     TaskTrigger,
 )
@@ -48,6 +49,64 @@ async def _resolve_agent(db: AsyncSession, employee: DigitalEmployee) -> AgentMo
     return agent
 
 
+async def _run_desktop_automation_task(
+    db: AsyncSession,
+    task: EmployeeScheduledTask,
+    employee: DigitalEmployee,
+    run: EmployeeTaskRun,
+    task_config: dict[str, Any],
+    start: float,
+) -> None:
+    from app.core.desktop.service import replay_demo_for_user
+
+    user_id = employee.owner_id
+    if not user_id:
+        raise ValueError("Employee owner_id is required for desktop automation tasks")
+
+    demo_id = task_config.get("demo_id")
+    demo_name = task_config.get("demo_name")
+    if not demo_id and not demo_name:
+        raise ValueError("task_config.demo_name or demo_id is required for desktop_automation")
+
+    timeout_s = float(task_config.get("timeout_s") or 120)
+    result = await replay_demo_for_user(
+        user_id,
+        demo_id=str(demo_id) if demo_id else None,
+        demo_name=str(demo_name).strip() if demo_name else None,
+        instructions=str(task_config.get("instructions") or "").strip() or None,
+        timeout_s=timeout_s,
+        confirmed=bool(task_config.get("auto_confirm") or task_config.get("confirmed")),
+        require_confirmation=False if task_config.get("auto_confirm") else None,
+    )
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    if not result.get("ok"):
+        run.status = ExecutionStatus.failed
+        run.error_message = str(result.get("error") or "desktop replay failed")
+        run.duration_ms = duration_ms
+        run.output_data = {"desktop_result": result}
+        task.last_status = "failed"
+        return
+
+    output_text = str(result.get("message") or "Desktop replay completed.")
+    report_name = run_report_filename(run, task)
+    report_md = (
+        f"# {employee.name} · {task.name}\n\n"
+        f"## Desktop Demo\n\n{demo_name or demo_id}\n\n"
+        f"## Result\n\n{output_text}\n"
+    )
+    artifacts = merge_artifacts([], [save_text_artifact(report_md, report_name)])
+    run.status = ExecutionStatus.completed
+    run.output_data = {
+        "output": output_text,
+        "desktop_result": result,
+        "artifacts": artifacts,
+        "report_filename": report_name,
+    }
+    run.duration_ms = duration_ms
+    task.last_status = "completed"
+
+
 async def run_scheduled_task(
     db: AsyncSession,
     task: EmployeeScheduledTask,
@@ -59,8 +118,12 @@ async def run_scheduled_task(
         raise ValueError("Employee is not active")
 
     task_config = task.task_config or {}
+    task_type = task.task_type
+    if hasattr(task_type, "value"):
+        task_type = task_type.value
+
     prompt = str(task_config.get("prompt") or task_config.get("task") or "").strip()
-    if not prompt:
+    if task_type == EmployeeTaskType.agent.value and not prompt:
         raise ValueError("task_config.prompt is required")
 
     run = EmployeeTaskRun(
@@ -69,21 +132,36 @@ async def run_scheduled_task(
         employee_id=employee.id,
         status=ExecutionStatus.running,
         triggered_by=TaskTrigger(triggered_by),
-        input_data={"prompt": prompt, "context": task_config.get("context", {})},
+        input_data={
+            "task_type": task_type,
+            "prompt": prompt,
+            "task_config": task_config,
+        },
     )
     db.add(run)
     await db.flush()
 
-    agent_model = await _resolve_agent(db, employee)
-    if not agent_model:
-        run.status = ExecutionStatus.failed
-        run.error_message = f"Agent not found: {employee.agent_id}"
-        _finalize_task_schedule(task)
-        await db.flush()
-        return run
-
     start = time.monotonic()
+    ctx_token = None
+    from app.core.auth.context import set_current_user_id, reset_current_user_id
+    if employee.owner_id:
+        ctx_token = set_current_user_id(employee.owner_id)
+
     try:
+        if task_type == EmployeeTaskType.desktop_automation.value:
+            await _run_desktop_automation_task(db, task, employee, run, task_config, start)
+            _finalize_task_schedule(task)
+            await db.flush()
+            return run
+
+        agent_model = await _resolve_agent(db, employee)
+        if not agent_model:
+            run.status = ExecutionStatus.failed
+            run.error_message = f"Agent not found: {employee.agent_id}"
+            _finalize_task_schedule(task)
+            await db.flush()
+            return run
+
         ok, detail = await check_llm_reachable(
             agent_model.llm_provider,
             agent_model.llm_model,
@@ -92,11 +170,35 @@ async def run_scheduled_task(
         if not ok:
             raise ConnectionError(detail)
 
-        executor = await build_agent_executor(db, agent_model)
-        result = await executor.run(
-            Task(description=prompt),
-            context=task_config.get("context") if isinstance(task_config.get("context"), dict) else None,
-        )
+        from app.core.auth.context import set_current_user_id, reset_current_user_id
+        from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+
+        owner_id = employee.owner_id
+        harness_token = None
+        auth_token = None
+        if owner_id:
+            auth_token = set_current_user_id(owner_id)
+            harness_token = set_harness_context(
+                HarnessContext(
+                    user_id=owner_id,
+                    source="employee",
+                    source_id=run.id,
+                    auto_confirm=True,
+                )
+            )
+
+        try:
+            executor = await build_agent_executor(db, agent_model)
+            result = await executor.run(
+                Task(description=prompt),
+                context=task_config.get("context") if isinstance(task_config.get("context"), dict) else None,
+                db=db,
+            )
+        finally:
+            if harness_token is not None:
+                reset_harness_context(harness_token)
+            if auth_token is not None:
+                reset_current_user_id(auth_token)
         duration_ms = int((time.monotonic() - start) * 1000)
 
         agent_exec = AgentExecution(
@@ -137,10 +239,14 @@ async def run_scheduled_task(
         task.last_status = "completed"
     except Exception as exc:
         run.status = ExecutionStatus.failed
-        run.error_message = format_llm_task_error(exc, agent_model)
+        agent_model = await _resolve_agent(db, employee)
+        run.error_message = format_llm_task_error(exc, agent_model) if agent_model else str(exc)
         run.duration_ms = int((time.monotonic() - start) * 1000)
         task.last_status = "failed"
         logger.error("employee_task_failed", task_id=task.id, error=str(exc))
+    finally:
+        if ctx_token is not None:
+            reset_current_user_id(ctx_token)
 
     _finalize_task_schedule(task)
     await db.flush()

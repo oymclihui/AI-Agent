@@ -10,17 +10,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.memory.manager import MemoryManager
 
 logger = structlog.get_logger(__name__)
-def _strip_thinking(text: str) -> str:
-    """Remove Qwen-style thinking blocks from model output."""
-    open_tag = "<" + "think" + ">"
-    close_tag = "</" + "think" + ">"
-    while open_tag in text:
-        s = text.find(open_tag)
-        e = text.find(close_tag, s)
-        if e == -1:
+
+_OPEN_TAG = "<" + "think" + ">"
+_CLOSE_TAG = "</" + "think" + ">"
+
+
+def _extract_thinking_and_content(text: str) -> tuple[str, str]:
+    """Split Qwen-style `` blocks from visible assistant text."""
+    thinking_parts: list[str] = []
+    remainder = text
+    while _OPEN_TAG in remainder:
+        start = remainder.find(_OPEN_TAG)
+        prefix = remainder[:start]
+        inner = remainder[start + len(_OPEN_TAG):]
+        end = inner.find(_CLOSE_TAG)
+        if end == -1:
+            if inner:
+                thinking_parts.append(inner)
+            remainder = prefix
             break
-        text = text[:s] + text[e + len(close_tag):]
-    return text.strip()
+        thinking_parts.append(inner[:end])
+        remainder = prefix + inner[end + len(_CLOSE_TAG):]
+    thinking = "\n\n".join(part.strip() for part in thinking_parts if part.strip())
+    return thinking, remainder.strip()
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove thinking blocks; keep only user-visible content."""
+    _, content = _extract_thinking_and_content(text)
+    return content
 
 
 class DialogueManager:
@@ -99,7 +117,10 @@ class DialogueManager:
         messages.append(HumanMessage(content=user_message))
 
         response = await llm.ainvoke(messages)
-        assistant_message = _strip_thinking(response.content or "")
+        raw = response.content or ""
+        thinking, assistant_message = _extract_thinking_and_content(raw)
+        if not assistant_message:
+            assistant_message = _strip_thinking(raw)
 
         token_usage = {}
         if hasattr(response, "usage_metadata") and response.usage_metadata:
@@ -116,6 +137,7 @@ class DialogueManager:
 
         return {
             "message": assistant_message,
+            "thinking": thinking or None,
             "token_usage": token_usage,
             "rag_used": bool(rag_context),
         }
@@ -130,8 +152,8 @@ class DialogueManager:
         attachment_context: Optional[str] = None,
         db: Optional[AsyncSession] = None,
         user_id: Optional[str] = None,
-    ) -> AsyncIterator[str]:
-        """Stream the assistant's response token by token."""
+    ) -> AsyncIterator[dict[str, str]]:
+        """Stream assistant output; yields ``thinking`` and/or ``token`` deltas."""
         from app.models_hub.router import ModelRouter
 
         llm_provider = None
@@ -164,17 +186,34 @@ class DialogueManager:
         messages.extend(history)
         messages.append(HumanMessage(content=user_message))
 
+        full_thinking = ""
         full_response = ""
         buffer = ""
         async for chunk in llm.astream(messages, config={"streaming": True}):
+            extra = getattr(chunk, "additional_kwargs", None) or {}
+            reasoning = extra.get("reasoning_content") or extra.get("reasoning")
+            if reasoning:
+                if isinstance(reasoning, str) and len(reasoning) > len(full_thinking):
+                    delta = reasoning[len(full_thinking):]
+                    full_thinking = reasoning
+                    if delta:
+                        yield {"thinking": delta}
+
             if chunk.content:
                 buffer += chunk.content
-                cleaned = _strip_thinking(buffer)
-                if cleaned != full_response:
-                    delta = cleaned[len(full_response):]
-                    full_response = cleaned
+                thinking, visible = _extract_thinking_and_content(buffer)
+
+                if thinking != full_thinking:
+                    delta = thinking[len(full_thinking):]
+                    full_thinking = thinking
                     if delta:
-                        yield delta
+                        yield {"thinking": delta}
+
+                if visible != full_response:
+                    delta = visible[len(full_response):]
+                    full_response = visible
+                    if delta:
+                        yield {"token": delta}
 
         await self.memory.add_exchange(
             session_id=session_id,

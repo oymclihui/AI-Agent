@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Plus, Database, Upload, Trash2, Search, FileText, Loader2, X, Eye, Settings, PlugZap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Plus, Database, Upload, Trash2, Search, FileText, Loader2, X, Eye, Settings, PlugZap, FolderOpen, Building2, HardDrive } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { knowledgeApi, modelsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
@@ -41,6 +41,7 @@ const FALLBACK_EMBEDDINGS = ["nomic-embed-text", "nomic-embed-text-v2-moe", "qwe
 const DEFAULT_BYD_KMS_URL = "https://kms-api.byd.com/open-api/1.0/llm/v1/rag-qa";
 
 type KbSourceType = "local" | "byd_kms";
+type ListFilter = "all" | KbSourceType;
 
 interface BydKmsForm {
   api_url: string;
@@ -83,6 +84,8 @@ export default function KnowledgePage() {
   const [testingByd, setTestingByd] = useState(false);
   const [embedOptions, setEmbedOptions] = useState<string[]>(FALLBACK_EMBEDDINGS);
   const [sourceType, setSourceType] = useState<KbSourceType>("local");
+  const [listFilter, setListFilter] = useState<ListFilter>("all");
+  const [kbFilterSearch, setKbFilterSearch] = useState("");
   const [bydKmsForm, setBydKmsForm] = useState<BydKmsForm>(() => ({
     ...EMPTY_BYD_KMS,
     user_id: user?.employee_no || "",
@@ -118,6 +121,11 @@ export default function KnowledgePage() {
   useEffect(() => { load(); loadEmbeddings(); }, []);
 
   useEffect(() => {
+    const f = new URLSearchParams(window.location.search).get("filter");
+    if (f === "local" || f === "byd_kms") setListFilter(f);
+  }, []);
+
+  useEffect(() => {
     if (user?.employee_no && !bydKmsForm.user_id) {
       setBydKmsForm((f) => ({ ...f, user_id: user.employee_no || "" }));
     }
@@ -125,8 +133,8 @@ export default function KnowledgePage() {
 
   const isBydKb = activeKbMeta?.source_type === "byd_kms";
 
-  const openCreateModal = () => {
-    setSourceType("local");
+  const openCreateModal = (preset: KbSourceType = "local") => {
+    setSourceType(preset);
     setBydKmsForm({ ...EMPTY_BYD_KMS, user_id: user?.employee_no || "" });
     setShowCreate(true);
   };
@@ -344,52 +352,147 @@ export default function KnowledgePage() {
     ? isMarkdown(docContent.file_type, docContent.filename)
     : false;
 
+  const filteredKbs = useMemo(() => {
+    let list = kbs;
+    if (listFilter !== "all") {
+      list = list.filter((kb) => (kb.source_type || "local") === listFilter);
+    }
+    const q = kbFilterSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (kb) =>
+          kb.name.toLowerCase().includes(q) ||
+          (kb.description || "").toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [kbs, listFilter, kbFilterSearch]);
+
+  const localKbs = filteredKbs.filter((kb) => kb.source_type !== "byd_kms");
+  const enterpriseKbs = filteredKbs.filter((kb) => kb.source_type === "byd_kms");
+
+  const renderKbItem = (kb: KB) => (
+    <button
+      key={kb.id}
+      type="button"
+      onClick={() => openKb(kb)}
+      className={`knowledge-kb-item${activeKb === kb.id ? " knowledge-kb-item-active" : ""}`}
+    >
+      <div className={`knowledge-kb-icon ${kb.source_type === "byd_kms" ? "knowledge-kb-icon-enterprise" : "knowledge-kb-icon-local"}`}>
+        {kb.source_type === "byd_kms" ? <Building2 className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <p className="line-clamp-1 text-xs font-medium theme-text">{kb.name}</p>
+          <span className={`knowledge-kb-badge ${kb.source_type === "byd_kms" ? "knowledge-kb-badge-enterprise" : "knowledge-kb-badge-local"}`}>
+            {kb.source_type === "byd_kms" ? k.enterpriseBadge[lang] : k.localBadge[lang]}
+          </span>
+        </div>
+        <p className="text-[10px] theme-muted">
+          {kb.source_type === "byd_kms"
+            ? k.sourceBydKms[lang]
+            : `${kb.document_count} ${k.documents[lang]}`}
+        </p>
+      </div>
+    </button>
+  );
+
   return (
-    <div className="flex h-screen">
-      {/* KB list */}
-      <div className="theme-surface flex w-60 shrink-0 flex-col border-r theme-border">
-        <div className="flex items-center justify-between border-b theme-border p-3">
-          <span className="text-sm font-semibold theme-text">{k.title[lang]}</span>
-          <button onClick={openCreateModal} className="rounded-lg bg-blue-600 p-1 text-white hover:bg-blue-700 transition-colors">
+    <div className="knowledge-hub flex h-[calc(100vh-0px)] min-h-0">
+      {/* Sidebar — grouped by source */}
+      <div className="knowledge-sidebar">
+        <div className="knowledge-sidebar-head">
+          <div>
+            <h1>{k.title[lang]}</h1>
+            <p>{k.subtitle[lang]}</p>
+          </div>
+          <button type="button" onClick={() => openCreateModal()} className="knowledge-icon-btn" title={k.newKB[lang]}>
             <Plus className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {loading ? <p className="text-xs text-slate-500 px-2">{c.loading[lang]}</p> :
-            kbs.length === 0 ? <p className="text-xs text-slate-500 px-2 mt-4">{k.noKB[lang]}</p> :
-              kbs.map((kb) => (
-                <button
-                  key={kb.id}
-                  onClick={() => openKb(kb)}
-                  className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${activeKb === kb.id ? "panel-list-item-active" : "panel-list-item-idle hover:bg-[var(--hover)]"}`}
-                >
-                  <div className="flex items-center gap-2">
-                    <Database className="h-4 w-4 shrink-0" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="line-clamp-1 text-xs font-medium">{kb.name}</p>
-                        {kb.source_type === "byd_kms" && (
-                          <span className="shrink-0 rounded bg-blue-500/15 px-1 py-0.5 text-[9px] text-blue-400">API</span>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-slate-500">
-                        {kb.source_type === "byd_kms"
-                          ? k.sourceBydKms[lang]
-                          : `${kb.document_count} ${k.documents[lang]}`}
-                      </p>
-                    </div>
-                  </div>
-                </button>
-              ))}
+
+        <div className="knowledge-filter-tabs">
+          {(["all", "local", "byd_kms"] as ListFilter[]).map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setListFilter(f)}
+              className={`knowledge-filter-tab${listFilter === f ? " knowledge-filter-tab-active" : ""}`}
+            >
+              {f === "all" ? k.tabAll[lang] : f === "local" ? k.tabLocal[lang] : k.tabEnterprise[lang]}
+            </button>
+          ))}
+        </div>
+
+        <div className="knowledge-sidebar-search">
+          <Search className="h-3.5 w-3.5 shrink-0 theme-muted" />
+          <input
+            type="search"
+            value={kbFilterSearch}
+            onChange={(e) => setKbFilterSearch(e.target.value)}
+            placeholder={k.searchKbPlaceholder[lang]}
+          />
+        </div>
+
+        <div className="knowledge-sidebar-list">
+          {loading ? (
+            <p className="px-2 text-xs theme-muted">{c.loading[lang]}</p>
+          ) : filteredKbs.length === 0 ? (
+            <div className="knowledge-sidebar-empty">
+              <p className="text-xs theme-muted">{k.noKB[lang]}</p>
+              <button type="button" onClick={() => openCreateModal("local")} className="knowledge-quick-link">
+                <HardDrive className="h-3.5 w-3.5" /> {k.tabLocal[lang]}
+              </button>
+              <button type="button" onClick={() => openCreateModal("byd_kms")} className="knowledge-quick-link">
+                <Building2 className="h-3.5 w-3.5" /> {k.tabEnterprise[lang]}
+              </button>
+            </div>
+          ) : listFilter === "all" ? (
+            <>
+              {localKbs.length > 0 && (
+                <div className="knowledge-sidebar-section">
+                  <p className="knowledge-sidebar-section-title">
+                    <FolderOpen className="h-3.5 w-3.5" /> {k.sectionLocal[lang]}
+                  </p>
+                  {localKbs.map(renderKbItem)}
+                </div>
+              )}
+              {enterpriseKbs.length > 0 && (
+                <div className="knowledge-sidebar-section">
+                  <p className="knowledge-sidebar-section-title">
+                    <Building2 className="h-3.5 w-3.5" /> {k.sectionEnterprise[lang]}
+                  </p>
+                  {enterpriseKbs.map(renderKbItem)}
+                </div>
+              )}
+            </>
+          ) : (
+            filteredKbs.map(renderKbItem)
+          )}
         </div>
       </div>
 
       {/* Main */}
-      <div className={`flex-1 overflow-y-auto p-6 ${activeDoc ? "border-r border-[#2d2d4e]" : ""}`}>
+      <div className={`knowledge-main flex-1 min-w-0 flex flex-col ${activeDoc ? "border-r theme-border" : ""}`}>
+        <div className="flex-1 overflow-y-auto p-6">
         {!activeKb ? (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <Database className="mb-4 h-12 w-12 text-slate-600" />
-            <p className="text-slate-400">{k.selectKB[lang]}</p>
+          <div className="knowledge-empty-hero">
+            <Database className="mb-4 h-12 w-12 opacity-30" />
+            <p className="mb-6 theme-muted">{k.selectKB[lang]}</p>
+            <div className="knowledge-source-cards">
+              <button type="button" className="knowledge-source-card knowledge-source-local" onClick={() => openCreateModal("local")}>
+                <div className="knowledge-source-card-icon"><FolderOpen className="h-6 w-6" /></div>
+                <h3>{k.sourceLocal[lang]}</h3>
+                <p>{k.sourceLocalDesc[lang]}</p>
+                <span className="knowledge-source-formats">{k.localFormats[lang]}</span>
+              </button>
+              <button type="button" className="knowledge-source-card knowledge-source-enterprise" onClick={() => openCreateModal("byd_kms")}>
+                <div className="knowledge-source-card-icon"><Building2 className="h-6 w-6" /></div>
+                <h3>{k.sourceBydKms[lang]}</h3>
+                <p>{k.sourceEnterpriseDesc[lang]}</p>
+                <span className="knowledge-source-formats">BYD KMS · RAG API</span>
+              </button>
+            </div>
           </div>
         ) : (
           <div>
@@ -397,10 +500,13 @@ export default function KnowledgePage() {
               <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-lg font-semibold text-white">{activeKbMeta.name}</h2>
-                    {isBydKb && (
-                      <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-300">{k.sourceBydKms[lang]}</span>
-                    )}
+                    <div className={`knowledge-kb-icon-lg ${isBydKb ? "knowledge-kb-icon-enterprise" : "knowledge-kb-icon-local"}`}>
+                      {isBydKb ? <Building2 className="h-5 w-5" /> : <FolderOpen className="h-5 w-5" />}
+                    </div>
+                    <h2 className="text-lg font-semibold theme-text">{activeKbMeta.name}</h2>
+                    <span className={`knowledge-kb-badge ${isBydKb ? "knowledge-kb-badge-enterprise" : "knowledge-kb-badge-local"}`}>
+                      {isBydKb ? k.enterpriseBadge[lang] : k.localBadge[lang]}
+                    </span>
                   </div>
                   {activeKbMeta.description && (
                     <p className="mt-1 text-sm text-slate-400">{activeKbMeta.description}</p>
@@ -441,21 +547,21 @@ export default function KnowledgePage() {
               </div>
             )}
 
-            <div className="mb-6 flex gap-3">
+            <div className="mb-6 flex flex-wrap gap-3">
               <input
                 type="text"
-                className="flex-1 rounded-lg border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                className="theme-input knowledge-search-input flex-1 min-w-[12rem] rounded-lg px-4 py-2 text-sm"
                 placeholder={k.searchPlaceholder[lang]}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && search()}
               />
-              <button onClick={search} disabled={searching} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+              <button type="button" onClick={search} disabled={searching} className="agents-btn-primary disabled:opacity-50">
                 {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 {k.search[lang]}
               </button>
               {!isBydKb && (
-                <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 transition-colors">
+                <button type="button" onClick={() => fileRef.current?.click()} className="agents-btn-secondary">
                   <Upload className="h-4 w-4" /> {k.upload[lang]}
                 </button>
               )}
@@ -541,6 +647,7 @@ export default function KnowledgePage() {
             )}
           </div>
         )}
+        </div>
       </div>
 
       {/* Content viewer */}
@@ -581,28 +688,31 @@ export default function KnowledgePage() {
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-            <h2 className="mb-4 text-lg font-semibold text-white">{k.newKB[lang]}</h2>
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-1 text-lg font-semibold theme-text">{k.newKB[lang]}</h2>
+            <p className="mb-4 text-xs theme-muted">{k.pickSource[lang]}</p>
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setSourceType("local")}
+                className={`knowledge-source-pick${sourceType === "local" ? " knowledge-source-pick-active" : ""}`}
+              >
+                <FolderOpen className="h-5 w-5" />
+                <span>{k.sourceLocal[lang]}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSourceType("byd_kms")}
+                className={`knowledge-source-pick${sourceType === "byd_kms" ? " knowledge-source-pick-active" : ""}`}
+              >
+                <Building2 className="h-5 w-5" />
+                <span>{k.sourceBydKms[lang]}</span>
+              </button>
+            </div>
+            <p className="mb-3 text-[11px] theme-muted">
+              {sourceType === "local" ? k.sourceLocalDesc[lang] : k.sourceEnterpriseDesc[lang]}
+            </p>
             <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs text-slate-400">{lang === "zh" ? "类型" : "Type"}</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSourceType("local")}
-                    className={`flex-1 rounded-lg border px-3 py-2 text-xs transition-colors ${sourceType === "local" ? "border-blue-500 bg-blue-600/20 text-blue-300" : "border-[#2d2d4e] text-slate-400 hover:bg-white/5"}`}
-                  >
-                    {k.sourceLocal[lang]}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSourceType("byd_kms")}
-                    className={`flex-1 rounded-lg border px-3 py-2 text-xs transition-colors ${sourceType === "byd_kms" ? "border-blue-500 bg-blue-600/20 text-blue-300" : "border-[#2d2d4e] text-slate-400 hover:bg-white/5"}`}
-                  >
-                    {k.sourceBydKms[lang]}
-                  </button>
-                </div>
-              </div>
               <div>
                 <label className="mb-1 block text-xs text-slate-400">{c.name[lang]}</label>
                 <input type="text" className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -666,8 +776,8 @@ export default function KnowledgePage() {
               )}
             </div>
             <div className="mt-6 flex justify-end gap-3">
-              <button onClick={() => setShowCreate(false)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">{c.cancel[lang]}</button>
-              <button onClick={create} disabled={creating} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+              <button type="button" onClick={() => setShowCreate(false)} className="text-sm theme-muted">{c.cancel[lang]}</button>
+              <button type="button" onClick={create} disabled={creating} className="agents-btn-primary disabled:opacity-50">
                 {creating ? c.loading[lang] : c.create[lang]}
               </button>
             </div>

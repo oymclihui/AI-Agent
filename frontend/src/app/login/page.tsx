@@ -22,16 +22,35 @@ export default function LoginPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!login.trim() || !password) return;
+    if (!login.trim() || !password) {
+      toast.error(lang === "zh" ? "请输入账号和密码" : "Enter username and password");
+      return;
+    }
     setLoading(true);
     try {
       const { data } = await authApi.login(login.trim(), password);
       setAuth(data.access_token, data.user);
       router.replace("/");
-      router.refresh();
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ?? a.loginFailed[lang]);
+      const ax = err as {
+        response?: { data?: { detail?: unknown }; status?: number };
+        message?: string;
+        code?: string;
+      };
+      const detail = ax.response?.data?.detail;
+      let msg: string = a.loginFailed[lang];
+      if (typeof detail === "string") {
+        msg = detail;
+      } else if (Array.isArray(detail)) {
+        msg = detail
+          .map((d) => (typeof d === "object" && d && "msg" in d ? String((d as { msg: string }).msg) : String(d)))
+          .join("; ");
+      } else if (!ax.response) {
+        msg = lang === "zh" ? "无法连接服务器，请确认 Docker 服务已启动" : "Cannot reach server — check Docker is running";
+      } else if (ax.response.status === 502 || ax.response.status === 503) {
+        msg = lang === "zh" ? "后端服务未就绪，请等待 30 秒后重试" : "Backend not ready — wait ~30s and retry";
+      }
+      toast.error(msg);
     } finally {
       setLoading(false);
     }

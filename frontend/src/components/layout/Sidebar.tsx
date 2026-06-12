@@ -3,35 +3,41 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Bot, Workflow, MessageSquare, Database,
+  Bot, Workflow, MessageSquare,
   Cpu, Zap, Home, Settings, Languages, BookOpen, Briefcase, Monitor,
+  Library, Lightbulb, MousePointer2, Shield,
+  Building2, Crown,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useLangStore } from "@/lib/langStore";
+import { useAuthStore } from "@/lib/authStore";
 import { translations } from "@/lib/i18n";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { canManageOrg, canReadEmployees, canViewDashboard, canDelegateDept, canDelegateExec } from "@/lib/permissions";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { lang, setLang } = useLangStore();
+  const user = useAuthStore((s) => s.user);
   const nav = translations.nav;
 
   const navItems = [
-    { href: "/",          icon: Home,          labelKey: "dashboard" as const },
-    { href: "/screen",    icon: Monitor,       labelKey: "screen" as const },
-    { href: "/employees", icon: Briefcase,      labelKey: "employees" as const },
-    { href: "/agents",    icon: Bot,           labelKey: "agents" as const },
-    { href: "/skills",    icon: BookOpen,       labelKey: "skills" as const },
-    { href: "/workflows", icon: Workflow,       labelKey: "workflows" as const },
-    { href: "/knowledge", icon: Database,      labelKey: "knowledge" as const },
-    { href: "/chat",      icon: MessageSquare,  labelKey: "chat" as const },
-    { href: "/models",    icon: Cpu,            labelKey: "models" as const },
-    { href: "/tools",     icon: Zap,            labelKey: "tools" as const },
-  ];
+    { href: "/",          icon: Home,          labelKey: "dashboard" as const, show: true },
+    { href: "/screen",    icon: Monitor,       labelKey: "screen" as const, show: canViewDashboard(user) },
+    { href: "/employees", icon: Briefcase,      labelKey: "employees" as const, show: canReadEmployees(user) },
+    { href: "/agents",    icon: Bot,           labelKey: "agents" as const, show: true },
+    { href: "/skills",    icon: BookOpen,       labelKey: "skills" as const, show: true },
+    { href: "/workflows", icon: Workflow,       labelKey: "workflows" as const, show: true },
+    { href: "/chat",        icon: MessageSquare,  labelKey: "chat" as const, show: true },
+    { href: "/knowledge",   icon: Library,        labelKey: "knowledge" as const, show: true },
+    { href: "/desktop-automation", icon: MousePointer2, labelKey: "desktopAutomation" as const, show: true },
+    { href: "/inspiration", icon: Lightbulb,      labelKey: "inspiration" as const, show: true },
+    { href: "/models",      icon: Cpu,            labelKey: "models" as const, show: true },
+    { href: "/tools",       icon: Zap,            labelKey: "tools" as const, show: true },
+  ].filter((item) => item.show);
 
   return (
     <aside className="theme-surface flex h-screen w-16 flex-col items-center border-r theme-border py-4 lg:w-56 lg:items-start lg:px-3">
-      {/* Logo */}
       <div className="mb-8 flex items-center gap-2 px-1">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 text-on-primary font-bold text-sm shrink-0 shadow-sm">
           AI
@@ -39,7 +45,6 @@ export default function Sidebar() {
         <span className="hidden font-semibold theme-text lg:block">AI-AGENT</span>
       </div>
 
-      {/* Nav */}
       <nav className="flex w-full flex-col gap-1">
         {navItems.map(({ href, icon: Icon, labelKey }) => {
           const active = pathname === href || (href !== "/" && pathname.startsWith(href));
@@ -59,9 +64,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Bottom area */}
       <div className="mt-auto w-full space-y-1">
-        {/* Language toggle */}
         <div className="hidden lg:flex items-center gap-2 rounded-lg px-2 py-2">
           <Languages className="h-4 w-4 shrink-0 theme-muted" />
           <SegmentedControl
@@ -75,7 +78,6 @@ export default function Sidebar() {
           />
         </div>
 
-        {/* Mobile language toggle (icon only) */}
         <button
           onClick={() => setLang(lang === "zh" ? "en" : "zh")}
           className="nav-item-idle lg:hidden flex items-center justify-center w-full py-2 transition-colors"
@@ -83,6 +85,51 @@ export default function Sidebar() {
         >
           <Languages className="h-5 w-5" />
         </button>
+
+        {canDelegateDept(user) && (
+          <Link
+            href="/settings/delegation/dept"
+            className={clsx(
+              "flex items-center gap-3 rounded-lg px-2 py-2 text-sm transition-colors",
+              pathname.startsWith("/settings/delegation/dept")
+                ? "nav-item-active"
+                : "nav-item-idle",
+            )}
+          >
+            <Building2 className="h-5 w-5 shrink-0" />
+            <span className="hidden lg:block">{translations.delegation.deptTitle[lang]}</span>
+          </Link>
+        )}
+
+        {canDelegateExec(user) && (
+          <Link
+            href="/settings/delegation/executive"
+            className={clsx(
+              "flex items-center gap-3 rounded-lg px-2 py-2 text-sm transition-colors",
+              pathname.startsWith("/settings/delegation/executive")
+                ? "nav-item-active"
+                : "nav-item-idle",
+            )}
+          >
+            <Crown className="h-5 w-5 shrink-0" />
+            <span className="hidden lg:block">{translations.delegation.execTitle[lang]}</span>
+          </Link>
+        )}
+
+        {canManageOrg(user) && (
+          <Link
+            href="/settings/organization"
+            className={clsx(
+              "flex items-center gap-3 rounded-lg px-2 py-2 text-sm transition-colors",
+              pathname.startsWith("/settings/organization")
+                ? "nav-item-active"
+                : "nav-item-idle",
+            )}
+          >
+            <Shield className="h-5 w-5 shrink-0" />
+            <span className="hidden lg:block">{translations.organization.title[lang]}</span>
+          </Link>
+        )}
 
         <Link
           href="/settings"

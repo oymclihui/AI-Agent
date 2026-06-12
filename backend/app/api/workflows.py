@@ -223,8 +223,14 @@ async def execute_workflow(
     await db.flush()
 
     start = time.monotonic()
+    from app.core.auth.context import set_current_user_id, reset_current_user_id
+    ctx_token = None
+    input_data = dict(payload.input_data or {})
+    if workflow.owner_id:
+        ctx_token = set_current_user_id(workflow.owner_id)
+        input_data["_user_id"] = workflow.owner_id
     try:
-        state = await engine.execute(payload.input_data)
+        state = await engine.execute(input_data)
         artifacts = merge_artifacts(
             state.context.get("artifacts") if isinstance(state.context.get("artifacts"), list) else None,
             collect_artifacts_from_output(state.final_output),
@@ -250,6 +256,8 @@ async def execute_workflow(
         execution.error_message = str(e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        if ctx_token is not None:
+            reset_current_user_id(ctx_token)
         execution.duration_ms = int((time.monotonic() - start) * 1000)
         await db.flush()
 

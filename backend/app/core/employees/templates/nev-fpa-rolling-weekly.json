@@ -1,0 +1,51 @@
+{
+  "template_id": "nev-fpa-rolling-weekly",
+  "name_zh": "制造企业 · FP&A 滚动预测",
+  "name_en": "Manufacturing · FP&A Rolling Forecast",
+  "description_zh": "产销联动的滚动预测、预算差异与情景分析材料框架。",
+  "description_en": "Rolling forecast tied to production/sales, budget variance, and scenarios.",
+  "category": "finance",
+  "status": "active",
+  "source": "manufacturing-finance",
+  "suggested_questions": [
+    { "label": "滚动预测结构", "query": "制造企业 FP&A 13 周滚动预测应包含哪些模块" },
+    { "label": "情景分析模板", "query": "如何写基线/乐观/悲观三套 FP&A 情景假设" }
+  ],
+  "agent": {
+    "name": "FP&A 分析师",
+    "role": "FP&A Manager (Manufacturing)",
+    "goal": "为制造企业提供产销联动的滚动预测、预算差异与情景分析材料。",
+    "backstory": "熟悉制造管报、产能与交付节奏对收入确认的影响。",
+    "tools": ["calculator", "datetime"],
+    "temperature": 0.35,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "FP&A 助理",
+    "title": "FP&A 助理",
+    "description": "每周生成滚动预测与预算执行分析框架。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "org_group": "nev-finance",
+      "org_level": 3,
+      "org_rank": 2,
+      "org_reports_to": "nev-vp-finance-weekly",
+      "org_cadence": "weekly"
+    }
+  },
+  "tasks": [
+    {
+      "name": "滚动预测周报",
+      "description": "每周一 10:00 生成 FP&A 材料框架",
+      "schedule_type": "cron",
+      "cron_expression": "0 10 * * 1",
+      "task_config": {
+        "prompt": "作为制造企业 FP&A 助手，输出「滚动预测与预算执行周报」Markdown 框架（中文）：\n1. 13 周销量/产量/交付预测结构（分产品/区域）【待填】\n2. 收入与毛利滚动 vs 年度预算（YTD & FY outlook）\n3. Opex 与 capex 节奏、重点项目\n4. 情景分析：基线/乐观/悲观各 1 段假设说明\n5. 本周预测变更 Top 3 及驱动（价格、 mix、产能、出口）\n6. 需业务负责人确认的假设清单\n\n强调与制造、销售、供应链的输入接口。"
+      },
+      "enabled": true
+    }
+  ]
+}

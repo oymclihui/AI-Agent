@@ -207,6 +207,8 @@ async def import_template(
 
     emp = DigitalEmployee(
         id=generate_uuid(),
+        owner_id=user.id if user else None,
+        department_id=user.primary_department_id if user else None,
         name=name,
         title=emp_spec.get("title"),
         description=emp_spec.get("description") or data.get("description_zh"),

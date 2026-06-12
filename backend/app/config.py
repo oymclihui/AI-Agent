@@ -141,6 +141,15 @@ class Settings(BaseSettings):
     BYD_KMS_API_KEY: Optional[str] = None
     BYD_KMS_TIMEOUT_SECONDS: int = 30
 
+    # Desktop automation (OpenAdapt sidecar)
+    DESKTOP_REQUIRE_CONFIRMATION: bool = True
+    DESKTOP_OPENADAPT_DATA_DIR: str = "./desktop_openadapt_data"
+
+    # Agent harness (tool policy, confirmation, boundaries)
+    HARNESS_REQUIRE_TOOL_CONFIRMATION: bool = True
+    HARNESS_LLM_TIMEOUT_SEC: int = 120
+    HARNESS_MAX_ITERATIONS_CAP: int = 25
+
     # Public URL for password-reset links
     APP_PUBLIC_URL: str = "http://localhost:3000"
     PASSWORD_RESET_EXPIRE_MINUTES: int = 60

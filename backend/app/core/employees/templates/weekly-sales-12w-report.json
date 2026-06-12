@@ -1,0 +1,49 @@
+{
+  "template_id": "weekly-sales-12w-report",
+  "name_zh": "十二周销量对比报告",
+  "name_en": "12-Week Sales Comparison Report",
+  "description_zh": "基于 Excel（事业部、国家、12 周销量）生成趋势、环比与对比分析报告。适合 FP&A 每周例会；可手动触发或定时运行（需配合数据文件/知识库）。",
+  "description_en": "Trend, WoW and comparison report from Excel with BU, country, and 12 weekly sales columns.",
+  "category": "finance",
+  "status": "active",
+  "source": "sales-analytics",
+  "suggested_questions": [
+    { "label": "分析本周销量 Excel", "query": "我有一份事业部×国家×12周销量的 Excel，请做趋势、环比和对比分析，输出管理层报告" },
+    { "label": "环比异常排查", "query": "哪些事业部或国家在近期周环比出现显著下滑？如何写进 FP&A 周报？" }
+  ],
+  "agent": {
+    "name": "销量分析顾问",
+    "role": "FP&A Sales Analyst",
+    "goal": "解读多维度周销量数据，输出趋势、环比、对比分析与可执行建议。",
+    "backstory": "熟悉事业部/国家/渠道多维销量表、管报口径与周例会材料结构。",
+    "tools": ["calculator", "get_datetime"],
+    "temperature": 0.35,
+    "llm_provider": "ollama",
+    "llm_model": "qwen3.6:35b"
+  },
+  "skills": [],
+  "knowledge": [],
+  "employee": {
+    "name": "销量分析 助理",
+    "title": "FP&A 销量分析助理",
+    "description": "每周基于最新销量 Excel 生成十二周对比分析报告（趋势、环比、事业部/国家对比）。",
+    "timezone": "Asia/Shanghai",
+    "metadata": {
+      "pipeline": "weekly-sales-12w",
+      "data_format": "xlsx"
+    }
+  },
+  "tasks": [
+    {
+      "name": "十二周销量对比报告",
+      "description": "每周一 09:30 生成销量对比分析（需最新 Excel 指标快照）",
+      "schedule_type": "cron",
+      "cron_expression": "30 9 * * 1",
+      "task_config": {
+        "prompt": "你是 FP&A 销量分析助理。以下是由系统从 Excel（事业部×国家×12周销量）预计算的指标快照，请据此撰写《十二周销量对比分析报告》（中文 Markdown）。\n\n{data_snapshot}\n\n报告结构：\n1. 执行摘要（3条）\n2. 整体趋势与周环比\n3. 事业部/国家对比\n4. 异常与【待核实】项\n5. 下阶段建议\n\n只输出报告正文。",
+        "context": {}
+      },
+      "enabled": true
+    }
+  ]
+}

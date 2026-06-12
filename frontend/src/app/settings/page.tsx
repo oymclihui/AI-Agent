@@ -8,7 +8,9 @@ import { translations } from "@/lib/i18n";
 import { authApi } from "@/lib/api";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { canManageOrg, canDelegateDept, canDelegateExec } from "@/lib/permissions";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -50,7 +52,7 @@ export default function SettingsPage() {
   useEffect(() => {
     authApi.me().then(({ data }) => {
       const token = useAuthStore.getState().token;
-      if (token) useAuthStore.getState().setAuth(token, data);
+      if (token) useAuthStore.getState().setUser(data);
       if (data.email && !mailboxEmail) setMailboxEmail(data.email);
     }).catch(() => {});
   }, []);
@@ -199,6 +201,30 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      {canManageOrg(user) && (
+        <div className="theme-card mb-6 border-violet-500/20 p-6">
+          <h2 className="mb-2 text-lg font-semibold theme-text">{s.orgLinkTitle[lang]}</h2>
+          <p className="mb-4 text-sm theme-muted">{s.orgLinkDesc[lang]}</p>
+          <Link href="/settings/organization" className="theme-btn-primary inline-block">{s.orgLinkBtn[lang]}</Link>
+        </div>
+      )}
+
+      {canDelegateDept(user) && !canManageOrg(user) && (
+        <div className="theme-card mb-6 border-cyan-500/20 p-6">
+          <h2 className="mb-2 text-lg font-semibold theme-text">{translations.delegation.deptTitle[lang]}</h2>
+          <p className="mb-4 text-sm theme-muted">{translations.delegation.deptSubtitle[lang]}</p>
+          <Link href="/settings/delegation/dept" className="theme-btn-primary inline-block">{s.orgLinkBtn[lang]}</Link>
+        </div>
+      )}
+
+      {canDelegateExec(user) && (
+        <div className="theme-card mb-6 border-amber-500/20 p-6">
+          <h2 className="mb-2 text-lg font-semibold theme-text">{translations.delegation.execTitle[lang]}</h2>
+          <p className="mb-4 text-sm theme-muted">{translations.delegation.execSubtitle[lang]}</p>
+          <Link href="/settings/delegation/executive" className="theme-btn-primary inline-block">{s.orgLinkBtn[lang]}</Link>
+        </div>
+      )}
 
       {user?.is_admin && (
         <div className="theme-card mb-6 border-amber-500/20 p-6">

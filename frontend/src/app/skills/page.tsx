@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Plus, BookOpen, Trash2, RefreshCw, Pencil, Loader2, CloudDownload, Search,
 } from "lucide-react";
 import { skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
+import { agentAvatarTone } from "@/lib/agentCatalog";
 import toast from "react-hot-toast";
 
 interface Skill {
@@ -46,6 +48,36 @@ interface LibraryTemplate {
   tags: string[];
 }
 
+type StatusFilter = "all" | Skill["status"];
+
+const SKILL_SCENES: Array<{
+  id: StatusFilter;
+  title: { zh: string; en: string };
+  subtitle: { zh: string; en: string };
+  tone: string;
+}> = [
+  {
+    id: "active",
+    title: { zh: "已发布技能", en: "Active Skills" },
+    subtitle: { zh: "可直接绑定到智能体", en: "Ready to bind to agents" },
+    tone: "agents-scene-data",
+  },
+  {
+    id: "draft",
+    title: { zh: "草稿技能", en: "Draft Skills" },
+    subtitle: { zh: "编辑完善后发布", en: "Edit and publish when ready" },
+    tone: "agents-scene-content",
+  },
+  {
+    id: "archived",
+    title: { zh: "已归档", en: "Archived" },
+    subtitle: { zh: "历史技能留存", en: "Historical skills" },
+    tone: "agents-scene-tech",
+  },
+];
+
+const STATUS_FILTERS: StatusFilter[] = ["all", "active", "draft", "archived"];
+
 export default function SkillsPage() {
   const { lang } = useLangStore();
   const s = translations.skills;
@@ -68,6 +100,8 @@ export default function SkillsPage() {
   const [libLoading, setLibLoading] = useState(false);
   const [libImporting, setLibImporting] = useState(false);
   const [libSyncing, setLibSyncing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const load = async () => {
     try {
@@ -269,97 +303,185 @@ export default function SkillsPage() {
   };
 
   const statusClass = (status: Skill["status"]) => {
-    if (status === "active") return "bg-green-500/20 text-green-400";
-    if (status === "archived") return "bg-slate-500/20 text-slate-400";
-    return "bg-yellow-500/20 text-yellow-400";
+    if (status === "active") return "agents-badge agents-badge-chat";
+    if (status === "archived") return "agents-badge";
+    return "agents-badge agents-badge-master";
+  };
+
+  const filteredSkills = useMemo(() => {
+    let list = [...skills];
+    if (statusFilter !== "all") list = list.filter((sk) => sk.status === statusFilter);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (sk) =>
+          sk.display_name.toLowerCase().includes(q) ||
+          sk.slug.toLowerCase().includes(q) ||
+          sk.description.toLowerCase().includes(q) ||
+          (sk.tags ?? []).some((t) => t.toLowerCase().includes(q)),
+      );
+    }
+    return list.sort((a, b) => {
+      const order = { active: 0, draft: 1, archived: 2 };
+      return order[a.status] - order[b.status] || a.display_name.localeCompare(b.display_name);
+    });
+  }, [skills, statusFilter, searchQuery]);
+
+  const sceneSkills = (status: StatusFilter) =>
+    status === "all" ? skills.slice(0, 4) : skills.filter((sk) => sk.status === status).slice(0, 4);
+
+  const skillInitial = (name: string) => (name.trim()[0] || "S").toUpperCase();
+
+  const statusFilterLabel = (id: StatusFilter) => {
+    if (id === "all") return s.filterAll[lang];
+    return statusLabel(id);
   };
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="agents-hub">
+      <div className="agents-hub-header">
         <div>
-          <h1 className="text-2xl font-bold text-white">{s.title[lang]}</h1>
-          <p className="text-slate-400">{s.subtitle[lang]}</p>
+          <h1>{s.title[lang]}</h1>
+          <p>{s.subtitle[lang]}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={openLibrary}
-            className="flex items-center gap-2 rounded-lg border border-teal-500/40 px-4 py-2 text-sm text-teal-300 hover:bg-teal-500/10 transition-colors"
-          >
+        <div className="agents-hub-actions">
+          <button type="button" onClick={openLibrary} className="agents-btn-secondary agents-btn-teal">
             <CloudDownload className="h-4 w-4" /> {s.library[lang]}
           </button>
-          <button
-            onClick={seedTemplates}
-            className="flex items-center gap-2 rounded-lg border border-[#2d2d4e] px-4 py-2 text-sm text-slate-300 hover:bg-white/5 transition-colors"
-          >
+          <button type="button" onClick={seedTemplates} className="agents-btn-secondary">
             <RefreshCw className="h-4 w-4" /> {s.seedTemplates[lang]}
           </button>
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition-colors"
-          >
+          <button type="button" onClick={openCreate} className="agents-btn-primary">
             <Plus className="h-4 w-4" /> {s.newSkill[lang]}
           </button>
         </div>
       </div>
 
+      <div className="agents-hub-toolbar">
+        <div className="agents-hub-tabs">
+          <Link href="/agents" className="agents-hub-tab">{translations.agents.tabExpert[lang]}</Link>
+          <span className="agents-hub-tab agents-hub-tab-active">{translations.agents.tabSkill[lang]}</span>
+          <Link href="/chat" className="agents-hub-tab">{translations.agents.tabConnector[lang]}</Link>
+        </div>
+        <div className="agents-hub-search">
+          <Search className="h-4 w-4 shrink-0 theme-muted" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={s.searchPlaceholder[lang]}
+          />
+        </div>
+      </div>
+
+      {!loading && skills.length > 0 && (
+        <section className="agents-featured">
+          <h2 className="agents-featured-title">{s.featuredTitle[lang]}</h2>
+          <div className="agents-featured-scroll">
+            {SKILL_SCENES.map((scene) => {
+              const items = sceneSkills(scene.id);
+              return (
+                <button
+                  key={scene.id}
+                  type="button"
+                  className={`agents-scene-card ${scene.tone}`}
+                  onClick={() => setStatusFilter(scene.id)}
+                >
+                  <div>
+                    <h3>{lang === "zh" ? scene.title.zh : scene.title.en}</h3>
+                    <p>{lang === "zh" ? scene.subtitle.zh : scene.subtitle.en}</p>
+                  </div>
+                  <ul className="agents-scene-list">
+                    {items.length > 0 ? (
+                      items.map((item) => <li key={item.id}>{item.display_name}</li>)
+                    ) : (
+                      <li>{lang === "zh" ? "暂无，点击筛选" : "None yet — click to filter"}</li>
+                    )}
+                  </ul>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <div className="agents-filter-row">
+        <div className="agents-filter-scroll">
+          {STATUS_FILTERS.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setStatusFilter(id)}
+              className={`agents-filter-pill${statusFilter === id ? " agents-filter-pill-active" : ""}`}
+            >
+              {statusFilterLabel(id)}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {loading ? (
-        <div className="text-slate-400">{c.loading[lang]}</div>
-      ) : skills.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#2d2d4e] py-16 text-center">
-          <BookOpen className="mb-4 h-12 w-12 text-slate-600" />
-          <p className="text-slate-400">{s.noSkills[lang]}</p>
+        <div className="theme-muted text-sm">{c.loading[lang]}</div>
+      ) : filteredSkills.length === 0 ? (
+        <div className="agents-empty">
+          <BookOpen className="mb-4 h-12 w-12 opacity-40" />
+          <p>{skills.length === 0 ? s.noSkills[lang] : (lang === "zh" ? "没有匹配的技能" : "No matching skills")}</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {skills.map((skill) => (
-            <div key={skill.id} className="rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-5">
-              <div className="mb-3 flex items-start justify-between gap-2">
-                <div>
-                  <h3 className="font-semibold text-white">{skill.display_name}</h3>
-                  <p className="text-xs text-slate-500 font-mono">{skill.slug}</p>
+        <div className="agents-grid">
+          {filteredSkills.map((skill) => (
+            <article key={skill.id} className="agents-card">
+              <div className="agents-card-top">
+                <div className={`agents-avatar ${agentAvatarTone(skill.id)}`} aria-hidden>
+                  {skillInitial(skill.display_name)}
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${statusClass(skill.status)}`}>
-                  {statusLabel(skill.status)}
-                </span>
+                <div className="agents-card-head">
+                  <div className="agents-card-title-row">
+                    <h3 title={skill.display_name}>{skill.display_name}</h3>
+                    <span className={statusClass(skill.status)}>{statusLabel(skill.status)}</span>
+                  </div>
+                  <p className="agents-card-role font-mono">{skill.slug}</p>
+                </div>
               </div>
-              <p className="mb-4 line-clamp-3 text-sm text-slate-400">{skill.description}</p>
-              <div className="mb-4 flex flex-wrap gap-2 text-xs">
-                <span className="rounded bg-slate-700/50 px-2 py-0.5 text-slate-400">
-                  {s.version[lang]} v{skill.version}
-                </span>
+              <p className="agents-card-desc">{skill.description}</p>
+              <div className="agents-card-tags">
+                <span className="agents-tag">{s.version[lang]} v{skill.version}</span>
                 {(skill.tags ?? []).map((tag) => (
-                  <span key={tag} className="rounded bg-teal-500/10 px-2 py-0.5 text-teal-400">{tag}</span>
+                  <span key={tag} className="agents-tag">{tag}</span>
                 ))}
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => openEdit(skill)}
-                  className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-blue-400 hover:bg-blue-500/10 transition-colors"
-                >
-                  <Pencil className="h-3 w-3" /> {s.editSkill[lang]}
-                </button>
-                <button
-                  onClick={() => deleteSkill(skill.id)}
-                  className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  <Trash2 className="h-3 w-3" /> {c.delete[lang]}
-                </button>
+              <div className="agents-card-footer">
+                <span className="agents-card-meta">{skill.auto_invoke ? (lang === "zh" ? "自动发现" : "Auto-invoke") : (lang === "zh" ? "手动绑定" : "Manual bind")}</span>
+                <div className="agents-card-actions">
+                  <button type="button" onClick={() => openEdit(skill)} className="agents-icon-btn" title={s.editSkill[lang]}>
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button type="button" onClick={() => deleteSkill(skill.id)} className="agents-icon-btn agents-icon-btn-danger" title={c.delete[lang]}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
-            </div>
+            </article>
           ))}
         </div>
       )}
 
       {showLibrary && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-xl border border-[#2d2d4e] bg-[#1a1a2e]">
-            <div className="border-b border-[#2d2d4e] p-5">
-              <h2 className="text-lg font-semibold text-white">{s.libraryTitle[lang]}</h2>
-              <p className="mt-1 text-sm text-slate-400">{s.librarySubtitle[lang]}</p>
-              <div className="mt-4 flex flex-wrap gap-2">
+        <div className="employees-template-overlay">
+          <div className="employees-template-dialog">
+            <div className="employees-template-header">
+              <div>
+                <h2>{s.libraryTitle[lang]}</h2>
+                <p>{s.librarySubtitle[lang]}</p>
+              </div>
+              <button type="button" onClick={() => setShowLibrary(false)} className="agents-icon-btn">
+                <span className="sr-only">{c.cancel[lang]}</span>×
+              </button>
+            </div>
+            <div className="employees-template-toolbar px-6 pb-3">
+              <div className="flex flex-wrap gap-2">
                 <select
-                  className="rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                   value={libSource}
                   onChange={(e) => onLibSourceChange(e.target.value)}
                 >
@@ -371,7 +493,7 @@ export default function SkillsPage() {
                   ))}
                 </select>
                 <select
-                  className="rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                   value={libCategory}
                   onChange={(e) => { setLibCategory(e.target.value); loadLibrary(libSource, e.target.value, libQuery); }}
                 >
@@ -380,39 +502,31 @@ export default function SkillsPage() {
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
-                <div className="relative min-w-[200px] flex-1">
-                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <div className="agents-hub-search min-w-[200px] flex-1 max-w-none">
+                  <Search className="h-4 w-4 shrink-0 theme-muted" />
                   <input
                     type="text"
-                    className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] py-2 pl-9 pr-3 text-sm text-white"
                     placeholder={s.librarySearch[lang]}
                     value={libQuery}
                     onChange={(e) => setLibQuery(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && loadLibrary(libSource, libCategory, libQuery)}
                   />
                 </div>
-                <button
-                  onClick={() => loadLibrary(libSource, libCategory, libQuery)}
-                  className="rounded-lg border border-[#2d2d4e] px-3 py-2 text-sm text-slate-300 hover:bg-white/5"
-                >
+                <button type="button" onClick={() => loadLibrary(libSource, libCategory, libQuery)} className="agents-btn-secondary">
                   {lang === "zh" ? "搜索" : "Search"}
                 </button>
-                <button
-                  onClick={syncLibrary}
-                  disabled={libSyncing}
-                  className="flex items-center gap-1 rounded-lg border border-[#2d2d4e] px-3 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-40"
-                >
+                <button type="button" onClick={syncLibrary} disabled={libSyncing} className="agents-btn-secondary disabled:opacity-40">
                   {libSyncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   {s.librarySync[lang]}
                 </button>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
               {libLoading ? (
-                <div className="py-12 text-center text-slate-400">{c.loading[lang]}</div>
+                <div className="py-12 text-center theme-muted">{c.loading[lang]}</div>
               ) : libTemplates.length === 0 ? (
-                <div className="py-12 text-center text-slate-500">{c.noData[lang]}</div>
+                <div className="py-12 text-center theme-muted">{c.noData[lang]}</div>
               ) : (
                 <div className="space-y-2">
                   {libTemplates.slice(0, 120).map((tpl) => {
@@ -423,7 +537,7 @@ export default function SkillsPage() {
                       <label
                         key={key}
                         className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition-colors ${
-                          checked ? "border-teal-500/50 bg-teal-500/5" : "border-[#2d2d4e] hover:bg-white/[0.02]"
+                          checked ? "border-teal-500/50 bg-teal-500/5" : "border-[var(--border)] hover:bg-[var(--hover)]"
                         }`}
                       >
                         <input
@@ -442,23 +556,21 @@ export default function SkillsPage() {
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-white">{tpl.display_name}</span>
-                            <span className="font-mono text-[10px] text-slate-500">{tpl.slug}</span>
-                            <span className="rounded bg-slate-700/50 px-1.5 py-0.5 text-[10px] text-slate-400">{tpl.category}</span>
-                            <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] text-purple-400">{tpl.source}</span>
+                            <span className="font-medium theme-text">{tpl.display_name}</span>
+                            <span className="font-mono text-[10px] theme-muted">{tpl.slug}</span>
+                            <span className="agents-tag">{tpl.category}</span>
+                            <span className="agents-tag">{tpl.source}</span>
                             {imported && (
-                              <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] text-green-400">
-                                {lang === "zh" ? "已导入" : "Imported"}
-                              </span>
+                              <span className="agents-badge agents-badge-chat">{lang === "zh" ? "已导入" : "Imported"}</span>
                             )}
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs text-slate-400">{tpl.description}</p>
+                          <p className="mt-1 line-clamp-2 text-xs theme-muted">{tpl.description}</p>
                         </div>
                       </label>
                     );
                   })}
                   {libTemplates.length > 120 && (
-                    <p className="py-2 text-center text-xs text-slate-500">
+                    <p className="py-2 text-center text-xs theme-muted">
                       {lang === "zh"
                         ? `显示前 120 / ${libTemplates.length} 条，请用搜索或分类缩小范围`
                         : `Showing 120 / ${libTemplates.length}. Use search or category to narrow.`}
@@ -468,28 +580,28 @@ export default function SkillsPage() {
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t border-[#2d2d4e] p-4">
-              <span className="text-xs text-slate-500">
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
+              <span className="text-xs theme-muted">
                 {libSelected.size} {lang === "zh" ? "已选" : "selected"} · {libTemplates.length} {lang === "zh" ? "条结果" : "results"}
               </span>
               <div className="flex gap-2">
-                <button onClick={() => setShowLibrary(false)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white">
-                  {c.cancel[lang]}
-                </button>
+                <button type="button" onClick={() => setShowLibrary(false)} className="agents-btn-secondary">{c.cancel[lang]}</button>
                 <button
+                  type="button"
                   onClick={() => importLibrary(libTemplates.slice(0, 120).filter((t) => !localSlugs.has(t.slug)))}
                   disabled={libImporting || libTemplates.length === 0}
-                  className="rounded-lg border border-[#2d2d4e] px-4 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-40"
+                  className="agents-btn-secondary disabled:opacity-40"
                 >
                   {s.libraryImportAll[lang]}
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     const items = libTemplates.filter((t) => libSelected.has(libKey(t)));
                     importLibrary(items);
                   }}
                   disabled={libImporting || libSelected.size === 0}
-                  className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm text-white hover:bg-teal-700 disabled:opacity-40"
+                  className="agents-btn-primary disabled:opacity-40"
                 >
                   {libImporting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {s.libraryImport[lang]}
@@ -502,8 +614,8 @@ export default function SkillsPage() {
 
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-            <h2 className="mb-4 text-lg font-semibold text-white">
+          <div className="theme-card max-h-[90vh] w-full max-w-2xl overflow-y-auto p-6">
+            <h2 className="mb-4 text-lg font-semibold theme-text">
               {editingId ? s.editSkill[lang] : s.newSkill[lang]}
             </h2>
             <div className="space-y-3">
@@ -574,16 +686,14 @@ export default function SkillsPage() {
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-3">
-              <button
-                onClick={() => setShowModal(false)}
-                className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white"
-              >
+              <button type="button" onClick={() => setShowModal(false)} className="rounded-lg px-4 py-2 text-sm theme-muted hover:theme-text">
                 {c.cancel[lang]}
               </button>
               <button
+                type="button"
                 onClick={save}
                 disabled={saving || !form.display_name.trim() || !form.description.trim()}
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-40"
+                className="agents-btn-primary disabled:opacity-40"
               >
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 {c.save[lang]}

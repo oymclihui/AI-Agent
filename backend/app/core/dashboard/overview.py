@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.employees.scheduler import EmployeeScheduler
+from app.core.auth.permissions import DataScope, scope_employees_query
 from app.db.models import (
     Agent,
     DigitalEmployee,
@@ -93,11 +94,11 @@ def _derive_operational_status(
     return "idle"
 
 
-async def build_dashboard_overview(db: AsyncSession) -> dict[str, Any]:
+async def build_dashboard_overview(db: AsyncSession, scope: DataScope | None = None) -> dict[str, Any]:
     now_utc = datetime.now(timezone.utc)
     day_start_local, day_start_utc, day_end_utc = _shanghai_day_bounds(now_utc)
 
-    emp_result = await db.execute(
+    emp_query = (
         select(DigitalEmployee)
         .options(
             selectinload(DigitalEmployee.scheduled_tasks),
@@ -105,7 +106,12 @@ async def build_dashboard_overview(db: AsyncSession) -> dict[str, Any]:
         )
         .order_by(DigitalEmployee.updated_at.desc())
     )
+    if scope is not None:
+        emp_query = emp_query.where(scope_employees_query(DigitalEmployee, scope))
+
+    emp_result = await db.execute(emp_query)
     employees = emp_result.scalars().all()
+    visible_employee_ids = {e.id for e in employees}
 
     runs_result = await db.execute(
         select(EmployeeTaskRun)
@@ -115,7 +121,7 @@ async def build_dashboard_overview(db: AsyncSession) -> dict[str, Any]:
         )
         .order_by(EmployeeTaskRun.created_at.desc())
     )
-    today_runs = list(runs_result.scalars().all())
+    today_runs = [r for r in runs_result.scalars().all() if r.employee_id in visible_employee_ids]
 
     task_ids = {r.task_id for r in today_runs}
     task_names: dict[str, str] = {}
@@ -219,13 +225,18 @@ async def build_dashboard_overview(db: AsyncSession) -> dict[str, Any]:
 
     recent_slice = today_runs[:30]
     if len(recent_slice) < 30:
-        extra_result = await db.execute(
+        extra_query = (
             select(EmployeeTaskRun)
             .where(EmployeeTaskRun.created_at < day_start_utc)
             .order_by(EmployeeTaskRun.created_at.desc())
-            .limit(30 - len(recent_slice))
+            .limit(100)
         )
-        recent_slice = list(recent_slice) + list(extra_result.scalars().all())
+        extra_result = await db.execute(extra_query)
+        for run in extra_result.scalars().all():
+            if run.employee_id in visible_employee_ids:
+                recent_slice.append(run)
+            if len(recent_slice) >= 30:
+                break
 
     emp_name_map = {e.id: e.name for e in employees}
     all_task_ids = {r.task_id for r in recent_slice} - set(task_names.keys())
