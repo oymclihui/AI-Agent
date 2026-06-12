@@ -9,6 +9,7 @@ import { useAuthStore } from "@/lib/authStore";
 import { translations } from "@/lib/i18n";
 import { organizationApi } from "@/lib/api";
 import { canManageOrg } from "@/lib/permissions";
+import { useClientAuth } from "@/hooks/useClientAuth";
 import { SegmentedControl } from "@/components/SegmentedControl";
 
 type Tab = "depts" | "users" | "preview";
@@ -76,6 +77,7 @@ const ALL_ROLE_CODES = [
 export default function OrganizationPage() {
   const { lang } = useLangStore();
   const user = useAuthStore((s) => s.user);
+  const { ready: authReady } = useClientAuth();
   const o = translations.organization;
   const c = translations.common;
 
@@ -96,9 +98,20 @@ export default function OrganizationPage() {
   const [editUserTier, setEditUserTier] = useState("staff");
   const [editRoles, setEditRoles] = useState<Record<string, boolean>>({});
   const [editScopeDept, setEditScopeDept] = useState<Record<string, string>>({});
+  const [editIsActive, setEditIsActive] = useState(true);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(false);
 
-  const allowed = canManageOrg(user);
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const [newEmployeeNo, setNewEmployeeNo] = useState("");
+  const [newDisplayName, setNewDisplayName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPrimaryDept, setNewPrimaryDept] = useState("");
+  const [newUserTier, setNewUserTier] = useState("staff");
+
+  const allowed = authReady && canManageOrg(user);
 
   const loadAll = async () => {
     setLoading(true);
@@ -125,9 +138,10 @@ export default function OrganizationPage() {
   };
 
   useEffect(() => {
+    if (!authReady) return;
     if (allowed) loadAll();
     else setLoading(false);
-  }, [allowed]);
+  }, [authReady, allowed]);
 
   const selectedUser = useMemo(
     () => orgUsers.find((u) => u.id === selectedUserId) ?? null,
@@ -147,13 +161,21 @@ export default function OrganizationPage() {
     }
     setEditRoles(roles);
     setEditScopeDept(scopes);
+    setEditIsActive(selectedUser.is_active);
   }, [selectedUser]);
 
   useEffect(() => {
     if (tab !== "preview" || !selectedUserId || !allowed) return;
+    setPreviewLoading(true);
+    setPreviewError(false);
+    setPreview(null);
     organizationApi.previewPermissions(selectedUserId)
       .then(({ data }) => setPreview(data))
-      .catch(() => setPreview(null));
+      .catch(() => {
+        setPreview(null);
+        setPreviewError(true);
+      })
+      .finally(() => setPreviewLoading(false));
   }, [tab, selectedUserId, allowed]);
 
   const createDepartment = async () => {
@@ -185,9 +207,37 @@ export default function OrganizationPage() {
       await organizationApi.updateUser(selectedUserId, {
         primary_department_id: editPrimaryDept || null,
         user_tier: editUserTier,
+        is_active: editIsActive,
         roles,
       });
       toast.success(o.saved[lang]);
+      await loadAll();
+    } catch {
+      toast.error(o.loadFail[lang]);
+    }
+  };
+
+  const createUser = async () => {
+    if (!newEmployeeNo.trim() || !newDisplayName.trim() || newPassword.length < 6) return;
+    try {
+      await organizationApi.createUser({
+        employee_no: newEmployeeNo.trim(),
+        display_name: newDisplayName.trim(),
+        email: newEmail.trim() || null,
+        password: newPassword,
+        primary_department_id: newPrimaryDept || null,
+        user_tier: newUserTier,
+        is_active: true,
+        roles: [],
+      });
+      toast.success(o.userCreated[lang]);
+      setNewEmployeeNo("");
+      setNewDisplayName("");
+      setNewEmail("");
+      setNewPassword("");
+      setNewPrimaryDept("");
+      setNewUserTier("staff");
+      setShowCreateUser(false);
       await loadAll();
     } catch {
       toast.error(o.loadFail[lang]);
@@ -199,6 +249,14 @@ export default function OrganizationPage() {
     if (!def) return code;
     return lang === "zh" ? def.label_zh : def.label_en;
   };
+
+  if (!authReady) {
+    return (
+      <div className="p-8">
+        <p className="theme-muted">{c.loading?.[lang] ?? "Loading…"}</p>
+      </div>
+    );
+  }
 
   if (!allowed) {
     return (
@@ -317,7 +375,75 @@ export default function OrganizationPage() {
           </div>
         </div>
       ) : tab === "users" ? (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[280px_1fr]">
+        <div className="mt-6 space-y-6">
+          <div className="theme-card p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-semibold theme-text">{o.createUser[lang]}</h2>
+              <button
+                type="button"
+                onClick={() => setShowCreateUser((v) => !v)}
+                className="theme-btn-primary text-sm"
+              >
+                {showCreateUser ? (lang === "zh" ? "收起" : "Collapse") : o.createUserBtn[lang]}
+              </button>
+            </div>
+            {showCreateUser && (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <input
+                  className="theme-input rounded-lg border px-3 py-2 text-sm"
+                  placeholder={o.employeeNo[lang]}
+                  value={newEmployeeNo}
+                  onChange={(e) => setNewEmployeeNo(e.target.value)}
+                />
+                <input
+                  className="theme-input rounded-lg border px-3 py-2 text-sm"
+                  placeholder={o.displayName[lang]}
+                  value={newDisplayName}
+                  onChange={(e) => setNewDisplayName(e.target.value)}
+                />
+                <input
+                  className="theme-input rounded-lg border px-3 py-2 text-sm"
+                  placeholder={o.email[lang]}
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                />
+                <input
+                  type="password"
+                  className="theme-input rounded-lg border px-3 py-2 text-sm"
+                  placeholder={o.password[lang]}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+                <select
+                  className="theme-input rounded-lg border px-3 py-2 text-sm"
+                  value={newPrimaryDept}
+                  onChange={(e) => setNewPrimaryDept(e.target.value)}
+                >
+                  <option value="">{o.primaryDept[lang]} —</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="theme-input rounded-lg border px-3 py-2 text-sm"
+                  value={newUserTier}
+                  onChange={(e) => setNewUserTier(e.target.value)}
+                >
+                  <option value="staff">{o.tierStaff[lang]}</option>
+                  <option value="director">{o.tierDirector[lang]}</option>
+                  <option value="executive">{o.tierExecUser[lang]}</option>
+                </select>
+                <button
+                  onClick={createUser}
+                  disabled={!newEmployeeNo.trim() || !newDisplayName.trim() || newPassword.length < 6}
+                  className="theme-btn-primary disabled:opacity-50 sm:col-span-2 lg:col-span-1"
+                >
+                  {o.createUserBtn[lang]}
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
           <div className="theme-card p-4">
             <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold theme-text">
               <Users className="h-4 w-4" /> {o.selectUser[lang]}
@@ -361,6 +487,14 @@ export default function OrganizationPage() {
                 <option value="director">{o.tierDirector[lang]}</option>
                 <option value="executive">{o.tierExecUser[lang]}</option>
               </select>
+              <label className="mb-4 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editIsActive}
+                  onChange={(e) => setEditIsActive(e.target.checked)}
+                />
+                <span>{o.userActive[lang]}</span>
+              </label>
               <p className="mb-2 text-xs theme-muted">{o.roles[lang]}</p>
               <div className="space-y-3">
                 {ALL_ROLE_CODES.map((code) => (
@@ -392,6 +526,7 @@ export default function OrganizationPage() {
               <button onClick={saveUserRoles} className="theme-btn-primary mt-4">{o.saveUser[lang]}</button>
             </div>
           )}
+          </div>
         </div>
       ) : (
         <div className="mt-6 theme-card p-6">
@@ -407,7 +542,11 @@ export default function OrganizationPage() {
               ))}
             </select>
           </div>
-          {preview ? (
+          {previewLoading ? (
+            <p className="theme-muted">{c.loading?.[lang] ?? "Loading…"}</p>
+          ) : previewError ? (
+            <p className="theme-muted">{o.loadFail[lang]}</p>
+          ) : preview ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div className="rounded-lg border theme-border p-4">
                 <p className="text-xs theme-muted">{o.dataScope[lang]}</p>
@@ -435,7 +574,7 @@ export default function OrganizationPage() {
               </div>
             </div>
           ) : (
-            <p className="theme-muted">{c.loading?.[lang] ?? "Loading…"}</p>
+            <p className="theme-muted">{lang === "zh" ? "请选择用户" : "Select a user"}</p>
           )}
         </div>
       )}

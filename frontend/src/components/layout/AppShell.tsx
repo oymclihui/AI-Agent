@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "@/components/layout/Sidebar";
 import { useAuthStore } from "@/lib/authStore";
 import { authApi } from "@/lib/api";
+import { useClientAuth } from "@/hooks/useClientAuth";
 import { canReadEmployees, canViewDashboard, canManageOrg, canDelegateDept, canDelegateExec } from "@/lib/permissions";
 
 const ROUTE_PERMISSIONS: Record<string, (user: ReturnType<typeof useAuthStore.getState>["user"]) => boolean> = {
@@ -26,13 +27,10 @@ function routeNeedsGuard(pathname: string): string | null {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const token = useAuthStore((s) => s.token);
+  const { ready, token } = useClientAuth();
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
-  const [hydrated, setHydrated] = useState(
-    () => typeof window !== "undefined" && useAuthStore.persist.hasHydrated(),
-  );
 
   const isPublic =
     pathname === "/login" ||
@@ -40,20 +38,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const isLowcodeDesigner = /\/inspiration\/[^/]+\/designer/.test(pathname);
 
-  useEffect(() => {
-    if (useAuthStore.persist.hasHydrated()) {
-      setHydrated(true);
-      return;
-    }
-    return useAuthStore.persist.onFinishHydration(() => setHydrated(true));
-  }, []);
+  useLayoutEffect(() => {
+    if (!ready || isPublic) return;
+    if (!token) router.replace("/login");
+  }, [ready, isPublic, token, router]);
 
   useEffect(() => {
-    if (!hydrated || isPublic) return;
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
+    if (!ready || isPublic || !token) return;
     authApi.me()
       .then(({ data }) => setUser(data))
       .catch((err: unknown) => {
@@ -63,15 +54,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           router.replace("/login");
         }
       });
-  }, [hydrated, isPublic, token, router, logout, setUser]);
+  }, [ready, isPublic, token, router, logout, setUser]);
 
   useEffect(() => {
-    if (!hydrated || !token || !user || isPublic) return;
+    if (!ready || !token || !user || isPublic) return;
     const guardKey = routeNeedsGuard(pathname);
     if (!guardKey) return;
     if (guardKey === "/settings/organization") {
-      const canManage = canManageOrg(user);
-      if (!canManage) router.replace("/settings");
+      if (!canManageOrg(user)) router.replace("/settings");
       return;
     }
     if (guardKey === "/settings/delegation/dept") {
@@ -86,17 +76,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (check && !check(user)) {
       router.replace("/");
     }
-  }, [hydrated, token, user, pathname, isPublic, router]);
+  }, [ready, token, user, pathname, isPublic, router]);
 
-  if (!hydrated && !isPublic) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center theme-bg theme-muted">
-        Loading…
-      </div>
-    );
-  }
-
-  if (pathname === "/login" || pathname.startsWith("/login/")) {
+  if (isPublic) {
     return <>{children}</>;
   }
 
@@ -104,10 +86,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return <main className="h-screen w-full overflow-hidden">{children}</main>;
   }
 
-  if (!hydrated || !token) {
+  if (!ready) {
     return (
       <div className="flex h-screen w-full items-center justify-center theme-bg theme-muted">
         Loading…
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-3 theme-bg theme-muted">
+        <p className="text-sm">Redirecting to login…</p>
+        <a href="/login" className="text-sm text-blue-400 underline">Go to login</a>
       </div>
     );
   }

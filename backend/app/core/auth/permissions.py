@@ -129,6 +129,11 @@ def _merge_permissions(role_codes: list[str], is_admin: bool) -> set[str]:
     return perms
 
 
+def permissions_for_roles(role_codes: list[str], is_admin: bool) -> list[str]:
+    """Lightweight permission list from role codes (no DB scope walk)."""
+    return sorted(_merge_permissions(role_codes, is_admin))
+
+
 def _determine_scope_mode(role_codes: list[str], is_admin: bool) -> ScopeMode:
     if is_admin or "super_admin" in role_codes:
         return "all"

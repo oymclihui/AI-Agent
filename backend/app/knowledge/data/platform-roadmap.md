@@ -291,7 +291,7 @@ flowchart LR
 
 | 优先级 | 功能 | 说明 |
 |--------|------|------|
-| P1 | 结构化块渲染 | `[chart]` / `[kpi]` / `[choices]` 前端可视化 |
+| P1 | 结构化块渲染 | ~~`[chart]` / `[kpi]` / `[choices]` 前端可视化~~ ✅ |
 | P1 | 意图路由 | 自动切换数据分析类数字员工 |
 | P2 | 用户长期记忆 | 跨会话偏好与指标关注 |
 | P2 | 联网搜索门控 | 内外部意图评分 |
@@ -333,7 +333,7 @@ flowchart LR
 - [x] **深色 / 浅色主题**
 - [x] 远程部署（Linux systemd + Docker prod + Windows zip）
 - [ ] 飞书 / 钉钉 IM 机器人
-- [ ] Chat 内 chart / KPI 结构化渲染
+- [x] Chat 结构化渲染（与 data-qa-intent 闭环：`[kpi]` / `[chart]` / `[choices]`）
 - [ ] 定时任务支持工作流 / crew 执行
 - [ ] 知识库 Hybrid / GraphRAG（见专项规划）
 
@@ -344,7 +344,7 @@ flowchart LR
 1. **知识库 Phase 1**（Hybrid + Rerank + 溯源 + Excel）— 支撑 RAG 演示与销量/财务场景
 2. **飞书机器人 Phase 1** — 外部入口
 3. **数字员工 Phase 2**（workflow / crew 任务类型）
-4. **Chat 结构化渲染**（与 data-qa-intent 闭环）
+4. ~~**Chat 结构化渲染**（与 data-qa-intent 闭环）~~ ✅
 5. **技能 NL 生成 + Deposit 增强**
 6. **Celery Beat + 告警推送**
 

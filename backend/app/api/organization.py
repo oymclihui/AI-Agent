@@ -21,9 +21,11 @@ from app.core.auth.permissions import (
     assert_permission,
     compute_department_path,
     has_any_delegation,
+    permissions_for_roles,
     resolve_data_scope,
 )
 from app.core.auth.profile import build_user_response
+from app.core.auth.security import hash_password
 from app.db.base import generate_uuid
 from app.db.models import Department, PermissionAuditLog, User, UserDepartment, UserRole
 from app.db.session import get_db
@@ -36,6 +38,7 @@ from app.schemas.organization import (
     DepartmentUpdate,
     DeptDelegationUpdate,
     ExecDelegationUpdate,
+    OrgUserCreate,
     OrgUserResponse,
     OrgUserUpdate,
     PermissionPreviewResponse,
@@ -129,6 +132,56 @@ async def _serialize_org_user(db: AsyncSession, u: User, dept_names: dict[str, s
         permissions=sorted(scope.permissions),
         created_at=u.created_at,
     )
+
+
+def _roles_for_user(
+    role_rows: list[UserRole],
+    is_admin: bool,
+) -> list[UserRoleAssign]:
+    roles = [
+        UserRoleAssign(role_code=r.role_code, scope_department_id=r.scope_department_id)
+        for r in role_rows
+    ]
+    if not roles and is_admin:
+        roles = [UserRoleAssign(role_code="super_admin")]
+    if not roles:
+        roles = [UserRoleAssign(role_code="operator")]
+    return roles
+
+
+async def _serialize_org_users_batch(
+    db: AsyncSession,
+    users: list[User],
+    dept_names: dict[str, str],
+) -> list[OrgUserResponse]:
+    if not users:
+        return []
+    user_ids = [u.id for u in users]
+    role_result = await db.execute(select(UserRole).where(UserRole.user_id.in_(user_ids)))
+    roles_by_user: dict[str, list[UserRole]] = {uid: [] for uid in user_ids}
+    for row in role_result.scalars().all():
+        roles_by_user.setdefault(row.user_id, []).append(row)
+
+    return [
+        OrgUserResponse(
+            id=u.id,
+            employee_no=u.employee_no,
+            email=u.email,
+            display_name=u.display_name,
+            is_active=u.is_active,
+            is_admin=u.is_admin,
+            user_tier=u.user_tier or "staff",
+            primary_department_id=u.primary_department_id,
+            primary_department_name=dept_names.get(u.primary_department_id or ""),
+            roles=_roles_for_user(roles_by_user.get(u.id, []), u.is_admin),
+            permissions=permissions_for_roles(
+                [r.role_code for r in roles_by_user.get(u.id, [])],
+                u.is_admin,
+            ),
+            created_at=u.created_at,
+        )
+        for u in users
+    ]
 
 
 async def _load_departments_enriched(db: AsyncSession, dept_filter=None) -> list[DepartmentResponse]:
@@ -541,6 +594,74 @@ async def delete_department(
     await db.flush()
 
 
+@router.post("/users", response_model=OrgUserResponse, status_code=status.HTTP_201_CREATED)
+async def create_org_user(
+    payload: OrgUserCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_org_manage(db, user)
+
+    dup_q = select(User).where(User.employee_no == payload.employee_no)
+    if payload.email:
+        dup_q = select(User).where(
+            (User.employee_no == payload.employee_no) | (User.email == payload.email)
+        )
+    existing = await db.execute(dup_q.limit(1))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Employee no or email already exists")
+
+    if payload.primary_department_id:
+        dept = await db.get(Department, payload.primary_department_id)
+        if not dept or not dept.is_active:
+            raise HTTPException(status_code=404, detail="Department not found")
+
+    for code in {r.role_code for r in payload.roles}:
+        if code not in ALL_ROLES:
+            raise HTTPException(status_code=400, detail=f"Unknown role: {code}")
+
+    target = User(
+        id=generate_uuid(),
+        employee_no=payload.employee_no,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        display_name=payload.display_name,
+        is_active=payload.is_active,
+        is_admin=any(r.role_code in ("super_admin", "org_admin") for r in payload.roles),
+        user_tier=payload.user_tier,
+        primary_department_id=payload.primary_department_id,
+    )
+    db.add(target)
+    await db.flush()
+
+    if payload.primary_department_id:
+        db.add(UserDepartment(
+            id=generate_uuid(),
+            user_id=target.id,
+            department_id=payload.primary_department_id,
+            is_primary=True,
+        ))
+
+    if payload.roles:
+        await apply_user_roles(db, target, payload.roles)
+
+    await write_audit_log(
+        db,
+        actor_id=user.id,
+        target_id=target.id,
+        action="org_user_create",
+        details={"employee_no": payload.employee_no, "roles": [r.role_code for r in payload.roles]},
+    )
+    await db.flush()
+
+    dept_names: dict[str, str] = {}
+    if target.primary_department_id:
+        dept = await db.get(Department, target.primary_department_id)
+        if dept:
+            dept_names[target.primary_department_id] = dept.name
+    return await _serialize_org_user(db, target, dept_names)
+
+
 @router.get("/users", response_model=list[OrgUserResponse])
 async def list_org_users(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await _require_org_manage(db, user)
@@ -550,7 +671,7 @@ async def list_org_users(user: User = Depends(get_current_user), db: AsyncSessio
     if dept_ids:
         depts = await db.execute(select(Department.id, Department.name).where(Department.id.in_(dept_ids)))
         dept_names = {row[0]: row[1] for row in depts.all()}
-    return [await _serialize_org_user(db, u, dept_names) for u in users]
+    return await _serialize_org_users_batch(db, users, dept_names)
 
 
 @router.patch("/users/{target_user_id}", response_model=OrgUserResponse)

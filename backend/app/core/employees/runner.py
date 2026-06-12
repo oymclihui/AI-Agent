@@ -107,6 +107,117 @@ async def _run_desktop_automation_task(
     task.last_status = "completed"
 
 
+async def _run_workflow_task(
+    db: AsyncSession,
+    task: EmployeeScheduledTask,
+    employee: DigitalEmployee,
+    run: EmployeeTaskRun,
+    task_config: dict[str, Any],
+    start: float,
+) -> None:
+    from app.core.workflow.runner import execute_workflow_by_id
+
+    workflow_id = str(task_config.get("workflow_id") or "").strip()
+    if not workflow_id:
+        raise ValueError("task_config.workflow_id is required for workflow tasks")
+
+    input_data = task_config.get("input_data") if isinstance(task_config.get("input_data"), dict) else {}
+    if task_config.get("prompt"):
+        input_data = {**input_data, "prompt": task_config["prompt"]}
+
+    result = await execute_workflow_by_id(
+        db,
+        workflow_id,
+        input_data,
+        owner_user_id=employee.owner_id,
+        persist_execution=True,
+    )
+    output_data = result.get("output_data") or {}
+    final_output = str(output_data.get("final_output") or "").strip()
+    duration_ms = int((time.monotonic() - start) * 1000)
+    report_name: str | None = None
+    artifacts = output_data.get("artifacts") or []
+    if final_output:
+        report_name = run_report_filename(run, task)
+        report_md = (
+            f"# {employee.name} · {task.name}\n\n"
+            f"## Workflow\n\n{workflow_id}\n\n"
+            f"## Output\n\n{final_output}\n"
+        )
+        artifacts = merge_artifacts(artifacts, [save_text_artifact(report_md, report_name)])
+
+    run.status = ExecutionStatus.completed
+    run.output_data = {
+        "output": final_output,
+        "workflow_execution_id": result.get("workflow_execution_id"),
+        "artifacts": artifacts,
+        "report_filename": report_name if final_output else None,
+        **{k: v for k, v in output_data.items() if k not in ("artifacts",)},
+    }
+    run.token_usage = result.get("token_usage") or {}
+    run.duration_ms = duration_ms
+    task.last_status = "completed"
+
+
+async def _run_crew_task(
+    db: AsyncSession,
+    task: EmployeeScheduledTask,
+    employee: DigitalEmployee,
+    run: EmployeeTaskRun,
+    task_config: dict[str, Any],
+    start: float,
+) -> None:
+    from app.core.orchestrator.runner import execute_crew_from_config
+
+    owner_id = employee.owner_id
+    auth_token = None
+    harness_token = None
+    from app.core.auth.context import reset_current_user_id, set_current_user_id
+    from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+
+    if owner_id:
+        auth_token = set_current_user_id(owner_id)
+        harness_token = set_harness_context(
+            HarnessContext(
+                user_id=owner_id,
+                source="employee",
+                source_id=run.id,
+                auto_confirm=True,
+            )
+        )
+    try:
+        result = await execute_crew_from_config(db, task_config)
+    finally:
+        if harness_token is not None:
+            reset_harness_context(harness_token)
+        if auth_token is not None:
+            reset_current_user_id(auth_token)
+
+    output_text = str(result.get("output") or "").strip()
+    duration_ms = int((time.monotonic() - start) * 1000)
+    report_name: str | None = None
+    artifacts: list = []
+    if output_text:
+        report_name = run_report_filename(run, task)
+        report_md = (
+            f"# {employee.name} · {task.name}\n\n"
+            f"## Crew goal\n\n{task_config.get('goal') or task_config.get('prompt')}\n\n"
+            f"## Output\n\n{output_text}\n"
+        )
+        artifacts = [save_text_artifact(report_md, report_name)]
+
+    run.status = ExecutionStatus.completed
+    run.output_data = {
+        "output": output_text,
+        "task_outputs": result.get("task_outputs"),
+        "artifacts": artifacts,
+        "report_filename": report_name if output_text else None,
+    }
+    run.token_usage = result.get("token_usage") or {}
+    run.duration_ms = duration_ms
+    task.last_status = "completed"
+
+
 async def run_scheduled_task(
     db: AsyncSession,
     task: EmployeeScheduledTask,
@@ -125,6 +236,14 @@ async def run_scheduled_task(
     prompt = str(task_config.get("prompt") or task_config.get("task") or "").strip()
     if task_type == EmployeeTaskType.agent.value and not prompt:
         raise ValueError("task_config.prompt is required")
+    if task_type == EmployeeTaskType.workflow.value and not task_config.get("workflow_id"):
+        raise ValueError("task_config.workflow_id is required")
+    if task_type == EmployeeTaskType.crew.value:
+        agent_ids = task_config.get("agent_ids") or []
+        if not agent_ids and not task_config.get("agent_id"):
+            raise ValueError("task_config.agent_ids is required for crew tasks")
+        if not (task_config.get("goal") or task_config.get("prompt") or prompt):
+            raise ValueError("task_config.goal is required for crew tasks")
 
     run = EmployeeTaskRun(
         id=generate_uuid(),
@@ -150,6 +269,18 @@ async def run_scheduled_task(
     try:
         if task_type == EmployeeTaskType.desktop_automation.value:
             await _run_desktop_automation_task(db, task, employee, run, task_config, start)
+            _finalize_task_schedule(task)
+            await db.flush()
+            return run
+
+        if task_type == EmployeeTaskType.workflow.value:
+            await _run_workflow_task(db, task, employee, run, task_config, start)
+            _finalize_task_schedule(task)
+            await db.flush()
+            return run
+
+        if task_type == EmployeeTaskType.crew.value:
+            await _run_crew_task(db, task, employee, run, task_config, start)
             _finalize_task_schedule(task)
             await db.flush()
             return run

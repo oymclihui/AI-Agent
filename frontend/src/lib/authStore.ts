@@ -36,6 +36,24 @@ interface AuthState {
   logout: () => void;
 }
 
+export const AUTH_STORAGE_KEY = "aiagnet-auth";
+
+/** Sync read from localStorage — used before zustand persist finishes rehydrating. */
+export function readStoredAuth(): { token: string | null; user: AuthUser | null } {
+  if (typeof window === "undefined") return { token: null, user: null };
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return { token: null, user: null };
+    const parsed = JSON.parse(raw) as { state?: { token?: string | null; user?: AuthUser | null } };
+    return {
+      token: parsed.state?.token ?? null,
+      user: parsed.state?.user ?? null,
+    };
+  } catch {
+    return { token: null, user: null };
+  }
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
@@ -45,7 +63,7 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user) => set({ user }),
       logout: () => set({ token: null, user: null }),
     }),
-    { name: "aiagnet-auth" },
+    { name: AUTH_STORAGE_KEY },
   ),
 );
 

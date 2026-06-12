@@ -154,6 +154,18 @@ class Settings(BaseSettings):
     APP_PUBLIC_URL: str = "http://localhost:3000"
     PASSWORD_RESET_EXPIRE_MINUTES: int = 60
 
+    # IM bots (Feishu / DingTalk)
+    FEISHU_ENABLED: bool = False
+    FEISHU_APP_ID: str = ""
+    FEISHU_APP_SECRET: str = ""
+    FEISHU_VERIFICATION_TOKEN: str = ""
+    FEISHU_ENCRYPT_KEY: str = ""
+    DINGTALK_ENABLED: bool = False
+    DINGTALK_APP_KEY: str = ""
+    DINGTALK_APP_SECRET: str = ""
+    DINGTALK_ROBOT_WEBHOOK: str = ""
+    IM_BOT_USER_ID: str = ""
+
     # Platform SMTP (sends password-reset emails)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 465

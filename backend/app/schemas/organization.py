@@ -59,6 +59,17 @@ class UserRoleAssign(BaseModel):
     scope_department_id: Optional[str] = None
 
 
+class OrgUserCreate(BaseModel):
+    employee_no: str = Field(..., min_length=2, max_length=64)
+    display_name: str = Field(..., min_length=1, max_length=255)
+    email: Optional[str] = Field(None, max_length=255)
+    password: str = Field(..., min_length=6, max_length=128)
+    primary_department_id: Optional[str] = None
+    user_tier: str = "staff"
+    roles: list[UserRoleAssign] = Field(default_factory=list)
+    is_active: bool = True
+
+
 class OrgUserUpdate(BaseModel):
     primary_department_id: Optional[str] = None
     user_tier: Optional[str] = None

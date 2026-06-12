@@ -319,6 +319,13 @@ export const organizationApi = {
   updateExecDelegation: (userId: string, data: object) =>
     api.patch(`/organization/delegation/executive-users/${userId}`, data),
   auditLogs: (limit = 50) => api.get("/organization/audit-logs", { params: { limit } }),
+  createUser: (data: object) => api.post("/organization/users", data),
+};
+
+// ── IM Integrations ─────────────────────────────────
+export const integrationsApi = {
+  status: () => api.get("/integrations/status"),
+  adminStatus: () => api.get("/integrations/admin/status"),
 };
 
 // ── Digital Employees ───────────────────────────────

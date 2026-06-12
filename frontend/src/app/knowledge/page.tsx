@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Database, Upload, Trash2, Search, FileText, Loader2, X, Eye, Settings, PlugZap, FolderOpen, Building2, HardDrive } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import MarkdownView from "@/components/MarkdownView";
 import { knowledgeApi, modelsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { useAuthStore } from "@/lib/authStore";
@@ -674,9 +674,7 @@ export default function KnowledgePage() {
             ) : !docContent?.content?.trim() ? (
               <p className="text-sm text-slate-500">{k.noContent[lang]}</p>
             ) : markdownMode ? (
-              <article className="prose prose-invert prose-sm max-w-none prose-headings:text-white prose-p:text-slate-300 prose-li:text-slate-300 prose-strong:text-white prose-a:text-blue-400">
-                <ReactMarkdown>{docContent.content}</ReactMarkdown>
-              </article>
+              <MarkdownView size="sm">{docContent.content}</MarkdownView>
             ) : (
               <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-300 font-sans">
                 {docContent.content}

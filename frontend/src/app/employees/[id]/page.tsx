@@ -6,14 +6,18 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History, Eye, Download, BookOpen,
 } from "lucide-react";
-import { employeesApi, knowledgeApi, desktopAutomationApi } from "@/lib/api";
+import { employeesApi, knowledgeApi, desktopAutomationApi, agentsApi, workflowsApi } from "@/lib/api";
 import { resolveRunArtifacts, downloadAuthed, type RunArtifact } from "@/lib/artifacts";
 import { getAuthToken } from "@/lib/authStore";
 import { ArtifactDownloadButton } from "@/components/ArtifactDownloadButton";
+import MarkdownView from "@/components/MarkdownView";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 
+type TaskType = "agent" | "desktop_automation" | "workflow" | "crew";
+interface WorkflowOption { id: string; name: string; }
+interface AgentOption { id: string; name: string; }
 interface Employee {
   id: string; name: string; title: string | null; description: string | null;
   status: string; agent_id: string; timezone: string;
@@ -78,13 +82,17 @@ export default function EmployeeDetailPage() {
     schedule_type: "cron" as "cron" | "interval",
     cron_expression: "0 9 * * 1-5",
     interval_seconds: 3600,
-    task_type: "agent" as "agent" | "desktop_automation",
+    task_type: "agent" as TaskType,
     prompt: "",
+    workflow_id: "",
+    crew_agent_ids: [] as string[],
     demo_name: "",
     instructions: "",
     enabled: true,
   });
   const [demoOptions, setDemoOptions] = useState<DemoOption[]>([]);
+  const [workflowOptions, setWorkflowOptions] = useState<WorkflowOption[]>([]);
+  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -116,11 +124,25 @@ export default function EmployeeDetailPage() {
     desktopAutomationApi.listDemos()
       .then(({ data }) => setDemoOptions((data as DemoOption[]) || []))
       .catch(() => setDemoOptions([]));
+    workflowsApi.list()
+      .then(({ data }) => setWorkflowOptions((data as WorkflowOption[]) || []))
+      .catch(() => setWorkflowOptions([]));
+    agentsApi.list()
+      .then(({ data }) => setAgentOptions((data as AgentOption[]) || []))
+      .catch(() => setAgentOptions([]));
   }, [showTaskModal]);
 
   const createTask = async () => {
     if (!taskForm.name.trim()) return;
     if (taskForm.task_type === "agent" && !taskForm.prompt.trim()) return;
+    if (taskForm.task_type === "workflow" && !taskForm.workflow_id) {
+      toast.error(e.workflowRequired[lang]);
+      return;
+    }
+    if (taskForm.task_type === "crew" && (!taskForm.prompt.trim() || taskForm.crew_agent_ids.length === 0)) {
+      toast.error(e.crewRequired[lang]);
+      return;
+    }
     if (taskForm.task_type === "desktop_automation" && !taskForm.demo_name.trim()) {
       toast.error(e.demoNameRequired[lang]);
       return;
@@ -133,7 +155,18 @@ export default function EmployeeDetailPage() {
               instructions: taskForm.instructions.trim() || undefined,
               timeout_s: 120,
             }
-          : { prompt: taskForm.prompt };
+          : taskForm.task_type === "workflow"
+            ? {
+                workflow_id: taskForm.workflow_id,
+                prompt: taskForm.prompt.trim() || undefined,
+              }
+            : taskForm.task_type === "crew"
+              ? {
+                  goal: taskForm.prompt.trim(),
+                  agent_ids: taskForm.crew_agent_ids,
+                  process: "sequential",
+                }
+              : { prompt: taskForm.prompt };
       await employeesApi.createTask(id, {
         name: taskForm.name,
         description: taskForm.description,
@@ -299,7 +332,13 @@ export default function EmployeeDetailPage() {
                     <div>
                       <h3 className="font-medium text-white">{task.name}</h3>
                       <p className="mt-0.5 text-[10px] uppercase text-teal-500/80">
-                        {task.task_type === "desktop_automation" ? e.taskTypeDesktop[lang] : e.taskTypeAgent[lang]}
+                        {task.task_type === "desktop_automation"
+                          ? e.taskTypeDesktop[lang]
+                          : task.task_type === "workflow"
+                            ? e.taskTypeWorkflow[lang]
+                            : task.task_type === "crew"
+                              ? e.taskTypeCrew[lang]
+                              : e.taskTypeAgent[lang]}
                       </p>
                       <p className="mt-1 line-clamp-2 text-xs text-slate-400">
                         {task.task_type === "desktop_automation"
@@ -446,7 +485,9 @@ export default function EmployeeDetailPage() {
                   </div>
                 </div>
                 {run.output_data?.output && (
-                  <p className="line-clamp-4 whitespace-pre-wrap text-slate-300">{run.output_data.output}</p>
+                  <div className="line-clamp-4">
+                    <MarkdownView size="xs">{run.output_data.output}</MarkdownView>
+                  </div>
                 )}
                 {run.error_message && <p className="text-red-400">{run.error_message}</p>}
               </div>
@@ -469,9 +510,11 @@ export default function EmployeeDetailPage() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              <pre className="whitespace-pre-wrap text-sm text-slate-200">
-                {viewRun.output_data?.output}
-              </pre>
+              {viewRun.output_data?.output ? (
+                <MarkdownView size="md">{viewRun.output_data.output}</MarkdownView>
+              ) : (
+                <p className="text-sm text-slate-500">—</p>
+              )}
             </div>
             <div className="flex justify-end gap-2 border-t border-[#2d2d4e] px-6 py-4">
               <button
@@ -533,10 +576,12 @@ export default function EmployeeDetailPage() {
                   value={taskForm.task_type}
                   onChange={(ev) => setTaskForm((f) => ({
                     ...f,
-                    task_type: ev.target.value as "agent" | "desktop_automation",
+                    task_type: ev.target.value as TaskType,
                   }))}
                 >
                   <option value="agent">{e.taskTypeAgent[lang]}</option>
+                  <option value="workflow">{e.taskTypeWorkflow[lang]}</option>
+                  <option value="crew">{e.taskTypeCrew[lang]}</option>
                   <option value="desktop_automation">{e.taskTypeDesktop[lang]}</option>
                 </select>
               </div>
@@ -559,6 +604,49 @@ export default function EmployeeDetailPage() {
                     className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
                     value={taskForm.instructions}
                     onChange={(ev) => setTaskForm((f) => ({ ...f, instructions: ev.target.value }))} />
+                </>
+              ) : taskForm.task_type === "workflow" ? (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">{e.workflowPick[lang]}</label>
+                    <select
+                      className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      value={taskForm.workflow_id}
+                      onChange={(ev) => setTaskForm((f) => ({ ...f, workflow_id: ev.target.value }))}
+                    >
+                      <option value="">{e.selectWorkflow[lang]}</option>
+                      {workflowOptions.map((w) => (
+                        <option key={w.id} value={w.id}>{w.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <textarea placeholder={e.workflowInput[lang]} rows={3}
+                    className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                    value={taskForm.prompt}
+                    onChange={(ev) => setTaskForm((f) => ({ ...f, prompt: ev.target.value }))} />
+                </>
+              ) : taskForm.task_type === "crew" ? (
+                <>
+                  <textarea placeholder={e.crewGoal[lang]} rows={3}
+                    className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                    value={taskForm.prompt}
+                    onChange={(ev) => setTaskForm((f) => ({ ...f, prompt: ev.target.value }))} />
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">{e.crewAgents[lang]}</label>
+                    <select
+                      multiple
+                      className="h-28 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      value={taskForm.crew_agent_ids}
+                      onChange={(ev) => setTaskForm((f) => ({
+                        ...f,
+                        crew_agent_ids: Array.from(ev.target.selectedOptions, (o) => o.value),
+                      }))}
+                    >
+                      {agentOptions.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </>
               ) : (
                 <textarea placeholder={e.prompt[lang]} rows={4}

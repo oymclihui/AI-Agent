@@ -56,6 +56,7 @@ def _ensure_postgres_enum_values(sync_conn) -> None:
 
     patches = {
         "executionstatus": ["awaiting_confirmation"],
+        "employeetasktype": ["workflow", "crew"],
     }
     for type_name, labels in patches.items():
         for label in labels:

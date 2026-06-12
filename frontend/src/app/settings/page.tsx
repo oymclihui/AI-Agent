@@ -210,6 +210,14 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {canManageOrg(user) && (
+        <div className="theme-card mb-6 border-cyan-500/20 p-6">
+          <h2 className="mb-2 text-lg font-semibold theme-text">{s.integrationsLinkTitle[lang]}</h2>
+          <p className="mb-4 text-sm theme-muted">{s.integrationsLinkDesc[lang]}</p>
+          <Link href="/settings/integrations" className="theme-btn-primary inline-block">{s.orgLinkBtn[lang]}</Link>
+        </div>
+      )}
+
       {canDelegateDept(user) && !canManageOrg(user) && (
         <div className="theme-card mb-6 border-cyan-500/20 p-6">
           <h2 className="mb-2 text-lg font-semibold theme-text">{translations.delegation.deptTitle[lang]}</h2>

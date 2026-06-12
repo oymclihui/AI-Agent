@@ -397,6 +397,8 @@ class ScheduleType(str, enum.Enum):
 class EmployeeTaskType(str, enum.Enum):
     agent = "agent"
     desktop_automation = "desktop_automation"
+    workflow = "workflow"
+    crew = "crew"
 
 
 class TaskTrigger(str, enum.Enum):

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import MarkdownView from "@/components/MarkdownView";
+import ChatRichContent from "@/components/ChatRichContent";
 import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi } from "@/lib/api";
 import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
@@ -114,9 +114,7 @@ function ThinkingBlock({
       </button>
       {open && (
         <div className="max-h-64 overflow-y-auto border-t border-violet-500/20 px-3 py-2 text-xs leading-relaxed text-violet-200/85">
-          <div className="prose prose-xs prose-invert max-w-none whitespace-pre-wrap">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-          </div>
+          <MarkdownView size="xs">{content}</MarkdownView>
           {streaming && <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-violet-400" />}
         </div>
       )}
@@ -692,15 +690,16 @@ export default function ChatPage() {
     }
   };
 
-  const send = async () => {
-    const hasText = input.trim().length > 0;
+  const send = async (textOverride?: string) => {
+    const messageText = (textOverride ?? input).trim();
+    const hasText = messageText.length > 0;
     const hasFiles = pendingFiles.length > 0;
     if ((!hasText && !hasFiles) || streaming) return;
 
     let convId = activeConv;
     if (!convId) {
       try {
-        const title = hasText ? input.slice(0, 40) : pendingFiles[0]?.name || t.newChat[lang];
+        const title = hasText ? messageText.slice(0, 40) : pendingFiles[0]?.name || t.newChat[lang];
         const { data } = await chatApi.createConversation({
           title,
           ...conversationContext(),
@@ -715,7 +714,7 @@ export default function ChatPage() {
       }
     }
 
-    const msg = hasText ? input.trim() : t.analyzePrompt[lang];
+    const msg = hasText ? messageText : t.analyzePrompt[lang];
     const attachmentsMeta = pendingFiles.map((f) => ({
       filename: f.name,
       size: f.size,
@@ -730,8 +729,10 @@ export default function ChatPage() {
     };
     setMessages((m) => [...m, userMsg]);
     const filesToSend = [...pendingFiles];
-    setInput("");
-    setPendingFiles([]);
+    if (!textOverride) {
+      setInput("");
+      setPendingFiles([]);
+    }
     setSuggestedQuestions([]);
     setStreaming(true);
     setStreamingContent("");
@@ -828,6 +829,11 @@ export default function ChatPage() {
     if (convId && full.trim()) {
       void fetchDepositSuggestion(convId);
     }
+  };
+
+  const handleQaChoice = (text: string) => {
+    if (streaming) return;
+    void send(text);
   };
 
   const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming;
@@ -975,9 +981,14 @@ export default function ChatPage() {
                   <ThinkingBlock content={msg.metadata.thinking} lang={lang} />
                 )}
                 {msg.role === "assistant" ? (
-                  <div className="prose prose-sm prose-invert max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                  </div>
+                  <ChatRichContent
+                    size="sm"
+                    lang={lang}
+                    onChoiceSelect={handleQaChoice}
+                    choicesDisabled={streaming}
+                  >
+                    {msg.content}
+                  </ChatRichContent>
                 ) : msg.content}
               </div>
             </div>
@@ -1004,9 +1015,14 @@ export default function ChatPage() {
           {streaming && streamingContent && (
             <div className="flex justify-start">
               <div className="max-w-2xl rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-200">
-                <div className="prose prose-sm prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
-                </div>
+                <ChatRichContent
+                  size="sm"
+                  highlight={false}
+                  lang={lang}
+                  streaming
+                >
+                  {streamingContent}
+                </ChatRichContent>
                 <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-blue-400" />
               </div>
             </div>
@@ -1345,7 +1361,7 @@ export default function ChatPage() {
               }}
             />
             <button
-              onClick={send}
+              onClick={() => void send()}
               disabled={!canSend || isRecording || isProcessing}
               className="rounded-lg bg-blue-600 p-2 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >

@@ -365,12 +365,12 @@ docker run -p 3000:3000 aiagnet-frontend
 - [x] 从模板创建数字员工（含数据分析类模板）
 - [x] 运营大屏 `/screen` 与 Dashboard API
 - [x] 远程部署脚本（Linux + systemd + Nginx）
-- [ ] 飞书 / 钉钉等 IM 机器人接入
-- [ ] Chat 内图表 / KPI 结构化渲染（`data-qa-intent` 协议已定义，前端未渲染）
-- [ ] 定时任务支持工作流 / 多 Agent 编排执行
+- [x] 飞书 / 钉钉等 IM 机器人接入（Webhook 回调 + `/settings/integrations` 配置说明）
+- [x] Chat 内图表 / KPI 结构化渲染（`data-qa-intent` 协议：`[kpi]` / `[chart]` / `[choices]`）
+- [x] 定时任务支持工作流 / 多 Agent 编排执行（数字员工任务类型 `workflow` / `crew`）
 - [x] 从对话「保存为技能 / 知识库」
 - [x] 用户登录与按用户数据隔离（个人 API Key、30 天会话清理）
-- [ ] 完整多租户 / 管理员用户管理 UI
+- [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户 — `/settings/organization`）
 - [~] Docker Compose 一键部署（compose 文件已有，待完善）
 
 ---

@@ -1,24 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { LogIn } from "lucide-react";
 import toast from "react-hot-toast";
 import { authApi } from "@/lib/api";
-import { useAuthStore } from "@/lib/authStore";
+import { readStoredAuth, useAuthStore } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
+import { useClientAuth } from "@/hooks/useClientAuth";
 
 export default function LoginPage() {
   const router = useRouter();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const { ready, token } = useClientAuth();
   const { lang } = useLangStore();
   const a = translations.auth;
 
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!ready || !token) return;
+    router.replace("/");
+  }, [ready, token, router]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
