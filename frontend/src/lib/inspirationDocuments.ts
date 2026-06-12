@@ -329,7 +329,7 @@ export const DOC_FINANCE_CFO_BRIEF_ZH: InspirationDocument = base("html", { mode
                 id: "list",
                 type: "list",
                 items: ["授信额度调整", "CapEx 二期审批", "外汇 hedging 策略"],
-                style: { margin: 0, paddingLeft: "14px", fontSize: "8px", lineHeight: 1.6, color: "#cbd5e1" },
+                style: { margin: "0", paddingLeft: "14px", fontSize: "8px", lineHeight: 1.6, color: "#cbd5e1" },
               },
             ],
           },

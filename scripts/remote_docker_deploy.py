@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REMOTE_DIR = os.environ.get("DEPLOY_REMOTE_DIR", "/opt/aiagnet-docker")
 EXCLUDE_DIRS = {
     ".git", ".venv", "node_modules", "__pycache__", ".next", ".next/cache",
-    "chroma_data", "uploads", ".cursor", "release", "lowcode-designer/node_modules",
+    "chroma_data", "uploads", ".cursor", "release", "dist", "build",
+    "lowcode-designer/node_modules",
     "lowcode-designer/build",
 }
 EXCLUDE_SUFFIX = {".db", ".db-shm", ".db-wal", ".pyc", ".zip", ".tar", ".gz"}
@@ -45,6 +46,21 @@ def _build_tarball() -> Path:
     return tar_path
 
 
+def _safe_print(text: str, *, stream=None) -> None:
+    """Print SSH output without crashing on Windows console encoding."""
+    if not text.strip():
+        return
+    target = stream or sys.stdout
+    enc = getattr(target, "encoding", None) or "utf-8"
+    try:
+        target.write(text.rstrip() + "\n")
+        target.flush()
+    except UnicodeEncodeError:
+        target.buffer.write(text.encode(enc, errors="replace"))
+        target.buffer.write(b"\n")
+        target.buffer.flush()
+
+
 def _sudo(ssh: paramiko.SSHClient, password: str, cmd: str, check: bool = True) -> tuple[int, str, str]:
     escaped = cmd.replace("'", "'\"'\"'")
     full = f"sudo -S bash -c '{escaped}'"
@@ -57,9 +73,9 @@ def _sudo(ssh: paramiko.SSHClient, password: str, cmd: str, check: bool = True) 
     err = stderr.read().decode("utf-8", errors="replace")
     code = stdout.channel.recv_exit_status()
     if out.strip():
-        print(out.rstrip())
+        _safe_print(out)
     if err.strip() and "password" not in err.lower():
-        print(err.rstrip(), file=sys.stderr)
+        _safe_print(err, stream=sys.stderr)
     if check and code != 0:
         raise RuntimeError(f"sudo command failed ({code}): {cmd}")
     return code, out, err
@@ -71,10 +87,9 @@ def _run(ssh: paramiko.SSHClient, cmd: str, check: bool = True) -> tuple[int, st
     out = stdout.read().decode("utf-8", errors="replace")
     err = stderr.read().decode("utf-8", errors="replace")
     code = stdout.channel.recv_exit_status()
-    if out.strip():
-        print(out.rstrip())
+    _safe_print(out)
     if err.strip():
-        print(err.rstrip(), file=sys.stderr)
+        _safe_print(err, stream=sys.stderr)
     if check and code != 0:
         raise RuntimeError(f"Command failed ({code}): {cmd}")
     return code, out, err

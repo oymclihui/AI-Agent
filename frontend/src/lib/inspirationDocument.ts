@@ -45,6 +45,7 @@ export interface InspBlockStyle {
   paddingLeft?: string;
   overflow?: string;
   boxShadow?: string;
+  letterSpacing?: string;
 }
 
 export interface InspBlock {
@@ -102,6 +103,7 @@ function styleToCss(style?: InspBlockStyle): string {
   if (style.paddingLeft) parts.push(`padding-left:${style.paddingLeft}`);
   if (style.overflow) parts.push(`overflow:${style.overflow}`);
   if (style.boxShadow) parts.push(`box-shadow:${style.boxShadow}`);
+  if (style.letterSpacing) parts.push(`letter-spacing:${style.letterSpacing}`);
   return parts.join(";");
 }
 

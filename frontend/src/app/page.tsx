@@ -14,6 +14,7 @@ export default function HomePage() {
   const user = useAuthStore((s) => s.user);
   const d = translations.dashboard;
   const f = d.features;
+  type FeatureCopyKey = keyof typeof f;
 
   const features = [
     { icon: Users,         titleKey: "employees", descKey: "employeesD", href: "/employees", color: "text-cyan-400",   bg: "bg-cyan-400/10", show: canReadEmployees(user) },
@@ -64,9 +65,9 @@ export default function HomePage() {
               <Icon className={`h-6 w-6 ${color}`} />
             </div>
             <h3 className="mb-2 text-lg font-semibold text-white transition-colors group-hover:text-blue-300">
-              {f[titleKey][lang]}
+              {f[titleKey as FeatureCopyKey][lang]}
             </h3>
-            <p className="text-sm leading-relaxed text-slate-400">{f[descKey][lang]}</p>
+            <p className="text-sm leading-relaxed text-slate-400">{f[descKey as FeatureCopyKey][lang]}</p>
           </Link>
         ))}
       </div>
