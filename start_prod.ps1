@@ -3,6 +3,13 @@
 
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
+$LogFile = Join-Path $Root "ai-agent-start.log"
+
+function Write-Log([string]$Message) {
+    $line = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
+    Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+    Write-Host $Message
+}
 $BackendPort = if ($env:AIAGNET_BACKEND_PORT) { $env:AIAGNET_BACKEND_PORT } else { "8000" }
 $FrontendPort = if ($env:AIAGNET_FRONTEND_PORT) { $env:AIAGNET_FRONTEND_PORT } else { "3000" }
 
@@ -34,58 +41,58 @@ try {
     exit 1
 }
 
-# ── Stop stale listeners ──────────────────────────────────────
+# ── Stop stale listeners (tolerant — no admin required) ───────
 function Stop-PortListeners([string]$Port) {
-    for ($i = 0; $i -lt 6; $i++) {
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.CommandLine -and (
-                    ($Port -eq $BackendPort -and $_.CommandLine -match "uvicorn|app\.main:app") -or
-                    ($Port -eq $FrontendPort -and $_.CommandLine -match "next start")
-                )
-            } |
-            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    for ($i = 0; $i -lt 4; $i++) {
+        try {
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.CommandLine -and (
+                        ($Port -eq $BackendPort -and $_.CommandLine -match "uvicorn|app\.main:app") -or
+                        ($Port -eq $FrontendPort -and $_.CommandLine -match "next start")
+                    )
+                } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch {}
 
-        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                if ($_.OwningProcess -gt 0) {
-                    Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
-                }
+        try {
+            if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+                Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        if ($_.OwningProcess -gt 0) {
+                            Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+                        }
+                    }
             }
+        } catch {}
+
         Start-Sleep -Seconds 1
-        if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) { break }
     }
 }
 
+try {
 Stop-PortListeners $BackendPort
 Stop-PortListeners $FrontendPort
 Start-Sleep -Seconds 1
 
 # ── Start backend (production, no reload) ─────────────────────
-Write-Host "[1/2] Starting backend on port $BackendPort ..." -ForegroundColor Yellow
-$backendCmd = @"
-`$env:PYTHONPATH = '$Root\backend'
-Set-Location '$Root\backend'
-& '$uvicorn' app.main:app --host 0.0.0.0 --port $BackendPort
-"@
-$backendJob = Start-Process -FilePath "powershell" -ArgumentList @(
-    "-NoProfile", "-Command", $backendCmd
-) -PassThru -WindowStyle Normal
+Write-Log "[1/2] Starting backend on port $BackendPort ..."
+$backendArgs = @(
+    "-NoProfile", "-Command",
+    "& { `$env:PYTHONPATH = '$($Root -replace "'", "''")\\backend'; Set-Location '$($Root -replace "'", "''")\\backend'; & '$($uvicorn -replace "'", "''")' app.main:app --host 0.0.0.0 --port $BackendPort }"
+)
+$backendJob = Start-Process -FilePath "powershell.exe" -ArgumentList $backendArgs -PassThru -WindowStyle Normal
 
 Start-Sleep -Seconds 4
 
 # ── Start frontend (next start) ───────────────────────────────
-Write-Host "[2/2] Starting frontend on port $FrontendPort ..." -ForegroundColor Yellow
-$frontendCmd = @"
-Set-Location '$Root\frontend'
-`$env:NODE_ENV = 'production'
-`$env:BACKEND_URL = 'http://127.0.0.1:$BackendPort'
-if (-not `$env:NEXT_PUBLIC_WS_URL) { `$env:NEXT_PUBLIC_WS_URL = 'ws://127.0.0.1:$BackendPort' }
-npm run start -- -p $FrontendPort
-"@
-$frontendJob = Start-Process -FilePath "powershell" -ArgumentList @(
-    "-NoProfile", "-Command", $frontendCmd
-) -PassThru -WindowStyle Normal
+Write-Log "[2/2] Starting frontend on port $FrontendPort ..."
+$frontendDir = Join-Path $Root "frontend"
+$frontendArgs = @(
+    "-NoProfile", "-Command",
+    "& { Set-Location '$($frontendDir -replace "'", "''")'; `$env:NODE_ENV='production'; `$env:BACKEND_URL='http://127.0.0.1:$BackendPort'; if (-not `$env:NEXT_PUBLIC_WS_URL) { `$env:NEXT_PUBLIC_WS_URL='ws://127.0.0.1:$BackendPort' }; npm run start -- -p $FrontendPort }"
+)
+$frontendJob = Start-Process -FilePath "powershell.exe" -ArgumentList $frontendArgs -PassThru -WindowStyle Normal
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
@@ -109,3 +116,9 @@ Stop-Process -Id $frontendJob.Id -ErrorAction SilentlyContinue
 Stop-PortListeners $BackendPort
 Stop-PortListeners $FrontendPort
 Write-Host "Services stopped." -ForegroundColor Gray
+} catch {
+    Write-Log "[异常] $($_.Exception.Message)"
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
+}

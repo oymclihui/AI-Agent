@@ -61,7 +61,7 @@ if ($LASTEXITCODE -ge 8) {
 
 # ── Copy root scripts & docs ──────────────────────────────────
 Write-Host "[5/6] Adding install/start scripts..." -ForegroundColor Yellow
-foreach ($file in @("install.ps1", "start_prod.ps1", "AI-AGENT.bat")) {
+foreach ($file in @("install.ps1", "start_prod.ps1", "launch.ps1", "AI-AGENT.bat")) {
     Copy-Item (Join-Path $Root $file) (Join-Path $OutDir $file)
 }
 $readmeSrc = Join-Path $Root "docs\Windows交付说明.md"
