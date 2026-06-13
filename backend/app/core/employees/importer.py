@@ -205,10 +205,18 @@ async def import_template(
     if not name:
         raise ValueError("Employee name is required")
 
+    meta = emp_spec.get("metadata") or {}
+    sort_order = 0
+    try:
+        sort_order = int(meta.get("org_rank", 0))
+    except (TypeError, ValueError):
+        pass
+
     emp = DigitalEmployee(
         id=generate_uuid(),
         owner_id=user.id if user else None,
         department_id=user.primary_department_id if user else None,
+        sort_order=sort_order,
         name=name,
         title=emp_spec.get("title"),
         description=emp_spec.get("description") or data.get("description_zh"),

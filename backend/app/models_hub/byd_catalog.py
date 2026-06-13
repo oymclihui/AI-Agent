@@ -55,7 +55,7 @@ def _byd_specs() -> list[BydModelSpec]:
         model_id="byd-deepseek-v4-flash",
         api_model="deepseek-chat",
         base_url=settings.BYD_DEEPSEEK_V4_FLASH_BASE_URL,
-        is_default=True,
+        is_default=False,
         description="DeepSeek V4 Flash via BYD EIS (deepseek-chat)",
     )
     add(

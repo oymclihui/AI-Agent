@@ -11,6 +11,9 @@ import paramiko
 from scp import SCPClient
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from deploy_env import deploy_host  # noqa: E402
+
 REMOTE_DIR = "/opt/ai-agent"
 EXCLUDE_DIRS = {
     ".git", ".venv", "node_modules", "__pycache__", ".next",
@@ -84,7 +87,7 @@ def _write_remote_file(sftp: paramiko.SFTPClient, path: str, content: str) -> No
 
 
 def main() -> None:
-    host = os.environ.get("DEPLOY_HOST", "192.168.50.10")
+    host = deploy_host()
     user = os.environ.get("DEPLOY_USER", "ai-lab")
     password = os.environ.get("DEPLOY_PASSWORD")
     if not password:
@@ -129,8 +132,10 @@ DB_PASSWORD={db_pass}
 DB_NAME={db_name}
 DB_SSL=prefer"""
     else:
-        print("Local PostgreSQL unavailable; using SQLite.")
-        db_block = "DATABASE_URL=sqlite+aiosqlite:///./aiagnet.db"
+        raise SystemExit(
+            "Local PostgreSQL is required but not reachable on the server "
+            f"(user={db_user}, db={db_name}). Provision PG before deploy."
+        )
 
     backend_env = f"""APP_NAME=AI-AGENT
 DEBUG=false

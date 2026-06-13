@@ -71,6 +71,31 @@ class UserMailboxTestResponse(BaseModel):
     sample_count: int = 0
 
 
+class UserKmsCredentialCreate(BaseModel):
+    kms_user_id: Optional[str] = Field(None, max_length=128, description="KMS UserId; defaults to employee_no")
+    api_url: Optional[str] = Field(None, max_length=512)
+    api_key: Optional[str] = Field(None, min_length=1)
+
+
+class UserKmsCredentialResponse(BaseModel):
+    id: str
+    kms_user_id: Optional[str] = None
+    api_url: Optional[str] = None
+    has_api_key: bool = False
+    effective_kms_user_id: Optional[str] = None
+    is_active: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+class UserKmsTestResponse(BaseModel):
+    ok: bool
+    message: str
+    latency_ms: int = 0
+    preview: Optional[str] = None
+
+
 class UserResponse(BaseModel):
     id: str
     employee_no: Optional[str] = None

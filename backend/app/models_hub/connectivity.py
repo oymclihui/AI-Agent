@@ -17,6 +17,22 @@ from app.models_hub.router import ModelRouter
 
 logger = structlog.get_logger(__name__)
 
+# Probe order for auto-default: BYD API → OpenAI → local Ollama → other actives
+DEFAULT_PROBE_PRIORITY: list[tuple[str, str]] = [
+    ("openai", "byd-deepseek-v4-flash"),
+    ("openai", "byd-qwen35-35b-a3b-fp8"),
+    ("openai", "byd-deepseek-reasoner"),
+    ("openai", "byd-deepseek-32b"),
+    ("openai", "gpt-4o-mini"),
+    ("openai", "gpt-4o"),
+    ("ollama", "qwen3.6:35b"),
+    ("ollama", "deepseek-v4-flash:cloud"),
+    ("ollama", "qwen3.5:cloud"),
+    ("ollama", "gemma4:31b"),
+    ("ollama", "kimi-k2.6:cloud"),
+    ("ollama", "deepseek-v4-pro:cloud"),
+]
+
 
 def _format_test_error(exc: Exception, *, provider: str, model_id: str, endpoint: str | None) -> str:
     raw = str(exc).strip() or repr(exc)
@@ -109,6 +125,7 @@ async def test_model_connection(
     base_url: str | None = None,
     db: AsyncSession | None = None,
     user_id: str | None = None,
+    startup_probe: bool = False,
 ) -> dict[str, Any]:
     """Ping model endpoint with a minimal generation request."""
     started = time.perf_counter()
@@ -152,9 +169,19 @@ async def test_model_connection(
                             "endpoint": endpoint,
                             "preview": None,
                         }
+                    if startup_probe:
+                        return {
+                            "ok": True,
+                            "message": "连接成功",
+                            "latency_ms": int((time.perf_counter() - started) * 1000),
+                            "endpoint": endpoint,
+                            "preview": None,
+                        }
         except Exception:
             pass
 
+    invoke_timeout = 10 if startup_probe else 20
+    max_tokens = 3 if startup_probe else 8
     try:
         llm = await ModelRouter.get_llm(
             provider=provider,
@@ -163,7 +190,7 @@ async def test_model_connection(
             streaming=False,
             db=db,
             user_id=user_id,
-            inference_params={"max_tokens": 8, "timeout": 20},
+            inference_params={"max_tokens": max_tokens, "timeout": invoke_timeout},
             use_db_config=db is not None,
         )
         resp = await llm.ainvoke([HumanMessage(content="ping")])
@@ -184,6 +211,86 @@ async def test_model_connection(
             "endpoint": endpoint,
             "preview": None,
         }
+
+
+def _ordered_active_configs(active: list) -> list:
+    """Return active ModelConfig rows in default-probe priority order."""
+    by_key = {(c.provider, c.model_id): c for c in active}
+    ordered: list = []
+    seen: set[tuple[str, str]] = set()
+    for key in DEFAULT_PROBE_PRIORITY:
+        cfg = by_key.get(key)
+        if cfg and key not in seen:
+            ordered.append(cfg)
+            seen.add(key)
+    for cfg in sorted(active, key=lambda c: (c.provider, c.name or c.model_id)):
+        key = (cfg.provider, cfg.model_id)
+        if key not in seen:
+            ordered.append(cfg)
+            seen.add(key)
+    return ordered
+
+
+async def apply_connectivity_default(session: AsyncSession) -> None:
+    """Pick the first reachable active model as default (startup / re-probe)."""
+    from sqlalchemy import select
+
+    from app.db.models import ModelConfig
+
+    if not settings.AUTO_PICK_DEFAULT_MODEL:
+        return
+
+    result = await session.execute(select(ModelConfig).where(ModelConfig.is_active == True))
+    active = list(result.scalars().all())
+    if not active:
+        return
+
+    defaults = [c for c in active if c.is_default]
+    if len(defaults) == 1:
+        probe = await test_model_connection(
+            provider=defaults[0].provider,
+            model_id=defaults[0].model_id,
+            db=session,
+            startup_probe=True,
+        )
+        if probe["ok"]:
+            logger.info(
+                "default_model_kept",
+                provider=defaults[0].provider,
+                model=defaults[0].model_id,
+            )
+            return
+
+    for cfg in _ordered_active_configs(active):
+        probe = await test_model_connection(
+            provider=cfg.provider,
+            model_id=cfg.model_id,
+            db=session,
+            startup_probe=True,
+        )
+        if not probe["ok"]:
+            logger.debug(
+                "default_model_probe_skip",
+                provider=cfg.provider,
+                model=cfg.model_id,
+                reason=probe.get("message"),
+            )
+            continue
+        for c in active:
+            c.is_default = c.id == cfg.id
+        logger.info(
+            "default_model_auto_selected",
+            provider=cfg.provider,
+            model=cfg.model_id,
+            latency_ms=probe.get("latency_ms"),
+        )
+        return
+
+    logger.warning("default_model_none_reachable", active_count=len(active))
+    if not any(c.is_default for c in active):
+        ordered = _ordered_active_configs(active)
+        if ordered:
+            ordered[0].is_default = True
 
 
 def format_llm_task_error(exc: Exception, agent: AgentModel) -> str:

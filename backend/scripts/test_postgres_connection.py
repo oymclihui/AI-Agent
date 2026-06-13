@@ -18,7 +18,12 @@ def main() -> int:
     from sqlalchemy import create_engine, text
     from app.database_url import to_sync_url
 
-    host = settings.DB_HOST or "192.168.50.10"
+    from app.core.database.env_config import parse_database_url
+
+    host = settings.DB_HOST or str(parse_database_url(settings.DATABASE_URL)["host"] or "")
+    if not host:
+        print("ERROR: Set DB_HOST or DATABASE_URL in backend/.env", file=sys.stderr)
+        return 1
     print(f"Target: {host}:{settings.DB_PORT}/{settings.DB_NAME} user={settings.DB_USER}")
     print(f"URL host part: ...@{settings.DATABASE_URL.split('@')[-1]}")
 

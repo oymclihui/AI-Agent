@@ -5,6 +5,9 @@ from pathlib import Path
 
 import paramiko
 
+sys.path.insert(0, os.path.dirname(__file__))
+from deploy_env import deploy_host  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 REMOTE_DIR = "/opt/aiagnet-docker"
 
@@ -44,7 +47,7 @@ def _run(ssh, cmd, check=True):
 
 
 def main():
-    host = os.environ.get("DEPLOY_HOST", "192.168.50.10")
+    host = deploy_host()
     user = os.environ.get("DEPLOY_USER", "ai-lab")
     password = os.environ.get("DEPLOY_PASSWORD")
     if len(sys.argv) > 1 and not password:

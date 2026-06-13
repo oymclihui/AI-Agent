@@ -75,6 +75,9 @@ class User(Base, TimestampMixin):
     mailbox_credential = relationship(
         "UserMailboxCredential", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    kms_credential = relationship(
+        "UserKmsCredential", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
     department_memberships = relationship(
         "UserDepartment", back_populates="user", cascade="all, delete-orphan", foreign_keys="UserDepartment.user_id"
     )
@@ -159,6 +162,20 @@ class UserMailboxCredential(Base, TimestampMixin):
     is_active = Column(Boolean, default=True, nullable=False)
 
     user = relationship("User", back_populates="mailbox_credential")
+
+
+class UserKmsCredential(Base, TimestampMixin):
+    """Per-user BYD / corporate KMS API identity (工号、接口地址、Key 每人可不同)."""
+    __tablename__ = "user_kms_credentials"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    kms_user_id = Column(String(128), nullable=True)  # KMS UserId; defaults to users.employee_no
+    api_url = Column(String(512), nullable=True)
+    api_key = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="kms_credential")
 
 
 class UserModelCredential(Base, TimestampMixin):
@@ -270,6 +287,7 @@ class Conversation(Base, TimestampMixin):
     agent_id = Column(String(36), ForeignKey("agents.id"), nullable=True)
     workflow_id = Column(String(36), ForeignKey("workflows.id"), nullable=True)
     knowledge_base_ids = Column(JSON, default=list)
+    skills_config = Column(JSON, default=list)
     memory_type = Column(String(64), default="buffer")
     is_active = Column(Boolean, default=True)
     metadata_ = Column("metadata", JSON, default=dict)
@@ -412,6 +430,8 @@ class DigitalEmployee(Base, TimestampMixin):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     department_id = Column(String(36), ForeignKey("departments.id"), nullable=True, index=True)
+    parent_employee_id = Column(String(36), ForeignKey("digital_employees.id"), nullable=True, index=True)
+    sort_order = Column(Integer, default=0, nullable=False)
     name = Column(String(255), nullable=False)
     title = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
@@ -423,6 +443,11 @@ class DigitalEmployee(Base, TimestampMixin):
     metadata_ = Column("metadata", JSON, default=dict)
 
     agent = relationship("Agent", foreign_keys=[agent_id])
+    parent = relationship(
+        "DigitalEmployee",
+        remote_side="DigitalEmployee.id",
+        foreign_keys=[parent_employee_id],
+    )
     scheduled_tasks = relationship(
         "EmployeeScheduledTask", back_populates="employee", cascade="all, delete-orphan"
     )

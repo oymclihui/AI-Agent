@@ -7,7 +7,7 @@ Run from backend/ after configuring admin credentials in .env or environment:
   # On the PostgreSQL server (localhost) or when port 5432 is reachable:
   set PG_ADMIN_USER=postgres
   set PG_ADMIN_PASSWORD=your_postgres_superuser_password
-  set DB_HOST=192.168.50.10
+  set DB_HOST=your.db.server
   set DB_NAME=AI-AGENT
   set DB_USER=AI-AGENT
   set DB_PASSWORD=AI-AGENT
@@ -166,7 +166,7 @@ DB_SSL=prefer
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Provision PostgreSQL for AI-AGENT")
-    parser.add_argument("--host", default=os.getenv("DB_HOST", "192.168.50.10"))
+    parser.add_argument("--host", default=os.getenv("DB_HOST") or os.getenv("PGHOST") or "127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.getenv("DB_PORT", "5432")))
     parser.add_argument("--db-name", default=os.getenv("DB_NAME", DEFAULT_DB_NAME))
     parser.add_argument("--app-user", default=os.getenv("DB_USER", DEFAULT_DB_USER))
@@ -207,7 +207,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         if "timeout" in str(exc).lower() or "could not connect" in str(exc).lower():
             print(
-                "\nHint: port 5432 may be blocked remotely. On 192.168.50.10 run locally:\n"
+                "\nHint: port 5432 may be blocked remotely. Run this script on the DB server or open the firewall:\n"
                 "  PG_ADMIN_PASSWORD=... python scripts/provision_postgres.py --host 127.0.0.1\n"
                 "Or open firewall / postgresql.conf listen_addresses + pg_hba.conf for your PC IP.",
                 file=sys.stderr,

@@ -7,6 +7,19 @@ export const api = axios.create({
   baseURL: "/api/v1",
   headers: { "Content-Type": "application/json" },
   timeout: 60000,
+  transformResponse: [
+    (data, _headers, status) => {
+      if (status === 204 || data === "" || data == null) return null;
+      if (typeof data === "string") {
+        try {
+          return JSON.parse(data);
+        } catch {
+          return data;
+        }
+      }
+      return data;
+    },
+  ],
 });
 
 api.interceptors.request.use((config) => {
@@ -129,6 +142,8 @@ export const workflowsApi = {
 export const chatApi = {
   createConversation: (data: object) => api.post("/chat/conversations", data),
   listConversations: () => api.get("/chat/conversations"),
+  getConversation: (id: string) => api.get(`/chat/conversations/${id}`),
+  updateContext: (id: string, data: object) => api.patch(`/chat/conversations/${id}/context`, data),
   deleteConversation: (id: string) => api.delete(`/chat/conversations/${id}`),
   deleteAllConversations: () => api.delete("/chat/conversations"),
   getMessages: (id: string) => api.get(`/chat/conversations/${id}/messages`),
@@ -328,9 +343,33 @@ export const integrationsApi = {
   adminStatus: () => api.get("/integrations/admin/status"),
 };
 
+export const databaseApi = {
+  presets: () => api.get("/database/admin/presets"),
+  status: () => api.get("/database/admin/status"),
+  test: (body: Record<string, unknown>) => api.post("/database/admin/test", body),
+  saveConfig: (body: Record<string, unknown>) => api.post("/database/admin/config", body),
+  initialize: (body: Record<string, unknown>) => api.post("/database/admin/initialize", body),
+  initSqlPreview: (params: { db_schema?: string; seed_test_data?: boolean }) =>
+    api.get("/database/admin/init-sql-preview", { params }),
+};
+
+export const setupApi = {
+  status: () => api.get("/setup/status"),
+  presets: (setupToken: string) =>
+    api.get("/setup/presets", { headers: { "X-Setup-Token": setupToken } }),
+  test: (body: Record<string, unknown>, setupToken: string) =>
+    api.post("/setup/test", body, { headers: { "X-Setup-Token": setupToken } }),
+  initialize: (body: Record<string, unknown>, setupToken: string) =>
+    api.post("/setup/initialize", body, { headers: { "X-Setup-Token": setupToken } }),
+};
+
+export const SETUP_TOKEN_STORAGE_KEY = "aiagnet_setup_token";
+
 // ── Digital Employees ───────────────────────────────
 export const employeesApi = {
   list: () => api.get("/employees"),
+  orgTree: (sync = true) => api.get("/employees/org-tree", { params: { sync } }),
+  syncOrgTree: () => api.post("/employees/org-tree/sync"),
   create: (data: object) => api.post("/employees", data),
   get: (id: string) => api.get(`/employees/${id}`),
   update: (id: string, data: object) => api.patch(`/employees/${id}`, data),

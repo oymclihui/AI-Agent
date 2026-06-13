@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
 
 from app.db.session import get_db
-from app.db.models import User, UserModelCredential, UserMailboxCredential
+from app.db.models import User, UserModelCredential, UserMailboxCredential, UserKmsCredential
 from app.db.base import generate_uuid
 from app.core.auth.security import hash_password, verify_password, create_access_token
 from app.core.auth.deps import get_current_user, get_current_admin_user
@@ -25,6 +25,9 @@ from app.schemas.auth import (
     UserMailboxCreate,
     UserMailboxResponse,
     UserMailboxTestResponse,
+    UserKmsCredentialCreate,
+    UserKmsCredentialResponse,
+    UserKmsTestResponse,
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -280,6 +283,100 @@ async def test_my_mailbox(user: User = Depends(get_current_user), db: AsyncSessi
         )
     except Exception as exc:
         return UserMailboxTestResponse(ok=False, message=str(exc), sample_count=0)
+
+
+def _serialize_kms(row: UserKmsCredential, user: User) -> UserKmsCredentialResponse:
+    effective = (row.kms_user_id or user.employee_no or "").strip() or None
+    return UserKmsCredentialResponse(
+        id=row.id,
+        kms_user_id=row.kms_user_id,
+        api_url=row.api_url,
+        has_api_key=bool(row.api_key),
+        effective_kms_user_id=effective,
+        is_active=row.is_active,
+    )
+
+
+@router.get("/me/kms", response_model=UserKmsCredentialResponse | None)
+async def get_my_kms(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.knowledge.kms_credentials import get_user_kms_credential
+
+    row = await get_user_kms_credential(user.id, db)
+    return _serialize_kms(row, user) if row else None
+
+
+@router.post("/me/kms", response_model=UserKmsCredentialResponse, status_code=status.HTTP_201_CREATED)
+async def save_my_kms(
+    payload: UserKmsCredentialCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.knowledge.kms_credentials import get_user_kms_credential
+
+    row = await get_user_kms_credential(user.id, db)
+    api_url = (payload.api_url or "").strip() or None
+    kms_user_id = (payload.kms_user_id or "").strip() or None
+    api_key = (payload.api_key or "").strip()
+
+    if row:
+        if kms_user_id is not None:
+            row.kms_user_id = kms_user_id or None
+        if api_url is not None:
+            row.api_url = api_url
+        if api_key:
+            row.api_key = api_key
+        row.is_active = True
+    else:
+        row = UserKmsCredential(
+            id=generate_uuid(),
+            user_id=user.id,
+            kms_user_id=kms_user_id,
+            api_url=api_url,
+            api_key=api_key or None,
+            is_active=True,
+        )
+        db.add(row)
+    await db.flush()
+    await db.refresh(row)
+    return _serialize_kms(row, user)
+
+
+@router.delete("/me/kms", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_kms(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.knowledge.kms_credentials import get_user_kms_credential
+
+    row = await get_user_kms_credential(user.id, db)
+    if row:
+        row.is_active = False
+        await db.flush()
+
+
+@router.post("/me/kms/test", response_model=UserKmsTestResponse)
+async def test_my_kms(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.config import settings
+    from app.knowledge.byd_kms import BydKmsError, test_byd_kms_connection
+    from app.knowledge.kms_credentials import resolve_caller_kms_context
+
+    caller = await resolve_caller_kms_context(user, db)
+    if not caller:
+        return UserKmsTestResponse(
+            ok=False,
+            message="请先在个人资料中填写工号（employee_no），或在此配置 KMS User ID",
+        )
+    try:
+        result = await test_byd_kms_connection(
+            api_url=caller.api_url or settings.BYD_KMS_DEFAULT_URL,
+            user_id=caller.kms_user_id,
+            api_key=caller.api_key,
+        )
+        return UserKmsTestResponse(
+            ok=result.get("ok", False),
+            message=result.get("message") or "",
+            latency_ms=result.get("latency_ms") or 0,
+            preview=result.get("preview"),
+        )
+    except BydKmsError as exc:
+        return UserKmsTestResponse(ok=False, message=str(exc))
 
 
 @router.get("/me/model-keys", response_model=list[UserModelKeyResponse])

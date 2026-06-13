@@ -6,7 +6,11 @@ import sys
 
 import paramiko
 
-HOST = "192.168.50.10"
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from deploy_env import deploy_host  # noqa: E402
+
+HOST = deploy_host()
 USER = "ai-lab"
 REMOTE = "/opt/ai-agent"
 ENV_PATH = f"{REMOTE}/app/backend/.env"
@@ -48,8 +52,10 @@ DB_PASSWORD=AI-AGENT
 DB_NAME=AI-AGENT
 DB_SSL=prefer"""
     else:
-        print("PostgreSQL auth failed; using SQLite for now.")
-        db_block = "DATABASE_URL=sqlite+aiosqlite:///./aiagnet.db"
+        raise SystemExit(
+            "PostgreSQL is required but psql test failed on remote host. "
+            "Fix PG credentials before updating .env."
+        )
 
     env_content = f"""APP_NAME=AI-AGENT
 DEBUG=false

@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/authStore";
 import { authApi } from "@/lib/api";
 import { useClientAuth } from "@/hooks/useClientAuth";
 import { canReadEmployees, canViewDashboard, canManageOrg, canDelegateDept, canDelegateExec } from "@/lib/permissions";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 const ROUTE_PERMISSIONS: Record<string, (user: ReturnType<typeof useAuthStore.getState>["user"]) => boolean> = {
   "/screen": canViewDashboard,
@@ -31,12 +32,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
+  const isMobile = useIsMobile();
 
   const isPublic =
     pathname === "/login" ||
-    pathname.startsWith("/login/");
-
-  const isLowcodeDesigner = /\/inspiration\/[^/]+\/designer/.test(pathname);
+    pathname.startsWith("/login/") ||
+    pathname === "/setup";
 
   useLayoutEffect(() => {
     if (!ready || isPublic) return;
@@ -74,16 +75,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
     const check = ROUTE_PERMISSIONS[guardKey];
     if (check && !check(user)) {
-      router.replace("/");
+      router.replace("/chat");
     }
   }, [ready, token, user, pathname, isPublic, router]);
 
   if (isPublic) {
     return <>{children}</>;
-  }
-
-  if (isLowcodeDesigner) {
-    return <main className="h-screen w-full overflow-hidden">{children}</main>;
   }
 
   if (!ready) {
@@ -106,6 +103,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isScreen = pathname === "/screen" || pathname.startsWith("/screen/");
   if (isScreen) {
     return <main className="h-screen w-full overflow-auto">{children}</main>;
+  }
+
+  const isChat = pathname === "/chat" || pathname.startsWith("/chat/");
+  if (isChat && isMobile) {
+    return <main className="flex h-[100dvh] w-full flex-col overflow-hidden">{children}</main>;
+  }
+
+  if (isChat) {
+    return (
+      <>
+        <Sidebar />
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
+      </>
+    );
   }
 
   return (

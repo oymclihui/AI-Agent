@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run ON 192.168.50.10 (inside the server) to create AI-AGENT PostgreSQL database.
+# Run ON the target PostgreSQL server to create AI-AGENT database.
 # Usage:
 #   export PG_ADMIN_PASSWORD='your_postgres_superuser_password'
 #   bash provision_postgres_on_server.sh

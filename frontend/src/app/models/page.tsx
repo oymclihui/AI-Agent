@@ -6,6 +6,8 @@ import { modelsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { agentAvatarTone } from "@/lib/agentCatalog";
+import CapsuleScrollRow from "@/components/CapsuleScrollRow";
+import { ModelKeysPanel, type ModelKeyOption } from "@/components/ModelKeysPanel";
 import toast from "react-hot-toast";
 
 interface Model {
@@ -161,6 +163,7 @@ export default function ModelsPage() {
   const { lang } = useLangStore();
   const m = translations.models;
   const c = translations.common;
+  const chatT = translations.chat;
 
   const [models, setModels] = useState<Model[]>([]);
   const [configs, setConfigs] = useState<Config[]>([]);
@@ -204,6 +207,15 @@ export default function ModelsPage() {
     }
     return list.sort((a, b) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0));
   }, [configs, providerFilter, searchQuery]);
+
+  const modelKeyOptions = useMemo<ModelKeyOption[]>(
+    () => configs.map((cfg) => ({
+      provider: cfg.provider,
+      model_id: cfg.model_id,
+      label: `${cfg.name} (${cfg.provider}/${cfg.model_id})`,
+    })),
+    [configs],
+  );
 
   const filteredModels = useMemo(() => {
     let list = [...models];
@@ -413,10 +425,21 @@ export default function ModelsPage() {
         </div>
       </div>
 
+      <section className="hub-section">
+        <div className="agents-card p-5">
+          <ModelKeysPanel lang={lang} modelOptions={modelKeyOptions} />
+        </div>
+      </section>
+
       {models.length > 0 && (
         <section className="agents-featured">
           <h2 className="agents-featured-title">{m.featuredTitle[lang]}</h2>
-          <div className="agents-featured-scroll">
+          <CapsuleScrollRow
+            scrollStep={268}
+            scrollLeftLabel={chatT.scrollLeft[lang]}
+            scrollRightLabel={chatT.scrollRight[lang]}
+            innerClassName="agents-featured-scroll"
+          >
             {PROVIDER_SCENES.map((scene) => {
               const items = sceneModels(scene.id);
               return (
@@ -440,12 +463,18 @@ export default function ModelsPage() {
                 </button>
               );
             })}
-          </div>
+          </CapsuleScrollRow>
         </section>
       )}
 
       <div className="agents-filter-row">
-        <div className="agents-filter-scroll">
+        <CapsuleScrollRow
+          centerWhenFit
+          className="flex-1 min-w-0"
+          scrollLeftLabel={chatT.scrollLeft[lang]}
+          scrollRightLabel={chatT.scrollRight[lang]}
+          innerClassName="agents-filter-scroll"
+        >
           {providerFilters.map((id) => (
             <button
               key={id}
@@ -456,7 +485,7 @@ export default function ModelsPage() {
               {id === "all" ? m.filterAll[lang] : id}
             </button>
           ))}
-        </div>
+        </CapsuleScrollRow>
       </div>
 
       <section className="hub-section">

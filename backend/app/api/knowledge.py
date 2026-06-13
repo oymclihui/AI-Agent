@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -21,9 +22,10 @@ from app.knowledge.byd_kms import (
     test_byd_kms_connection,
 )
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_readable, assert_mutable_by_user
+from app.core.auth.scoping import scope_readable, assert_mutable_by_user, can_read_record
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
+logger = structlog.get_logger(__name__)
 
 
 def _kb_response(kb: KnowledgeBase) -> KnowledgeBaseResponse:
@@ -334,24 +336,40 @@ async def delete_document(kb_id: str, doc_id: str, db: AsyncSession = Depends(ge
         raise HTTPException(status_code=400, detail="API knowledge bases do not support local document deletion")
 
     pipeline = IngestionPipeline(knowledge_base_id=kb_id)
-    await pipeline.vector_store.delete_document(doc_id)
+    try:
+        await pipeline.vector_store.delete_document(doc_id)
+    except Exception as exc:
+        logger.warning("vector_delete_failed", doc_id=doc_id, error=str(exc))
     delete_document_file(doc.storage_path or "")
     await db.delete(doc)
 
 
 @router.post("/{kb_id}/search", response_model=list[SearchResult])
-async def search_knowledge_base(kb_id: str, payload: SearchRequest, db: AsyncSession = Depends(get_db)):
+async def search_knowledge_base(
+    kb_id: str,
+    payload: SearchRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
+    if not can_read_record(kb, user):
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
 
     if _is_byd_kms(kb):
+        from app.knowledge.kms_credentials import resolve_caller_kms_context
+
+        caller = await resolve_caller_kms_context(user, db)
         try:
             results = await search_byd_kms(
                 kb.metadata_ or {},
                 payload.query,
                 top_k=payload.top_k,
                 score_threshold=payload.score_threshold,
+                caller_kms_user_id=caller.kms_user_id if caller else None,
+                caller_api_url=caller.api_url if caller else None,
+                caller_api_key=caller.api_key if caller else None,
             )
             return [SearchResult(**r) for r in results]
         except BydKmsError as exc:

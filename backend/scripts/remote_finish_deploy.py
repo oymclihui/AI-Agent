@@ -12,7 +12,10 @@ import paramiko
 from scp import SCPClient
 
 ROOT = Path(__file__).resolve().parents[2]
-HOST = "192.168.50.10"
+sys.path.insert(0, str(ROOT / "scripts"))
+from deploy_env import deploy_host  # noqa: E402
+
+HOST = deploy_host()
 USER = "ai-lab"
 REMOTE = "/opt/ai-agent"
 FRONTEND_PORT = 3000

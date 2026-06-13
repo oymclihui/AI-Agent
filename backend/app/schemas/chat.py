@@ -3,6 +3,8 @@ from typing import Optional, Any
 from datetime import datetime
 from enum import Enum
 
+from app.schemas.agent import SkillBinding
+
 
 class MessageRole(str, Enum):
     user = "user"
@@ -21,8 +23,17 @@ class ConversationCreate(BaseModel):
     agent_id: Optional[str] = None
     workflow_id: Optional[str] = None
     knowledge_base_ids: list[str] = []
+    skills_config: list[SkillBinding] = []
     memory_type: str = "buffer"
     system_prompt: Optional[str] = None
+    model_config_id: Optional[str] = None
+    connector_id: Optional[str] = None
+
+
+class ConversationContextUpdate(BaseModel):
+    agent_id: Optional[str] = None
+    knowledge_base_ids: Optional[list[str]] = None
+    skills_config: Optional[list[SkillBinding]] = None
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
 
@@ -33,6 +44,7 @@ class ConversationResponse(BaseModel):
     agent_id: Optional[str]
     workflow_id: Optional[str]
     knowledge_base_ids: list[str] = []
+    skills_config: list[dict] = []
     memory_type: str
     is_active: bool
     model_config_id: Optional[str] = None
@@ -45,6 +57,11 @@ class ConversationResponse(BaseModel):
     def _coerce_kb_ids(cls, v):
         return v if v is not None else []
 
+    @field_validator("skills_config", mode="before")
+    @classmethod
+    def _coerce_skills(cls, v):
+        return v if v is not None else []
+
     @classmethod
     def from_conversation(cls, conv) -> "ConversationResponse":
         meta = conv.metadata_ or {}
@@ -54,6 +71,7 @@ class ConversationResponse(BaseModel):
             agent_id=conv.agent_id,
             workflow_id=conv.workflow_id,
             knowledge_base_ids=conv.knowledge_base_ids or [],
+            skills_config=conv.skills_config or [],
             memory_type=conv.memory_type,
             is_active=conv.is_active,
             model_config_id=meta.get("model_config_id"),

@@ -1,6 +1,13 @@
+from pathlib import Path
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from typing import Optional, Self
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_DEFAULT_PG_URL = (
+    "postgresql+asyncpg://aiagnet:aiagnet123@127.0.0.1:5432/aiagnet"
+)
 
 
 class Settings(BaseSettings):
@@ -17,12 +24,15 @@ class Settings(BaseSettings):
     DEFAULT_ADMIN_EMPLOYEE_NO: str = "admin"
     DEFAULT_ADMIN_PASSWORD: str = "admin123"
     DEFAULT_ADMIN_EMAIL: str = "admin@local"
+    # One-time first-run setup token (install.ps1 generates into SETUP_TOKEN.admin.txt)
+    SETUP_TOKEN: str = ""
 
-    # Database — use DATABASE_URL directly, or set DB_HOST + credentials
-    # DB_DRIVER: auto | sqlite | postgresql | vastbase
+    # Database — PostgreSQL / VastBase only (SQLite is not supported)
+    # Use DATABASE_URL directly, or set DB_HOST + credentials
+    # DB_DRIVER: postgresql | vastbase | auto
     # VastBase (海量/Vastbase) uses PostgreSQL wire protocol — same URL shape as PG
-    DATABASE_URL: str = "sqlite+aiosqlite:///./aiagnet.db"
-    DB_DRIVER: str = "auto"
+    DATABASE_URL: str = _DEFAULT_PG_URL
+    DB_DRIVER: str = "postgresql"
     DB_HOST: Optional[str] = None
     DB_PORT: int = 5432
     DB_USER: str = "aiagnet"
@@ -33,10 +43,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _compose_database_url(self) -> Self:
-        if self.DB_HOST:
-            from app.database_url import build_database_url, DB_DRIVER_VASTBASE
+        from app.database_url import build_database_url, DB_DRIVER_VASTBASE, is_sqlite_url
 
-            driver_setting = (self.DB_DRIVER or "auto").strip().lower()
+        if self.DB_HOST:
+            driver_setting = (self.DB_DRIVER or "postgresql").strip().lower()
             if driver_setting == DB_DRIVER_VASTBASE:
                 resolved = DB_DRIVER_VASTBASE
             elif driver_setting == "postgresql":
@@ -60,6 +70,12 @@ class Settings(BaseSettings):
             )
             if driver_setting == "auto":
                 object.__setattr__(self, "DB_DRIVER", resolved)
+
+        if is_sqlite_url(self.DATABASE_URL):
+            raise ValueError(
+                "SQLite is not supported. Configure PostgreSQL via DATABASE_URL "
+                "(postgresql+asyncpg://...) or DB_HOST + DB_USER + DB_PASSWORD + DB_NAME."
+            )
         return self
 
     @property
@@ -110,10 +126,12 @@ class Settings(BaseSettings):
     STT_TIMEOUT_SECONDS: int = 120
     OPENAI_STT_MODEL: str = "whisper-1"
 
-    # Default model settings (Ollama-first when no OpenAI key)
+    # Default model settings (fallback when DB has no reachable model yet)
     DEFAULT_LLM_PROVIDER: str = "ollama"
     DEFAULT_LLM_MODEL: str = "qwen3.6:35b"
     DEFAULT_EMBEDDING_MODEL: str = "nomic-embed-text"
+    # On startup, probe active models and set the first reachable one as default
+    AUTO_PICK_DEFAULT_MODEL: bool = True
     AZURE_OPENAI_API_KEY: Optional[str] = None
     AZURE_OPENAI_ENDPOINT: Optional[str] = None
     AZURE_OPENAI_API_VERSION: str = "2024-02-01"
@@ -191,7 +209,7 @@ class Settings(BaseSettings):
     ]
 
     class Config:
-        env_file = ".env"
+        env_file = str(_BACKEND_DIR / ".env")
         case_sensitive = True
 
 

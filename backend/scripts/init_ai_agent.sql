@@ -1,4 +1,4 @@
--- Run on 192.168.50.10 as PostgreSQL superuser:
+-- Run on the PostgreSQL server as superuser:
 --   psql -U postgres -f init_ai_agent.sql
 -- Creates database/user "AI-AGENT" (quoted because of hyphen).
 

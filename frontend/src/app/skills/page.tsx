@@ -7,8 +7,11 @@ import {
 } from "lucide-react";
 import { skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
+import { useAuthStore } from "@/lib/authStore";
+import { canDeleteAgentsOrSkills } from "@/lib/permissions";
 import { translations } from "@/lib/i18n";
 import { agentAvatarTone } from "@/lib/agentCatalog";
+import CapsuleScrollRow from "@/components/CapsuleScrollRow";
 import toast from "react-hot-toast";
 
 interface Skill {
@@ -80,8 +83,11 @@ const STATUS_FILTERS: StatusFilter[] = ["all", "active", "draft", "archived"];
 
 export default function SkillsPage() {
   const { lang } = useLangStore();
+  const user = useAuthStore((s) => s.user);
+  const canDelete = canDeleteAgentsOrSkills(user);
   const s = translations.skills;
   const c = translations.common;
+  const chatT = translations.chat;
 
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
@@ -184,13 +190,19 @@ export default function SkillsPage() {
   };
 
   const deleteSkill = async (id: string) => {
+    if (!canDelete) {
+      toast.error(s.deleteForbidden[lang]);
+      return;
+    }
     if (!confirm(s.deleteConfirm[lang])) return;
     try {
       await skillsApi.delete(id);
       toast.success(lang === "zh" ? "已删除" : "Deleted");
       load();
-    } catch {
-      toast.error(lang === "zh" ? "删除失败" : "Delete failed");
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 403) toast.error(s.deleteForbidden[lang]);
+      else toast.error(lang === "zh" ? "删除失败" : "Delete failed");
     }
   };
 
@@ -377,7 +389,12 @@ export default function SkillsPage() {
       {!loading && skills.length > 0 && (
         <section className="agents-featured">
           <h2 className="agents-featured-title">{s.featuredTitle[lang]}</h2>
-          <div className="agents-featured-scroll">
+          <CapsuleScrollRow
+            scrollStep={268}
+            scrollLeftLabel={chatT.scrollLeft[lang]}
+            scrollRightLabel={chatT.scrollRight[lang]}
+            innerClassName="agents-featured-scroll"
+          >
             {SKILL_SCENES.map((scene) => {
               const items = sceneSkills(scene.id);
               return (
@@ -401,12 +418,18 @@ export default function SkillsPage() {
                 </button>
               );
             })}
-          </div>
+          </CapsuleScrollRow>
         </section>
       )}
 
       <div className="agents-filter-row">
-        <div className="agents-filter-scroll">
+        <CapsuleScrollRow
+          centerWhenFit
+          className="flex-1 min-w-0"
+          scrollLeftLabel={chatT.scrollLeft[lang]}
+          scrollRightLabel={chatT.scrollRight[lang]}
+          innerClassName="agents-filter-scroll"
+        >
           {STATUS_FILTERS.map((id) => (
             <button
               key={id}
@@ -417,7 +440,7 @@ export default function SkillsPage() {
               {statusFilterLabel(id)}
             </button>
           ))}
-        </div>
+        </CapsuleScrollRow>
       </div>
 
       {loading ? (
@@ -456,9 +479,11 @@ export default function SkillsPage() {
                   <button type="button" onClick={() => openEdit(skill)} className="agents-icon-btn" title={s.editSkill[lang]}>
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
-                  <button type="button" onClick={() => deleteSkill(skill.id)} className="agents-icon-btn agents-icon-btn-danger" title={c.delete[lang]}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  {canDelete && (
+                    <button type="button" onClick={() => deleteSkill(skill.id)} className="agents-icon-btn agents-icon-btn-danger" title={c.delete[lang]}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </article>

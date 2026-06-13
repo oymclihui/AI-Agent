@@ -28,36 +28,54 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("aiagnet_startup", version=settings.APP_VERSION)
 
-    # Initialize database tables
-    await init_db(engine)
-    logger.info("database_initialized")
+    db_ready = False
+    db_schema = settings.DB_SCHEMA if settings.DB_SCHEMA and settings.DB_SCHEMA != "public" else None
+    try:
+        await init_db(engine, schema=db_schema)
+        logger.info("database_initialized")
+        db_ready = True
+    except Exception as exc:
+        logger.warning(
+            "database_startup_deferred",
+            error=str(exc),
+            hint="Open /setup in the browser to configure PostgreSQL or VastBase.",
+        )
 
-    # Seed default model configs
-    async with AsyncSessionLocal() as session:
-        await seed_default_models(session)
-        await seed_template_agents(session)
-        await seed_desktop_operator_agent(session)
-        await seed_template_workflows(session)
-        from app.core.workflow.templates.loader import ensure_workflow_templates
-        await ensure_workflow_templates(session)
-        await seed_template_skills(session)
-        await ensure_bundled_skills(session)
-        await seed_template_employees(session)
-        await seed_platform_knowledge_base(session)
-        await seed_default_admin(session)
-        await seed_org_rbac(session)
-    logger.info("default_models_seeded")
+    if db_ready:
+        try:
+            async with AsyncSessionLocal() as session:
+                await seed_default_models(session)
+                await seed_template_agents(session)
+                await seed_desktop_operator_agent(session)
+                await seed_template_workflows(session)
+                from app.core.workflow.templates.loader import ensure_workflow_templates
+                await ensure_workflow_templates(session)
+                await seed_template_skills(session)
+                await ensure_bundled_skills(session)
+                await seed_template_employees(session)
+                await seed_platform_knowledge_base(session)
+                await seed_default_admin(session)
+                await seed_org_rbac(session)
+            logger.info("default_models_seeded")
+        except Exception as exc:
+            logger.warning("database_seed_deferred", error=str(exc))
 
-    # Pre-load tool registry
     ToolRegistry.get_instance()
     logger.info("tool_registry_loaded")
 
-    await EmployeeScheduler.get_instance().start()
-    logger.info("employee_scheduler_started")
+    if db_ready:
+        try:
+            await EmployeeScheduler.get_instance().start()
+            logger.info("employee_scheduler_started")
+        except Exception as exc:
+            logger.warning("employee_scheduler_start_failed", error=str(exc))
 
     yield
 
-    await EmployeeScheduler.get_instance().stop()
+    try:
+        await EmployeeScheduler.get_instance().stop()
+    except Exception:
+        pass
     logger.info("aiagnet_shutdown")
     await engine.dispose()
 
@@ -88,13 +106,10 @@ app.include_router(api_router)
 @app.exception_handler(OperationalError)
 async def database_operational_error_handler(_request, exc: OperationalError):
     logger.error("database_operational_error", error=str(exc))
-    if settings.DATABASE_URL.startswith("sqlite"):
-        detail = (
-            "数据库繁忙（SQLite 被锁定）。请确保只运行一个后端实例，"
-            "然后重新执行 start_backend.ps1；或改用 PostgreSQL（配置 DB_HOST / DATABASE_URL）。"
-        )
-    else:
-        detail = "数据库连接异常，请检查 PostgreSQL / VastBase 是否可达以及 DATABASE_URL / DB_* 配置是否正确。"
+    detail = (
+        "数据库连接异常，请检查 PostgreSQL / VastBase 是否可达，"
+        "以及 DATABASE_URL / DB_HOST 等配置是否正确。"
+    )
     return JSONResponse(status_code=503, content={"detail": detail})
 
 

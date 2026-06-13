@@ -94,6 +94,7 @@ export default function KnowledgePage() {
   const [form, setForm] = useState({ name: "", description: "", embedding_model: "nomic-embed-text", chunk_size: 1000, chunk_overlap: 200 });
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ content: string; score: number; document_name: string }[]>([]);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
@@ -336,15 +337,27 @@ export default function KnowledgePage() {
 
   const deleteDoc = async (docId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!activeKb || !confirm(k.deleteDocConfirm[lang])) return;
+    e?.preventDefault();
+    if (!activeKb || deletingDocId === docId || !confirm(k.deleteDocConfirm[lang])) return;
+    setDeletingDocId(docId);
     try {
       await knowledgeApi.deleteDocument(activeKb, docId);
       setDocs((d) => d.filter((doc) => doc.id !== docId));
       if (activeDoc?.id === docId) closeViewer();
       toast.success(k.docDeleted[lang]);
-      load();
-    } catch {
-      toast.error(k.deleteFailed[lang]);
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response?.status;
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      if (status === 404) {
+        setDocs((d) => d.filter((doc) => doc.id !== docId));
+        if (activeDoc?.id === docId) closeViewer();
+        toast.success(k.docDeleted[lang]);
+      } else {
+        toast.error(typeof detail === "string" ? detail : k.deleteFailed[lang]);
+      }
+    } finally {
+      setDeletingDocId(null);
+      void load();
     }
   };
 
@@ -599,43 +612,49 @@ export default function KnowledgePage() {
             ) : (
               <div className="space-y-2">
                 {docs.map((doc) => (
-                  <button
+                  <div
                     key={doc.id}
-                    type="button"
-                    onClick={() => openDoc(doc)}
-                    className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
+                    className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 transition-colors ${
                       activeDoc?.id === doc.id
                         ? "border-blue-500/50 bg-blue-600/10"
                         : "border-[#2d2d4e] bg-[#1a1a2e] hover:border-blue-500/30 hover:bg-white/[0.03]"
                     }`}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => openDoc(doc)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
                       <FileText className="h-4 w-4 shrink-0 text-slate-400" />
                       <div className="min-w-0">
-                        <p className="text-sm text-white truncate">{doc.filename}</p>
+                        <p className="truncate text-sm text-white">{doc.filename}</p>
                         <p className="text-xs text-slate-500">
                           {doc.chunk_count} {k.chunks[lang]} · {doc.file_type}
                         </p>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-3">
-                      <span className="hidden sm:flex items-center gap-1 text-xs text-blue-400">
+                    </button>
+                    <div className="ml-3 flex shrink-0 items-center gap-3">
+                      <span className="hidden items-center gap-1 text-xs text-blue-400 sm:flex">
                         <Eye className="h-3.5 w-3.5" /> {k.viewContent[lang]}
                       </span>
                       <span className={`rounded-full px-2 py-0.5 text-xs ${doc.status === "ready" ? "bg-green-500/20 text-green-400" : doc.status === "processing" ? "bg-yellow-500/20 text-yellow-400" : "bg-red-500/20 text-red-400"}`}>
                         {doc.status}
                       </span>
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => deleteDoc(doc.id, e)}
-                        onKeyDown={(e) => e.key === "Enter" && deleteDoc(doc.id, e as unknown as React.MouseEvent)}
-                        className="text-slate-500 hover:text-red-400 transition-colors"
+                      <button
+                        type="button"
+                        disabled={deletingDocId === doc.id}
+                        onClick={(e) => void deleteDoc(doc.id, e)}
+                        className="text-slate-500 transition-colors hover:text-red-400 disabled:opacity-50"
+                        title={k.deleteDocConfirm[lang]}
                       >
-                        <Trash2 className="h-4 w-4" />
-                      </span>
+                        {deletingDocId === doc.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}

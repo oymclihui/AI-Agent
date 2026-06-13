@@ -12,9 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.chat.export import (
     _format_transcript,
-    _unique_skill_slug,
-    export_conversation_to_knowledge,
-    export_conversation_to_skill,
+    materialize_knowledge_from_spec,
+    materialize_skill_from_spec,
 )
 from app.core.employees.schedule import compute_next_run, validate_schedule
 from app.db.base import generate_uuid
@@ -27,11 +26,48 @@ from app.db.models import (
     EmployeeTaskType,
     Message,
     ScheduleType,
+    Skill,
 )
 
 logger = structlog.get_logger(__name__)
 
 DepositType = Literal["skill", "knowledge", "agent", "employee"]
+
+
+def _append_skill_binding(conv: Conversation, skill_id: str) -> None:
+    bindings = list(conv.skills_config or [])
+    if any(isinstance(b, dict) and b.get("skill_id") == skill_id for b in bindings):
+        return
+    bindings.append({"skill_id": skill_id, "always_load": True, "priority": len(bindings)})
+    conv.skills_config = bindings
+
+
+def _append_kb_id(conv: Conversation, kb_id: str) -> None:
+    ids = list(conv.knowledge_base_ids or [])
+    if kb_id not in ids:
+        ids.append(kb_id)
+    conv.knowledge_base_ids = ids
+
+
+def _merge_skill_id_lists(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for sid in group:
+            if sid and sid not in seen:
+                seen.add(sid)
+                merged.append(sid)
+    return merged
+
+
+def _skill_ids_from_conv(conv: Conversation) -> list[str]:
+    ids: list[str] = []
+    for item in conv.skills_config or []:
+        if isinstance(item, dict) and item.get("skill_id"):
+            ids.append(str(item["skill_id"]))
+        elif isinstance(item, str):
+            ids.append(item)
+    return ids
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -132,9 +168,9 @@ JSON schema:
       "confidence": 0.0-1.0
     }}
   ],
-  "draft": {{
-    "skill": {{"display_name": "...", "description": "..."}},
-    "knowledge": {{"kb_name": "...", "summary": "..."}},
+    "draft": {{
+    "skill": {{"display_name": "...", "description": "...", "instructions_md": "完整 SOP Markdown"}},
+    "knowledge": {{"kb_name": "...", "summary": "...", "document_md": "完整知识 Markdown"}},
     "agent": {{
       "name": "中文名",
       "role": "English role",
@@ -167,6 +203,7 @@ JSON schema:
 - 若出现重复性工作、岗位描述、周报/日报、定时需求，推荐 employee 并给出合理 cron（工作日 9:00 等）。
 - employee 的 task_config.prompt 必须可独立执行（agent 任务）；desktop_automation 任务用 demo_name/demo_id。
 - cron_expression 使用标准 5 段 cron（分 时 日 月 周）。
+- skill.instructions_md 与 knowledge.document_md 必须可直接发布，无需二次生成。
 """
     response = await llm.ainvoke([
         SystemMessage(content=system),
@@ -268,6 +305,7 @@ async def _create_employee_from_draft(
     agent_id: str,
     skill_ids: list[str],
     *,
+    knowledge_base_ids: list[str] | None = None,
     activate: bool = True,
 ) -> tuple[DigitalEmployee, int]:
     from app.db.models import User as UserModel
@@ -284,7 +322,7 @@ async def _create_employee_from_draft(
         status=EmployeeStatus.active if activate else EmployeeStatus.paused,
         agent_id=agent_id,
         skills_config=skills_config,
-        knowledge_base_ids=list(conv.knowledge_base_ids or []),
+        knowledge_base_ids=knowledge_base_ids or list(conv.knowledge_base_ids or []),
         timezone=str(emp_spec.get("timezone") or "Asia/Shanghai"),
         metadata_={
             "source_conversation_id": conv.id,
@@ -367,35 +405,53 @@ async def confirm_conversation_deposit(
         "tasks_created": 0,
     }
     skill_ids: list[str] = []
+    kb_id_result: str | None = None
 
     if "skill" in selected:
         skill_spec = draft_body.get("skill") if isinstance(draft_body.get("skill"), dict) else {}
         title = skill_title or skill_spec.get("display_name") or conv.title or "对话技能"
-        skill = await export_conversation_to_skill(db, conv, user_id, title=title)
+        skill = await materialize_skill_from_spec(
+            db, conv, user_id, skill_spec, title=title,
+        )
         result["skill_id"] = skill.id
         skill_ids.append(skill.id)
+        _append_skill_binding(conv, skill.id)
 
     if "knowledge" in selected:
         kb_spec = draft_body.get("knowledge") if isinstance(draft_body.get("knowledge"), dict) else {}
-        kb, _doc = await export_conversation_to_knowledge(
+        kb, _doc = await materialize_knowledge_from_spec(
             db,
             conv,
             user_id,
+            kb_spec,
             kb_id=kb_id,
             kb_name=kb_name or kb_spec.get("kb_name"),
         )
         result["knowledge_base_id"] = kb.id
+        kb_id_result = kb.id
+        _append_kb_id(conv, kb.id)
+        if result["skill_id"]:
+            skill = await db.get(Skill, result["skill_id"])
+            if skill:
+                linked = list(skill.knowledge_base_ids or [])
+                if kb.id not in linked:
+                    linked.append(kb.id)
+                skill.knowledge_base_ids = linked
+                await db.flush()
+
+    all_skill_ids = _merge_skill_id_lists(skill_ids, _skill_ids_from_conv(conv))
 
     agent_id: str | None = conv.agent_id
     if "agent" in selected:
         agent_spec = draft_body.get("agent") if isinstance(draft_body.get("agent"), dict) else {}
         if not agent_spec:
             raise ValueError("Agent draft missing from deposit preview")
-        agent = await _create_agent_from_draft(db, conv, user_id, agent_spec, skill_ids)
+        agent = await _create_agent_from_draft(db, conv, user_id, agent_spec, all_skill_ids)
         agent_id = agent.id
         result["agent_id"] = agent.id
-        if not conv.agent_id:
-            conv.agent_id = agent.id
+        conv.agent_id = agent.id
+
+    effective_kb_ids = list(conv.knowledge_base_ids or [])
 
     if "employee" in selected:
         if not agent_id:
@@ -409,7 +465,8 @@ async def confirm_conversation_deposit(
             user_id,
             emp_spec,
             agent_id,
-            skill_ids,
+            all_skill_ids,
+            knowledge_base_ids=effective_kb_ids,
             activate=activate_employee,
         )
         result["employee_id"] = emp.id

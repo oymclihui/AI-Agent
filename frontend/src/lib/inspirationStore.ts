@@ -2,7 +2,6 @@ import type { InspirationCategory, InspirationItem } from "@/lib/inspirationCata
 import { INSPIRATION_ITEMS } from "@/lib/inspirationCatalog";
 import type { InspirationDocument } from "@/lib/inspirationDocument";
 import { getItemPreviewHtml, renderDocumentToHtml } from "@/lib/inspirationDocument";
-import type { LowcodeInspirationPayload } from "@/lib/lowcodeBridge";
 
 const STORAGE_KEY = "aiagnet_inspiration_overrides";
 const FAVORITES_KEY = "aiagnet_inspiration_favorites";
@@ -16,7 +15,6 @@ export type InspirationOverrides = Record<
     document?: Partial<Record<Lang, InspirationDocument>>;
     previewHtml?: Partial<Record<Lang, string>>;
     prompt?: Partial<Record<Lang, string>>;
-    lowcode?: Partial<Record<Lang, LowcodeInspirationPayload>>;
   }
 >;
 
@@ -167,15 +165,9 @@ export function mergeInspiration(item: InspirationItem): InspirationItem {
     en: overrides.document?.en ?? item.document?.en,
   };
 
-  const lowcode = {
-    zh: overrides.lowcode?.zh ?? item.lowcode?.zh,
-    en: overrides.lowcode?.en ?? item.lowcode?.en,
-  };
-
   const merged: InspirationItem = {
     ...item,
     document: document.zh || document.en ? document : item.document,
-    lowcode: lowcode.zh || lowcode.en ? lowcode : item.lowcode,
     prompt: { ...item.prompt, ...overrides.prompt },
   };
 
@@ -206,7 +198,6 @@ export function saveInspirationOverride(
     document?: InspirationDocument;
     previewHtml?: string;
     prompt?: string;
-    lowcode?: LowcodeInspirationPayload;
   },
 ) {
   const custom = readCustomRaw().find((i) => i.id === id);
@@ -221,9 +212,6 @@ export function saveInspirationOverride(
       prompt: data.prompt !== undefined
         ? { ...custom.prompt, [lang]: data.prompt }
         : custom.prompt,
-      lowcode: data.lowcode !== undefined
-        ? { ...custom.lowcode, [lang]: data.lowcode }
-        : custom.lowcode,
     });
     return;
   }
@@ -240,9 +228,6 @@ export function saveInspirationOverride(
     prompt: data.prompt !== undefined
       ? { ...prev.prompt, [lang]: data.prompt }
       : prev.prompt,
-    lowcode: data.lowcode !== undefined
-      ? { ...prev.lowcode, [lang]: data.lowcode }
-      : prev.lowcode,
   };
   writeOverrides(all);
 }
@@ -271,8 +256,4 @@ export function toggleFavorite(id: string): boolean {
   else set.add(id);
   localStorage.setItem(FAVORITES_KEY, JSON.stringify([...set]));
   return !wasFav;
-}
-
-export function getLowcodePayload(item: InspirationItem, lang: Lang): LowcodeInspirationPayload | undefined {
-  return item.lowcode?.[lang];
 }

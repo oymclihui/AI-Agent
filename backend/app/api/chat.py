@@ -11,7 +11,7 @@ from app.db.models import (
 )
 from app.db.base import generate_uuid
 from app.schemas.chat import (
-    ConversationCreate, ConversationResponse,
+    ConversationCreate, ConversationResponse, ConversationContextUpdate,
     MessageResponse, ChatRequest, SuggestQuestionsResponse, TranscribeResponse,
     SaveAsSkillRequest, SaveToKnowledgeRequest, DeleteOkResponse,
     DepositSuggestRequest, DepositSuggestResponse, DepositConfirmRequest, DepositConfirmResponse,
@@ -25,7 +25,8 @@ from app.core.agents.base import AgentDefinition, Task
 from app.core.skills.factory import build_agent_executor
 from app.core.dialogue.manager import DialogueManager
 from app.core.memory.manager import MemoryManager
-from app.core.skills.injector import SkillInjector
+from app.core.skills.injector import SkillInjector, merge_skill_bindings, collect_knowledge_base_ids
+from app.knowledge.retriever import build_multi_kb_retriever
 from app.core.chat.attachments import build_attachment_context
 from app.core.chat.storage import save_attachment_bytes, delete_conversation_uploads
 from app.core.chat.suggestions import generate_attachment_questions
@@ -78,10 +79,10 @@ async def _ensure_memory_loaded(conv_id: str, memory_type: str, db: AsyncSession
     return memory
 
 
-async def _resolve_agent_context(db: AsyncSession, conv: Conversation):
+async def _resolve_effective_context(db: AsyncSession, conv: Conversation, user: User):
+    """Merge conversation + agent skills/KBs for runtime injection."""
     agent_definition = None
     agent_model = None
-    skill_messages = []
     if conv.agent_id:
         agent_model = await db.get(AgentModel, conv.agent_id)
         if agent_model:
@@ -96,7 +97,15 @@ async def _resolve_agent_context(db: AsyncSession, conv: Conversation):
                 temperature=agent_model.temperature,
                 max_iterations=agent_model.max_iterations,
             )
-            skill_messages = await SkillInjector.build_messages(db, agent_model.skills_config)
+
+    effective_skills = merge_skill_bindings(
+        conv.skills_config,
+        agent_model.skills_config if agent_model else None,
+    )
+    skill_messages = await SkillInjector.build_messages(db, effective_skills)
+
+    kb_ids = await collect_knowledge_base_ids(db, conv.knowledge_base_ids, effective_skills)
+    retriever = await build_multi_kb_retriever(db, kb_ids, caller_user=user)
 
     meta = conv.metadata_ or {}
     model_config_id = meta.get("model_config_id")
@@ -119,7 +128,7 @@ async def _resolve_agent_context(db: AsyncSession, conv: Conversation):
                     llm_model=cfg.model_id,
                 )
 
-    return agent_definition, skill_messages, agent_model
+    return agent_definition, skill_messages, agent_model, retriever
 
 
 def _agent_has_tools(agent_model: AgentModel | None) -> bool:
@@ -324,6 +333,7 @@ async def create_conversation(
         agent_id=payload.agent_id or None,
         workflow_id=payload.workflow_id or None,
         knowledge_base_ids=payload.knowledge_base_ids or [],
+        skills_config=[s.model_dump() for s in payload.skills_config],
         memory_type=payload.memory_type,
         metadata_={},
     )
@@ -350,6 +360,55 @@ async def list_conversations(
         .order_by(Conversation.created_at.desc())
     )
     return [ConversationResponse.from_conversation(c) for c in result.scalars().all()]
+
+
+@router.get("/conversations/{conv_id}", response_model=ConversationResponse)
+async def get_conversation(
+    conv_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await _get_user_conversation(db, conv_id, user)
+    return ConversationResponse.from_conversation(conv)
+
+
+@router.patch("/conversations/{conv_id}/context", response_model=ConversationResponse)
+async def update_conversation_context(
+    conv_id: str,
+    payload: ConversationContextUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await _get_user_conversation(db, conv_id, user)
+    unset = payload.model_dump(exclude_unset=True)
+
+    if "agent_id" in unset:
+        agent_id = unset["agent_id"]
+        if agent_id:
+            agent = await db.get(AgentModel, agent_id)
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        conv.agent_id = agent_id or None
+
+    if "knowledge_base_ids" in unset:
+        conv.knowledge_base_ids = unset["knowledge_base_ids"] or []
+
+    if "skills_config" in unset:
+        raw_skills = unset["skills_config"] or []
+        conv.skills_config = [
+            s.model_dump() if hasattr(s, "model_dump") else s for s in raw_skills
+        ]
+
+    if "model_config_id" in unset or "connector_id" in unset:
+        _merge_conversation_preferences(
+            conv,
+            model_config_id=unset.get("model_config_id") if "model_config_id" in unset else None,
+            connector_id=unset.get("connector_id") if "connector_id" in unset else None,
+        )
+
+    await db.flush()
+    await db.refresh(conv)
+    return ConversationResponse.from_conversation(conv)
 
 
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageResponse])
@@ -412,7 +471,7 @@ async def send_message(
     )
     await db.flush()
 
-    agent_definition, skill_messages, agent_model = await _resolve_agent_context(db, conv)
+    agent_definition, skill_messages, agent_model, retriever = await _resolve_effective_context(db, conv, user)
     connector_id_active = (conv.metadata_ or {}).get("connector_id")
     if connector_id_active:
         skill_messages = [
@@ -424,7 +483,7 @@ async def send_message(
             ),
         ]
     memory = await _ensure_memory_loaded(conv_id, conv.memory_type, db)
-    dialogue = DialogueManager(memory_manager=memory)
+    dialogue = DialogueManager(memory_manager=memory, knowledge_retriever=retriever)
 
     attachment_context = ""
     attachment_meta: list[dict] = []

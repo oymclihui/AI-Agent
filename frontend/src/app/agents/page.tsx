@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { agentsApi, modelsApi, skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
+import { useAuthStore } from "@/lib/authStore";
+import { canDeleteAgentsOrSkills } from "@/lib/permissions";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 import {
@@ -21,6 +23,7 @@ import {
   isCustomAgent,
   type AgentCategoryId,
 } from "@/lib/agentCatalog";
+import CapsuleScrollRow from "@/components/CapsuleScrollRow";
 
 interface Agent {
   id: string; name: string; role: string; goal: string;
@@ -40,8 +43,11 @@ const BUILTIN_TOOLS = ["web_search", "calculator", "http_request", "datetime", "
 export default function AgentsPage() {
   const router = useRouter();
   const { lang } = useLangStore();
+  const user = useAuthStore((s) => s.user);
+  const canDelete = canDeleteAgentsOrSkills(user);
   const a = translations.agents;
   const c = translations.common;
+  const chatT = translations.chat;
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
@@ -136,13 +142,19 @@ export default function AgentsPage() {
   };
 
   const deleteAgent = async (id: string) => {
+    if (!canDelete) {
+      toast.error(a.deleteForbidden[lang]);
+      return;
+    }
     if (!confirm(a.deleteConfirm[lang])) return;
     try {
       await agentsApi.delete(id);
       toast.success(lang === "zh" ? "已删除" : "Deleted");
       load();
-    } catch {
-      toast.error(lang === "zh" ? "删除失败" : "Delete failed");
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 403) toast.error(a.deleteForbidden[lang]);
+      else toast.error(lang === "zh" ? "删除失败" : "Delete failed");
     }
   };
 
@@ -293,7 +305,12 @@ export default function AgentsPage() {
       {!loading && agents.length > 0 && (
         <section className="agents-featured">
           <h2 className="agents-featured-title">{a.featuredScenes[lang]}</h2>
-          <div className="agents-featured-scroll">
+          <CapsuleScrollRow
+            scrollStep={268}
+            scrollLeftLabel={chatT.scrollLeft[lang]}
+            scrollRightLabel={chatT.scrollRight[lang]}
+            innerClassName="agents-featured-scroll"
+          >
             {FEATURED_SCENES.map((scene) => {
               const items = sceneAgents(scene.id);
               return (
@@ -317,12 +334,18 @@ export default function AgentsPage() {
                 </button>
               );
             })}
-          </div>
+          </CapsuleScrollRow>
         </section>
       )}
 
       <div className="agents-filter-row">
-        <div className="agents-filter-scroll">
+        <CapsuleScrollRow
+          centerWhenFit
+          className="flex-1 min-w-0"
+          scrollLeftLabel={chatT.scrollLeft[lang]}
+          scrollRightLabel={chatT.scrollRight[lang]}
+          innerClassName="agents-filter-scroll"
+        >
           {AGENT_CATEGORIES.map((cat) => (
             <button
               key={cat.id}
@@ -333,7 +356,7 @@ export default function AgentsPage() {
               {lang === "zh" ? cat.label.zh : cat.label.en}
             </button>
           ))}
-        </div>
+        </CapsuleScrollRow>
         <div className="agents-sort">
           <button
             type="button"
@@ -407,14 +430,16 @@ export default function AgentsPage() {
                     >
                       <Layers className="h-3.5 w-3.5" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteAgent(agent.id)}
-                      className="agents-icon-btn agents-icon-btn-danger"
-                      title={c.delete[lang]}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        onClick={() => deleteAgent(agent.id)}
+                        className="agents-icon-btn agents-icon-btn-danger"
+                        title={c.delete[lang]}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => summonAgent(agent.id)}

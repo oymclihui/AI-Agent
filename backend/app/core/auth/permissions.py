@@ -250,6 +250,14 @@ def scope_employees_query(model: DeclarativeMeta, scope: DataScope):
     )
 
 
+def scope_departments_query(model: DeclarativeMeta, scope: DataScope):
+    if scope.mode == "all":
+        return true()
+    if scope.department_ids:
+        return model.id.in_(list(scope.department_ids))
+    return model.id.is_(None)
+
+
 def assert_permission(scope: DataScope, perm: str) -> None:
     if not scope.has_permission(perm):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Permission denied: {perm}")

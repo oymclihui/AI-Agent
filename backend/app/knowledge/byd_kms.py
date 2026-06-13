@@ -22,15 +22,34 @@ class BydKmsError(Exception):
         self.body = body
 
 
-def resolve_byd_kms_config(meta: Optional[dict]) -> Optional[dict]:
+def resolve_byd_kms_config(
+    meta: Optional[dict],
+    *,
+    caller_kms_user_id: str | None = None,
+    caller_api_url: str | None = None,
+    caller_api_key: str | None = None,
+) -> Optional[dict]:
     if not meta or meta.get("source_type") != "byd_kms":
         return None
     cfg = meta.get("byd_kms") or {}
-    user_id = (cfg.get("user_id") or "").strip()
-    api_url = (cfg.get("api_url") or settings.BYD_KMS_DEFAULT_URL).strip()
+    use_caller = cfg.get("use_caller_identity", True)
+
+    if use_caller and caller_kms_user_id:
+        user_id = caller_kms_user_id.strip()
+    else:
+        user_id = (cfg.get("user_id") or "").strip()
+
+    api_url = (
+        (caller_api_url or "").strip()
+        or (cfg.get("api_url") or settings.BYD_KMS_DEFAULT_URL).strip()
+    )
     if not user_id or not api_url:
         return None
-    api_key = (cfg.get("api_key") or settings.BYD_KMS_API_KEY or "").strip() or None
+    api_key = (
+        (caller_api_key or "").strip()
+        or (cfg.get("api_key") or settings.BYD_KMS_API_KEY or "").strip()
+        or None
+    )
     return {
         "api_url": api_url.rstrip("/"),
         "user_id": user_id,
@@ -52,6 +71,7 @@ def build_byd_kms_metadata(
         "byd_kms": {
             "api_url": (api_url or DEFAULT_BYD_KMS_URL).strip().rstrip("/"),
             "user_id": user_id.strip(),
+            "use_caller_identity": True,
             **({"api_key": key} if key else {}),
         },
     }
@@ -235,8 +255,16 @@ async def search_byd_kms(
     *,
     top_k: int = 5,
     score_threshold: float = 0.0,
+    caller_kms_user_id: str | None = None,
+    caller_api_url: str | None = None,
+    caller_api_key: str | None = None,
 ) -> list[dict]:
-    cfg = resolve_byd_kms_config(meta)
+    cfg = resolve_byd_kms_config(
+        meta,
+        caller_kms_user_id=caller_kms_user_id,
+        caller_api_url=caller_api_url,
+        caller_api_key=caller_api_key,
+    )
     if not cfg:
         raise BydKmsError("API 知识库配置不完整，请填写 User ID 与接口地址")
 

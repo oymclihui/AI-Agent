@@ -11,7 +11,7 @@ import { agentsApi, employeesApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { useAuthStore } from "@/lib/authStore";
-import EmployeeOrgChart from "@/components/EmployeeOrgChart";
+import EmployeeOrgChart, { type OrgTreeData } from "@/components/EmployeeOrgChart";
 import {
   EMPLOYEE_CATEGORIES,
   categoryLabel,
@@ -19,7 +19,7 @@ import {
   normalizeTemplateCategory,
   type EmployeeTemplateCategoryId,
 } from "@/lib/employeeCatalog";
-import { sortByOrg } from "@/lib/nevFinanceOrg";
+import CapsuleScrollRow from "@/components/CapsuleScrollRow";
 import toast from "react-hot-toast";
 
 interface Employee {
@@ -84,6 +84,7 @@ export default function EmployeesPage() {
   const e = translations.employees;
   const s = translations.skills;
   const c = translations.common;
+  const chatT = translations.chat;
 
   const [items, setItems] = useState<Employee[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -99,6 +100,9 @@ export default function EmployeesPage() {
   const [templateCategory, setTemplateCategory] = useState<EmployeeTemplateCategoryId>("all");
   const [saving, setSaving] = useState(false);
   const [viewMode, setViewMode] = useState<"org" | "cards">("org");
+  const [orgTree, setOrgTree] = useState<OrgTreeData | null>(null);
+  const [orgLoading, setOrgLoading] = useState(false);
+  const [syncingOrg, setSyncingOrg] = useState(false);
   const [form, setForm] = useState({
     name: "", title: "", description: "", agent_id: "", timezone: "Asia/Shanghai",
   });
@@ -114,6 +118,31 @@ export default function EmployeesPage() {
     }
   };
 
+  const loadOrgTree = async () => {
+    setOrgLoading(true);
+    try {
+      const { data } = await employeesApi.orgTree(true);
+      setOrgTree(data as OrgTreeData);
+    } catch {
+      toast.error(lang === "zh" ? "组织架构加载失败" : "Failed to load org chart");
+    } finally {
+      setOrgLoading(false);
+    }
+  };
+
+  const syncOrg = async () => {
+    setSyncingOrg(true);
+    try {
+      await employeesApi.syncOrgTree();
+      toast.success(e.syncOrgOk[lang]);
+      await loadOrgTree();
+    } catch {
+      toast.error(e.syncOrgFail[lang]);
+    } finally {
+      setSyncingOrg(false);
+    }
+  };
+
   useEffect(() => {
     load();
     agentsApi.list(lang).then(({ data }) => {
@@ -121,6 +150,12 @@ export default function EmployeesPage() {
       if (data[0]) setForm((f) => ({ ...f, agent_id: data[0].id }));
     }).catch(() => {});
   }, [lang]);
+
+  useEffect(() => {
+    if (viewMode === "org" && !loading && items.length > 0) {
+      void loadOrgTree();
+    }
+  }, [viewMode, loading, items.length]);
 
   const openTemplates = async () => {
     setShowTemplates(true);
@@ -155,6 +190,7 @@ export default function EmployeesPage() {
       toast.success(e.templateImportOk[lang]);
       setShowTemplates(false);
       load();
+      if (viewMode === "org") void loadOrgTree();
       router.push(`/employees/${data.employee.id}`);
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -223,8 +259,7 @@ export default function EmployeesPage() {
   const sceneTemplates = (catId: EmployeeTemplateCategoryId) =>
     templates.filter((tpl) => normalizeTemplateCategory(tpl.category) === catId).slice(0, 3);
 
-  const sortedItems = useMemo(() => sortByOrg(items), [items]);
-  const hasNevOrg = sortedItems.some((e) => e.metadata?.org_group === "nev-finance");
+  const sortedItems = useMemo(() => [...items].sort((a, b) => a.name.localeCompare(b.name)), [items]);
 
   return (
     <div className="agents-hub">
@@ -259,6 +294,17 @@ export default function EmployeesPage() {
           >
             <LayoutGrid className="h-4 w-4" /> {e.viewCards[lang]}
           </button>
+          {viewMode === "org" && (
+            <button
+              type="button"
+              disabled={syncingOrg || orgLoading}
+              onClick={() => void syncOrg()}
+              className="employees-view-btn ml-auto"
+            >
+              {syncingOrg ? <Loader2 className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
+              {e.syncOrg[lang]}
+            </button>
+          )}
         </div>
       )}
 
@@ -272,16 +318,21 @@ export default function EmployeesPage() {
             <LayoutTemplate className="h-4 w-4" /> {e.fromTemplate[lang]}
           </button>
         </div>
-      ) : viewMode === "org" && hasNevOrg ? (
-        <EmployeeOrgChart
-          employees={sortedItems}
-          lang={lang}
-          activeLabel={c.active[lang]}
-          pausedLabel={e.paused[lang]}
-          taskCountLabel={e.taskCount[lang]}
-          openDetailLabel={e.openDetail[lang]}
-          groupTitle={e.orgTitle}
-        />
+      ) : viewMode === "org" ? (
+        orgLoading || !orgTree ? (
+          <div className="theme-muted flex items-center gap-2 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" /> {c.loading[lang]}
+          </div>
+        ) : (
+          <EmployeeOrgChart
+            tree={orgTree}
+            lang={lang}
+            activeLabel={c.active[lang]}
+            pausedLabel={e.paused[lang]}
+            taskCountLabel={e.taskCount[lang]}
+            openDetailLabel={e.openDetail[lang]}
+          />
+        )
       ) : (
         <div className="agents-grid">
           {sortedItems.map((emp) => (
@@ -352,7 +403,12 @@ export default function EmployeesPage() {
             {!templatesLoading && templates.length > 0 && (
               <section className="agents-featured">
                 <h2 className="agents-featured-title">{e.templateFeatured[lang]}</h2>
-                <div className="agents-featured-scroll">
+                <CapsuleScrollRow
+                  scrollStep={268}
+                  scrollLeftLabel={chatT.scrollLeft[lang]}
+                  scrollRightLabel={chatT.scrollRight[lang]}
+                  innerClassName="agents-featured-scroll"
+                >
                   {FEATURED_EMPLOYEE_SCENES.map((scene) => {
                     const picks = sceneTemplates(scene.id);
                     return (
@@ -376,7 +432,7 @@ export default function EmployeesPage() {
                       </button>
                     );
                   })}
-                </div>
+                </CapsuleScrollRow>
               </section>
             )}
 
@@ -393,7 +449,13 @@ export default function EmployeesPage() {
             </div>
 
             <div className="agents-filter-row employees-template-filters">
-              <div className="agents-filter-scroll">
+              <CapsuleScrollRow
+                centerWhenFit
+                className="flex-1 min-w-0"
+                scrollLeftLabel={chatT.scrollLeft[lang]}
+                scrollRightLabel={chatT.scrollRight[lang]}
+                innerClassName="agents-filter-scroll"
+              >
                 {EMPLOYEE_CATEGORIES.map((cat) => (
                   <button
                     key={cat.id}
@@ -406,7 +468,7 @@ export default function EmployeesPage() {
                     {lang === "zh" ? cat.label.zh : cat.label.en}
                   </button>
                 ))}
-              </div>
+              </CapsuleScrollRow>
             </div>
 
             <div className="employees-template-body">

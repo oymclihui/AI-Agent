@@ -104,7 +104,7 @@ export function useVoiceInput(lang: "zh" | "en", disabled = false) {
   }, [cleanupStream]);
 
   const transcribe = useCallback(
-    async (onText: (text: string) => void): Promise<void> => {
+    async (onText: (text: string) => void | Promise<void>): Promise<void> => {
       if (disabled) return;
 
       if (state === "recording") {
@@ -117,11 +117,11 @@ export function useVoiceInput(lang: "zh" | "en", disabled = false) {
 
         try {
           const result = await chatApi.transcribe(blob, lang);
-          if (result.text) onText(result.text);
+          if (result.text) await Promise.resolve(onText(result.text));
         } catch (apiErr) {
           try {
             const text = await transcribeWithBrowser(lang);
-            if (text) onText(text);
+            if (text) await Promise.resolve(onText(text));
           } catch {
             throw apiErr;
           }
@@ -137,7 +137,7 @@ export function useVoiceInput(lang: "zh" | "en", disabled = false) {
         setState("processing");
         try {
           const text = await transcribeWithBrowser(lang);
-          if (text) onText(text);
+          if (text) await Promise.resolve(onText(text));
         } finally {
           setState("idle");
         }

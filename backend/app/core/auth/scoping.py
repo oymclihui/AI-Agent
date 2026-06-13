@@ -66,3 +66,12 @@ def assert_mutable_by_user(record, user_id: str, label: str = "resource") -> Non
         )
     if record.owner_id != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+
+def assert_admin_user(user: User, action: str = "perform this action") -> None:
+    """Require platform admin (super_admin / org_admin)."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Admin permission required to {action}",
+        )

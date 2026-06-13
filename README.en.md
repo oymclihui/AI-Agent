@@ -16,19 +16,40 @@
 
 | Module | Description |
 |--------|-------------|
-| **Agents** | Create and manage agents with roles, goals, tools, **skill bindings**, and NL generation |
-| **Skills** | Reusable SOPs (Cursor `SKILL.md`-compatible), online library (~1123 templates), **bilingual UI**, runtime injection |
+| **Agents** | Create and manage agents; **admin-only delete** |
+| **Skills** | Reusable SOPs, online library (~1123 templates), runtime injection; **admin-only delete** |
+| **Chat** | Multi-turn dialogue, **SessionContext** (agent/skill/KB/model/connector), **chat RAG**, smart deposit, attachments |
+| **Knowledge** | Document upload, vector search, multi-KB chat RAG; seeded platform roadmap with **content_sha256 re-index** |
 | **Digital Employees** | Role-based agents with **multiple Cron / interval tasks**; **one-click import from 11 bundled templates** |
 | **Operations Screen** | Full-screen **`/screen`**: KPIs, employee status, task trends; Dashboard API + SSE |
 | **Workflows** | n8n-style designer (675+ nodes), **NL workflow generation**, AI node config assistant |
-| **Chat** | Multi-turn dialogue, streaming, **attachments & suggested questions**, delete sessions, **save as skill / knowledge** |
-| **Knowledge** | Document upload and vector search (RAG); seeded platform roadmap with **content_sha256 re-index** |
 | **Model Hub** | Model config **CRUD**, set default, **inference params**, OpenAI-compatible Base URL |
 | **Users & auth** | Employee no / email login, JWT, **per-user data isolation**, **personal model API keys** |
 | **Tools** | Built-in calculator, HTTP, web search, datetime tools |
 | **Orchestrator** | Multi-agent collaboration (CrewAI-style sequential flows) |
 
 The frontend supports **Chinese / English** UI.
+
+---
+
+## Changelog
+
+### 2026-06 — SessionContext integration (P0 shipped)
+
+**Summary:** What you pick in chat (skills / knowledge bases) is what runs at inference time and what gets linked after deposit.
+
+| Capability | Details |
+|------------|---------|
+| **SessionContext** | Unified agent / skill / KB / model / connector; persisted via `PATCH /chat/conversations/{id}/context` |
+| **Skill injection** | Merges `conversation.skills_config` + `agent.skills_config`; skills work without selecting an agent |
+| **Chat RAG** | Multi-KB retrieval (including BYD KMS); streaming and non-streaming |
+| **Deposit linking** | Skill ↔ KB auto-bind on confirm; writes back to current conversation |
+| **Single extract** | `suggest-deposit` draft reused on confirm (LLM fallback if body missing) |
+| **Permissions** | Delete skills/agents — **admins only** |
+
+**New / updated APIs:** `GET/PATCH /chat/conversations/{id}/context`, enhanced `POST .../messages`.
+
+Full spec: [README.md — 技能 · 知识 · 对话 · 沉淀整合](README.md#技能--知识--对话--沉淀整合)
 
 ---
 
@@ -72,10 +93,13 @@ The frontend supports **Chinese / English** UI.
 
 ### Model Hub, Chat & Auth (latest)
 
-- **Model Hub CRUD** with inference params (temperature, top_p, max_tokens, …) and OpenAI-compatible Base URL
-- **Chat**: file attachments → LLM **suggested questions**; delete / clear-all sessions; **30-day retention**
-- **Export**: save conversation as **Skill** (SOP) or **Knowledge Base** document
-- **Login**: employee no or email + JWT; **per-user isolation**; personal API keys in Settings
+- **SessionContext**: chat toolbar selections persist and restore per conversation
+- **Chat RAG**: selected knowledge bases are retrieved and injected into replies
+- **Smart deposit**: analyze → preview → confirm with Skill/KB/Agent/Employee linking
+- **Model Hub CRUD** with inference params and OpenAI-compatible Base URL
+- **Chat**: attachments → suggested questions; session delete / clear-all; 30-day retention
+- **Admin-only delete** for skills and agents
+- **Login**: JWT; per-user isolation; personal API keys in Settings
 
 See **[User Guide (中文)](docs/用户操作手册.md)** for step-by-step instructions.
 
@@ -232,7 +256,7 @@ All endpoints are under `/api/v1`:
 | `/employees` | Digital employees, **template import**, scheduled tasks, manual run, run history |
 | `/dashboard` | Operations screen overview & SSE stream |
 | `/workflows` | Workflow CRUD, execution, NL generate, node catalog, AI config assistant |
-| `/chat` | Conversations & messaging |
+| `/chat` | Conversations, SessionContext (`GET/PATCH context`), chat RAG, smart deposit, save as skill/KB |
 | `/knowledge` | Knowledge bases & document search |
 | `/models` | Model configs & available models |
 | `/tools` | Tool registry |
@@ -263,9 +287,33 @@ docker run -p 3000:3000 aiagnet-frontend
 
 ---
 
+## Skills · Knowledge · Chat · Deposit Integration
+
+> **Status: P0 shipped (2026-06); P1/P2 planned**
+
+See the full specification in the Chinese README:
+
+**[README.md — 技能 · 知识 · 对话 · 沉淀整合](README.md#技能--知识--对话--沉淀整合)**
+
+| Phase | Status | Focus |
+|-------|--------|--------|
+| **P0** | ✅ Shipped | SessionContext, PATCH context, skill merge + RAG, deposit auto-link, admin delete |
+| **P1** | Planned | `deposit_bundles`, `/deposits` workspace, pre-publish edit, dedup |
+| **P2** | Planned | Hybrid RAG, citations, unified deposit from desktop/employee runs |
+
+Related: [docs/知识库增强规划.md](docs/知识库增强规划.md)
+
+---
+
 ## Roadmap
 
 Future plans are stored in the seeded knowledge base **「AI-AGENT 平台文档」** (auto-created on backend startup from `platform-roadmap.md`). Search it on the **Knowledge** page, e.g. “What is Digital Employees Phase 2?”
+
+- [x] P0: SessionContext — conv `skills_config`, PATCH context, chat skill/RAG wiring
+- [x] P0: Deposit confirm linking + single LLM extract (draft reuse)
+- [ ] P1: Deposit bundles + `/deposits` workspace
+- [ ] P2: Hybrid RAG + citations + multi-source deposit hub
+- [x] Admin-only delete for skills/agents
 
 - [x] n8n-style workflow node catalog & designer
 - [x] Natural-language workflow / agent creation
@@ -274,11 +322,11 @@ Future plans are stored in the seeded knowledge base **「AI-AGENT 平台文档�
 - [x] Employee templates (including analytics roles)
 - [x] Operations screen `/screen` & Dashboard API
 - [x] Remote deploy scripts (Linux + systemd + Nginx)
-- [ ] Feishu / DingTalk IM bot integration
-- [ ] Chat chart / KPI structured rendering (protocol defined, UI not yet)
-- [ ] Scheduled tasks for workflows & crew orchestration
-- [ ] “Save as skill” from chat / execution history
-- [ ] User authentication & multi-tenancy
+- [x] Feishu / DingTalk IM bot integration
+- [x] Chat chart / KPI structured rendering
+- [x] Scheduled tasks for workflows & crew orchestration
+- [x] Save as skill / knowledge from chat; smart deposit (SessionContext P0)
+- [x] User authentication & organization RBAC UI
 - [~] Docker Compose one-click deployment (compose file exists, WIP)
 
 ---

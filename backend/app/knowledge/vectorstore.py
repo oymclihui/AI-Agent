@@ -323,9 +323,12 @@ class ChromaVectorStoreManager:
             return []
 
     async def delete_document(self, document_id: str) -> None:
-        store = self.get_store()
-        store._collection.delete(where={"document_id": document_id})
-        logger.info("chroma_doc_deleted", document_id=document_id)
+        try:
+            store = self.get_store()
+            store._collection.delete(where={"document_id": document_id})
+            logger.info("chroma_doc_deleted", document_id=document_id)
+        except Exception as exc:
+            logger.warning("chroma_delete_failed", document_id=document_id, error=str(exc))
 
     async def delete_collection(self) -> None:
         global _chroma_client

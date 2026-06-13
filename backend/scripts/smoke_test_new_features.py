@@ -44,6 +44,8 @@ async def main() -> int:
             spec = (await client.get(OPENAPI)).json()
             paths = spec.get("paths", {})
             required = [
+                "/api/v1/chat/conversations/{conv_id}",
+                "/api/v1/chat/conversations/{conv_id}/context",
                 "/api/v1/chat/conversations/{conv_id}/suggest-deposit",
                 "/api/v1/chat/conversations/{conv_id}/deposit/confirm",
                 "/api/v1/chat/conversations/{conv_id}/save-as-skill",

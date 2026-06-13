@@ -45,7 +45,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-changeme-in-production-32chars!!}
       DATABASE_URL: ${DATABASE_URL:-}
       DB_DRIVER: ${DB_DRIVER:-auto}
-      DB_HOST: ${DB_HOST:-192.168.50.10}
+      DB_HOST: ${DB_HOST:-host.docker.internal}
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-AI-AGENT}
       DB_PASSWORD: ${DB_PASSWORD:-AI-AGENT}
@@ -55,14 +55,14 @@ services:
       CHROMA_MODE: server
       CHROMA_HOST: chromadb
       CHROMA_PORT: 8000
-      MILVUS_URI: ${MILVUS_URI:-http://192.168.50.10:19530}
+      MILVUS_URI: ${MILVUS_URI:-http://host.docker.internal:19530}
       MILVUS_DB: ${MILVUS_DB:-default}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://192.168.50.10:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-ollama}
       DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-qwen3.6:35b}
       DEFAULT_EMBEDDING_MODEL: ${DEFAULT_EMBEDDING_MODEL:-nomic-embed-text}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://192.168.50.10","http://localhost"]}
-      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://192.168.50.10}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost","http://127.0.0.1"]}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost}
       LOCAL_UPLOADS_DIR: /app/uploads
     volumes:
       - backend_uploads:/app/uploads
@@ -88,7 +88,7 @@ services:
     environment:
       NODE_ENV: production
       BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://192.168.50.10/ws}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost/ws}
     depends_on:
       backend:
         condition: service_healthy

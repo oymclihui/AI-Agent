@@ -1,4 +1,5 @@
 """Apply docker restart fix on server (env + nginx + compose up)."""
+import os
 import sys
 import tarfile
 import tempfile
@@ -8,6 +9,8 @@ import paramiko
 from scp import SCPClient
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from deploy_env import deploy_host  # noqa: E402
 REMOTE = "/opt/aiagnet-docker/src"
 FILES = [
     "docker-compose.prod.yml",
@@ -20,10 +23,13 @@ FILES = [
 
 
 def main() -> None:
-    password = sys.argv[1]
+    password = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DEPLOY_PASSWORD")
+    if not password:
+        sys.exit("Usage: apply_docker_restart_fix.py <password>  (or set DEPLOY_PASSWORD)")
+    host = deploy_host()
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect("192.168.50.10", username="ai-lab", password=password, timeout=30)
+    ssh.connect(host, username=os.environ.get("DEPLOY_USER", "ai-lab"), password=password, timeout=30)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".tgz", delete=False)
     tmp.close()
@@ -41,9 +47,7 @@ def main() -> None:
 cd {REMOTE}
 tar -xzf patch.tgz && rm patch.tgz
 [ -f .env ] || cp .env.docker.example .env
-sed -i 's|DB_HOST=host.docker.internal|DB_HOST=192.168.50.10|g' .env
-sed -i 's|OLLAMA_BASE_URL=http://host.docker.internal:11434|OLLAMA_BASE_URL=http://192.168.50.10:11434|g' .env
-sed -i 's|MILVUS_URI=http://host.docker.internal:19530|MILVUS_URI=http://192.168.50.10:19530|g' .env
+# Edit .env on server: set DB_HOST, OLLAMA_BASE_URL, MILVUS_URI, APP_PUBLIC_URL to your unit server
 docker compose -f docker-compose.prod.yml build frontend
 docker compose -f docker-compose.prod.yml up -d
 sleep 20

@@ -16,21 +16,6 @@ Write-Host "  AI-AGENT Windows Release Packager" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Optional: Lowcode designer static (inspiration page) ───────
-$lowcodeStatic = Join-Path $Root "frontend\public\lowcode\designer\index.html"
-if (-not (Test-Path $lowcodeStatic)) {
-    Write-Host "[0/6] Building Lowcode designer (first time, may take a few minutes)..." -ForegroundColor Yellow
-    Set-Location "$Root\frontend"
-    npm run lowcode:install 2>&1 | Out-Host
-    npm run lowcode:build 2>&1 | Out-Host
-    Set-Location $Root
-    if (-not (Test-Path $lowcodeStatic)) {
-        Write-Host "  [WARN] Lowcode designer not built; inspiration Lowcode iframe may 404." -ForegroundColor DarkYellow
-    } else {
-        Write-Host "  Lowcode designer OK." -ForegroundColor Green
-    }
-}
-
 # ── Build frontend on packager machine ────────────────────────
 Write-Host "[1/6] Building frontend (npm run build)..." -ForegroundColor Yellow
 Set-Location "$Root\frontend"
@@ -76,12 +61,16 @@ if ($LASTEXITCODE -ge 8) {
 
 # ── Copy root scripts & docs ──────────────────────────────────
 Write-Host "[5/6] Adding install/start scripts..." -ForegroundColor Yellow
-foreach ($file in @("install.ps1", "start_prod.ps1")) {
+foreach ($file in @("install.ps1", "start_prod.ps1", "AI-AGENT.bat")) {
     Copy-Item (Join-Path $Root $file) (Join-Path $OutDir $file)
 }
 $readmeSrc = Join-Path $Root "docs\Windows交付说明.md"
 if (Test-Path $readmeSrc) {
     Copy-Item $readmeSrc (Join-Path $OutDir "README.md")
+}
+$deployDoc = Join-Path $Root "docs\单位部署与首次登录.md"
+if (Test-Path $deployDoc) {
+    Copy-Item $deployDoc (Join-Path $OutDir "docs\单位部署与首次登录.md")
 }
 
 $quickStart = @"
@@ -89,19 +78,16 @@ AI-AGENT 单位部署（Windows）— 快速开始
 ================================
 
 环境：Python 3.10+、Node.js 18+（安装 Python 时勾选 Add to PATH）
+数据库：PostgreSQL 或 VastBase（暂无 VastBase 可先用 PostgreSQL 测试）
 
 1. 解压本 zip 到任意目录，例如 D:\AIAGNET
-2. 打开 PowerShell，进入解压目录
-3. 首次安装（约 3–5 分钟）：
-   .\install.ps1
-4. 编辑 backend\.env（可选：Ollama 地址、模型名、SECRET_KEY）
-5. 启动（会打开两个窗口 + 浏览器）：
-   .\start_prod.ps1
+2. 双击 AI-AGENT.bat（首次会自动 install，约 3–5 分钟）
+3. 管理员：打开 SETUP_TOKEN.admin.txt，访问 /setup 完成建库后重启
+4. 管理员登录 admin / admin123，在组织设置创建用户
+5. 普通用户：只用分配账号登录（勿分发 SETUP_TOKEN.admin.txt）
 
 访问：http://localhost:3000
-默认账号：admin / admin123
-
-详细说明见 README.md
+详细说明见 docs\单位部署与首次登录.md
 "@
 $quickStart | Set-Content -Path (Join-Path $OutDir "单位部署.txt") -Encoding UTF8
 

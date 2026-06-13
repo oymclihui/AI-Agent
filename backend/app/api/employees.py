@@ -34,6 +34,8 @@ from app.schemas.employee import (
     EmployeeTemplateSummary,
     EmployeeTemplateImportRequest,
     EmployeeTemplateImportResponse,
+    EmployeeOrgTreeResponse,
+    EmployeeOrgSyncResponse,
     SaveRunToKnowledgeRequest,
 )
 from app.core.employees.export import _run_markdown, export_run_to_knowledge
@@ -56,6 +58,9 @@ def _employee_response(emp: DigitalEmployee, task_count: int = 0) -> EmployeeRes
         knowledge_base_ids=emp.knowledge_base_ids or [],
         timezone=emp.timezone,
         task_count=task_count,
+        department_id=emp.department_id,
+        parent_employee_id=emp.parent_employee_id,
+        sort_order=emp.sort_order or 0,
         metadata=emp.metadata_ or {},
         created_at=emp.created_at,
         updated_at=emp.updated_at,
@@ -123,6 +128,33 @@ async def list_employees(
     return [_employee_response(e, counts.get(e.id, 0)) for e in employees]
 
 
+@router.get("/org-tree", response_model=EmployeeOrgTreeResponse)
+async def get_employee_org_tree(
+    sync: bool = True,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.core.employees.org_tree import build_employee_org_tree
+
+    scope = await resolve_data_scope(db, user)
+    assert_permission(scope, "employees:read")
+    data = await build_employee_org_tree(db, scope, sync_links=sync)
+    return EmployeeOrgTreeResponse(**data)
+
+
+@router.post("/org-tree/sync", response_model=EmployeeOrgSyncResponse)
+async def sync_employee_org_tree(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.core.employees.org_tree import sync_org_links_for_scope
+
+    scope = await resolve_data_scope(db, user)
+    assert_permission(scope, "employees:write")
+    result = await sync_org_links_for_scope(db, scope)
+    return EmployeeOrgSyncResponse(**result)
+
+
 @router.get("/templates", response_model=list[EmployeeTemplateSummary])
 async def list_employee_templates(user: User = Depends(get_current_user)):
     from app.core.employees.importer import list_templates
@@ -147,6 +179,8 @@ async def import_employee_template(
             employee_name_override=payload.employee_name,
             user=user,
         )
+        from app.core.employees.org_tree import sync_org_links_for_scope
+        await sync_org_links_for_scope(db, scope)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -175,7 +209,9 @@ async def create_employee(
     emp = DigitalEmployee(
         id=generate_uuid(),
         owner_id=user.id,
-        department_id=user.primary_department_id,
+        department_id=payload.department_id or user.primary_department_id,
+        parent_employee_id=payload.parent_employee_id,
+        sort_order=payload.sort_order,
         name=payload.name,
         title=payload.title,
         description=payload.description,

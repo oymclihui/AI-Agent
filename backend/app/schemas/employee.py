@@ -37,6 +37,9 @@ class EmployeeCreate(BaseModel):
     knowledge_base_ids: list[str] = []
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     status: EmployeeStatus = EmployeeStatus.active
+    department_id: Optional[str] = None
+    parent_employee_id: Optional[str] = None
+    sort_order: int = 0
 
 
 class EmployeeUpdate(BaseModel):
@@ -48,6 +51,9 @@ class EmployeeUpdate(BaseModel):
     knowledge_base_ids: Optional[list[str]] = None
     timezone: Optional[str] = None
     status: Optional[EmployeeStatus] = None
+    department_id: Optional[str] = None
+    parent_employee_id: Optional[str] = None
+    sort_order: Optional[int] = None
 
 
 class EmployeeResponse(BaseModel):
@@ -61,6 +67,9 @@ class EmployeeResponse(BaseModel):
     knowledge_base_ids: list[str]
     timezone: str
     task_count: int = 0
+    department_id: Optional[str] = None
+    parent_employee_id: Optional[str] = None
+    sort_order: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
@@ -166,3 +175,39 @@ class EmployeeTemplateImportResponse(BaseModel):
     employee: EmployeeResponse
     tasks_created: int
     template_id: str
+
+
+class EmployeeOrgChartNode(BaseModel):
+    id: str
+    name: str
+    title: Optional[str] = None
+    status: str
+    task_count: int = 0
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
+    parent_employee_id: Optional[str] = None
+    depth: int = 0
+    sort_order: int = 0
+    cadence: Optional[str] = None
+    cadence_label_zh: Optional[str] = None
+    cadence_label_en: Optional[str] = None
+    short_title_zh: Optional[str] = None
+    short_title_en: Optional[str] = None
+
+
+class EmployeeOrgTreeResponse(BaseModel):
+    title_zh: str
+    title_en: str
+    subtitle_zh: str
+    subtitle_en: str
+    levels: list[list[EmployeeOrgChartNode]]
+    roots: list[EmployeeOrgChartNode]
+    unassigned: list[EmployeeOrgChartNode]
+    department_count: int = 0
+    employee_count: int = 0
+
+
+class EmployeeOrgSyncResponse(BaseModel):
+    from_metadata: int
+    from_department: int
+    total: int

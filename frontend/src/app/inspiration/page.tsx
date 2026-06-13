@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
-import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Heart, Lightbulb, LayoutTemplate, PenLine, Sparkles, X, Code2, FileCode, Eye, Plus, Trash2 } from "lucide-react";
+import { Heart, Lightbulb, PenLine, Sparkles, X, Code2, FileCode, Eye, Plus, Trash2 } from "lucide-react";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import {
@@ -28,7 +27,6 @@ import {
 } from "@/lib/inspirationStore";
 import { launchInspiration } from "@/lib/launchInspiration";
 import { InspirationPreviewFrame } from "@/components/inspiration/InspirationPreviewFrame";
-import { probeLowcodeDesigner } from "@/lib/lowcodeBridge";
 import toast from "react-hot-toast";
 
 type EditTab = "preview" | "json" | "html" | "prompt";
@@ -47,16 +45,11 @@ export default function InspirationPage() {
   const [editJson, setEditJson] = useState("");
   const [editHtml, setEditHtml] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
-  const [lowcodeReady, setLowcodeReady] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newSubtitle, setNewSubtitle] = useState("");
   const [newCategory, setNewCategory] = useState<InspirationCategory>("finance");
   const [newPrompt, setNewPrompt] = useState("");
-
-  useEffect(() => {
-    probeLowcodeDesigner().then(setLowcodeReady);
-  }, []);
 
   const filtered = useMemo(() => {
     let list = [...items];
@@ -233,17 +226,8 @@ export default function InspirationPage() {
           {item.document?.[lang] && (
             <span className="inspiration-badge">{ins.jsonDriven[lang]}</span>
           )}
-          {item.lowcode?.[lang]?.pageSchema && (
-            <span className="inspiration-badge">{ins.hasLowcode[lang]}</span>
-          )}
         </div>
         <div className="inspiration-card-actions">
-          {lowcodeReady && (
-            <Link href={`/inspiration/${item.id}/designer`} className="inspiration-btn-secondary">
-              <LayoutTemplate className="h-3.5 w-3.5" />
-              {ins.lowcodeDesign[lang]}
-            </Link>
-          )}
           <button type="button" className="inspiration-btn-secondary" onClick={() => openEdit(item)}>
             <PenLine className="h-3.5 w-3.5" />
             {ins.edit[lang]}

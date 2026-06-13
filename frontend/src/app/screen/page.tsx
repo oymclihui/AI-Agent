@@ -212,7 +212,7 @@ export default function ScreenPage() {
       {/* Header */}
       <header className="ops-header flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-cyan-500/20 px-6 py-3 print:hidden">
         <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-1 text-sm theme-muted hover-theme-text">
+          <Link href="/home" className="flex items-center gap-1 text-sm theme-muted hover-theme-text">
             <ArrowLeft className="h-4 w-4" /> {s.back[lang]}
           </Link>
           <h1 className="text-lg font-bold theme-text md:text-xl">{s.title[lang]}</h1>

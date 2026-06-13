@@ -4,6 +4,7 @@ import sys
 
 # Reuse deploy module
 sys.path.insert(0, os.path.dirname(__file__))
+from deploy_env import deploy_db_host, deploy_host, deploy_ollama_url  # noqa: E402
 from remote_docker_deploy import (  # noqa: E402
     REMOTE_DIR,
     _build_tarball,
@@ -21,7 +22,9 @@ def _safe_print(text: str) -> None:
 
 
 def main() -> None:
-    host = os.environ.get("DEPLOY_HOST", "192.168.50.10")
+    host = deploy_host()
+    db_host = deploy_db_host()
+    ollama_url = deploy_ollama_url()
     user = os.environ.get("DEPLOY_USER", "ai-lab")
     password = os.environ.get("DEPLOY_PASSWORD") or (sys.argv[1] if len(sys.argv) > 1 else None)
     if not password:
@@ -46,14 +49,14 @@ def main() -> None:
 ALLOWED_ORIGINS=["http://{host}","http://localhost","http://127.0.0.1"]
 HTTP_PORT=80
 SECRET_KEY=ai-agent-docker-prod-secret-32chars!!
-DB_HOST=192.168.50.10
+DB_HOST={db_host}
 DB_PORT=5432
 DB_USER=AI-AGENT
 DB_PASSWORD=AI-AGENT
 DB_NAME=AI-AGENT
 DB_SSL=prefer
 VECTOR_STORE_TYPE=chroma
-OLLAMA_BASE_URL=http://192.168.50.10:11434
+OLLAMA_BASE_URL={ollama_url}
 DEFAULT_LLM_PROVIDER=ollama
 DEFAULT_LLM_MODEL=qwen3.6:35b
 DEFAULT_EMBEDDING_MODEL=nomic-embed-text

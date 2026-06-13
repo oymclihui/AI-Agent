@@ -10,6 +10,7 @@ import { workflowsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { agentAvatarTone } from "@/lib/agentCatalog";
+import CapsuleScrollRow from "@/components/CapsuleScrollRow";
 import toast from "react-hot-toast";
 
 interface WorkflowItem {
@@ -70,6 +71,7 @@ export default function WorkflowsPage() {
   const { lang } = useLangStore();
   const w = translations.workflows;
   const c = translations.common;
+  const chatT = translations.chat;
 
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -212,7 +214,12 @@ export default function WorkflowsPage() {
       {!loading && workflows.length > 0 && (
         <section className="agents-featured">
           <h2 className="agents-featured-title">{w.featuredTitle[lang]}</h2>
-          <div className="agents-featured-scroll">
+          <CapsuleScrollRow
+            scrollStep={268}
+            scrollLeftLabel={chatT.scrollLeft[lang]}
+            scrollRightLabel={chatT.scrollRight[lang]}
+            innerClassName="agents-featured-scroll"
+          >
             {PROCESS_SCENES.map((scene) => {
               const items = sceneWorkflows(scene.id);
               return (
@@ -236,12 +243,18 @@ export default function WorkflowsPage() {
                 </button>
               );
             })}
-          </div>
+          </CapsuleScrollRow>
         </section>
       )}
 
       <div className="agents-filter-row">
-        <div className="agents-filter-scroll">
+        <CapsuleScrollRow
+          centerWhenFit
+          className="flex-1 min-w-0"
+          scrollLeftLabel={chatT.scrollLeft[lang]}
+          scrollRightLabel={chatT.scrollRight[lang]}
+          innerClassName="agents-filter-scroll"
+        >
           {PROCESS_FILTERS.map((id) => (
             <button
               key={id}
@@ -252,7 +265,7 @@ export default function WorkflowsPage() {
               {id === "all" ? w.filterAll[lang] : processLabel(id)}
             </button>
           ))}
-        </div>
+        </CapsuleScrollRow>
       </div>
 
       {loading ? (

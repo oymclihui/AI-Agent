@@ -1,6 +1,5 @@
 import type { InspirationDocument } from "@/lib/inspirationDocument";
 import { renderDocumentToHtml } from "@/lib/inspirationDocument";
-import type { LowcodeInspirationPayload } from "@/lib/lowcodeBridge";
 import {
   DOC_AI_RESEARCH_ZH,
   DOC_API_PORTAL_ZH,
@@ -30,8 +29,6 @@ export interface InspirationItem {
   official?: boolean;
   /** User-created item (stored in browser localStorage) */
   custom?: boolean;
-  /** Alibaba LowcodeEngine project/page schema (when edited in LCE designer) */
-  lowcode?: { zh?: LowcodeInspirationPayload; en?: LowcodeInspirationPayload };
   agentHint?: string;
   scene?: "office" | "finance" | "code" | "creative";
   tone: "orange" | "blue" | "green" | "purple" | "slate";

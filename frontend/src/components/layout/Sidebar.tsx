@@ -22,13 +22,13 @@ export default function Sidebar() {
   const nav = translations.nav;
 
   const navItems = [
-    { href: "/",          icon: Home,          labelKey: "dashboard" as const, show: true },
+    { href: "/chat",        icon: MessageSquare,  labelKey: "chat" as const, show: true },
+    { href: "/home",      icon: Home,          labelKey: "dashboard" as const, show: true },
     { href: "/screen",    icon: Monitor,       labelKey: "screen" as const, show: canViewDashboard(user) },
     { href: "/employees", icon: Briefcase,      labelKey: "employees" as const, show: canReadEmployees(user) },
     { href: "/agents",    icon: Bot,           labelKey: "agents" as const, show: true },
     { href: "/skills",    icon: BookOpen,       labelKey: "skills" as const, show: true },
     { href: "/workflows", icon: Workflow,       labelKey: "workflows" as const, show: true },
-    { href: "/chat",        icon: MessageSquare,  labelKey: "chat" as const, show: true },
     { href: "/knowledge",   icon: Library,        labelKey: "knowledge" as const, show: true },
     { href: "/desktop-automation", icon: MousePointer2, labelKey: "desktopAutomation" as const, show: true },
     { href: "/inspiration", icon: Lightbulb,      labelKey: "inspiration" as const, show: true },

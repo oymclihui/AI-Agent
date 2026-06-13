@@ -2,26 +2,40 @@
 
 import Link from "next/link";
 import { Clock } from "lucide-react";
-import { buildOrgLevels, orgSpecForEmployee, type OrgNodeSpec } from "@/lib/nevFinanceOrg";
 import { employeeAvatarTone } from "@/lib/employeeCatalog";
 
 export interface OrgChartEmployee {
   id: string;
   name: string;
   title: string | null;
-  task_count: number;
   status: string;
-  metadata?: Record<string, unknown> | null;
+  task_count: number;
+  department_id?: string | null;
+  department_name?: string | null;
+  parent_employee_id?: string | null;
+  depth?: number;
+  cadence_label_zh?: string | null;
+  cadence_label_en?: string | null;
+  short_title_zh?: string | null;
+  short_title_en?: string | null;
+}
+
+export interface OrgTreeData {
+  title_zh: string;
+  title_en: string;
+  subtitle_zh: string;
+  subtitle_en: string;
+  levels: OrgChartEmployee[][];
+  unassigned: OrgChartEmployee[];
 }
 
 interface Props {
-  employees: OrgChartEmployee[];
+  tree: OrgTreeData;
   lang: "zh" | "en";
   activeLabel: string;
   pausedLabel: string;
   taskCountLabel: string;
   openDetailLabel: string;
-  groupTitle?: { zh: string; en: string };
 }
 
 function initial(name: string) {
@@ -30,7 +44,6 @@ function initial(name: string) {
 
 function OrgNode({
   emp,
-  spec,
   lang,
   activeLabel,
   pausedLabel,
@@ -38,10 +51,12 @@ function OrgNode({
   openDetailLabel,
 }: {
   emp: OrgChartEmployee;
-  spec: OrgNodeSpec | null;
   lang: "zh" | "en";
-} & Omit<Props, "employees" | "groupTitle">) {
+} & Omit<Props, "tree">) {
   const isActive = emp.status === "active";
+  const shortTitle = lang === "zh" ? emp.short_title_zh : emp.short_title_en;
+  const cadenceLabel = lang === "zh" ? emp.cadence_label_zh : emp.cadence_label_en;
+
   return (
     <Link href={`/employees/${emp.id}`} className="employees-org-node">
       <div className={`agents-avatar employees-org-avatar ${employeeAvatarTone(emp.id)}`}>
@@ -50,15 +65,16 @@ function OrgNode({
       <div className="employees-org-node-body">
         <div className="employees-org-node-title-row">
           <span className="employees-org-node-name">{emp.name}</span>
-          {spec && (
-            <span className="employees-org-tier">{lang === "zh" ? spec.shortTitle.zh : spec.shortTitle.en}</span>
-          )}
+          {shortTitle && <span className="employees-org-tier">{shortTitle}</span>}
         </div>
         {emp.title && <p className="employees-org-node-role">{emp.title}</p>}
-        {spec && (
+        {emp.department_name && (
+          <p className="employees-org-node-dept text-[10px] theme-muted">{emp.department_name}</p>
+        )}
+        {cadenceLabel && (
           <span className="employees-org-cadence">
             <Clock className="h-3 w-3" />
-            {lang === "zh" ? spec.cadenceLabel.zh : spec.cadenceLabel.en}
+            {cadenceLabel}
           </span>
         )}
         <div className="employees-org-node-meta">
@@ -74,79 +90,72 @@ function OrgNode({
 }
 
 export default function EmployeeOrgChart({
-  employees,
+  tree,
   lang,
   activeLabel,
   pausedLabel,
   taskCountLabel,
   openDetailLabel,
-  groupTitle,
 }: Props) {
-  const orgEmployees = employees.filter((e) => orgSpecForEmployee(e.metadata));
-  const otherEmployees = employees.filter((e) => !orgSpecForEmployee(e.metadata));
+  const levelRows = tree.levels.filter((row) => row.length > 0);
 
-  if (orgEmployees.length === 0) {
+  if (levelRows.length === 0 && tree.unassigned.length === 0) {
     return (
       <div className="employees-org-empty">
-        <p>{lang === "zh" ? "暂无带组织架构的数字员工，请从「制造企业财务」模板创建。" : "No org-mapped employees yet."}</p>
+        <p>
+          {lang === "zh"
+            ? "暂无组织架构数据。请创建数字员工，或在「组织与权限」中配置部门后点击同步。"
+            : "No org chart data yet. Create employees or sync from Organization settings."}
+        </p>
       </div>
     );
   }
 
-  const levels = buildOrgLevels(orgEmployees);
-  const levelKeys = [...levels.keys()].filter((l) => l < 99).sort((a, b) => a - b);
-
   return (
     <div className="employees-org-chart">
-      {groupTitle && (
-        <div className="employees-org-chart-header">
-          <h2>{lang === "zh" ? groupTitle.zh : groupTitle.en}</h2>
-          <p>
-            {lang === "zh"
-              ? "层级越高越靠上；连线表示汇报关系；标签为定时任务节奏。"
-              : "Higher roles on top; lines show reporting; tags show task cadence."}
-          </p>
+      <div className="employees-org-chart-header">
+        <h2>{lang === "zh" ? tree.title_zh : tree.title_en}</h2>
+        <p>{lang === "zh" ? tree.subtitle_zh : tree.subtitle_en}</p>
+      </div>
+
+      {levelRows.length > 0 && (
+        <div className="employees-org-tree">
+          {levelRows.map((row, idx) => {
+            const level = row[0]?.depth ?? idx;
+            const isLast = idx === levelRows.length - 1;
+            return (
+              <div key={`level-${level}-${idx}`} className="employees-org-level">
+                {!isLast && <div className="employees-org-connector-down" aria-hidden />}
+                <div
+                  className={`employees-org-row employees-org-row-l${level + 1}`}
+                  data-count={row.length}
+                >
+                  {row.map((emp) => (
+                    <OrgNode
+                      key={emp.id}
+                      emp={emp}
+                      lang={lang}
+                      activeLabel={activeLabel}
+                      pausedLabel={pausedLabel}
+                      taskCountLabel={taskCountLabel}
+                      openDetailLabel={openDetailLabel}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      <div className="employees-org-tree">
-        {levelKeys.map((level, idx) => {
-          const row = levels.get(level) ?? [];
-          const isLast = idx === levelKeys.length - 1;
-          return (
-            <div key={level} className="employees-org-level">
-              {!isLast && <div className="employees-org-connector-down" aria-hidden />}
-              <div
-                className={`employees-org-row employees-org-row-l${level}`}
-                data-count={row.length}
-              >
-                {row.map((emp) => (
-                  <OrgNode
-                    key={emp.id}
-                    emp={emp}
-                    spec={orgSpecForEmployee(emp.metadata)}
-                    lang={lang}
-                    activeLabel={activeLabel}
-                    pausedLabel={pausedLabel}
-                    taskCountLabel={taskCountLabel}
-                    openDetailLabel={openDetailLabel}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {otherEmployees.length > 0 && (
+      {tree.unassigned.length > 0 && (
         <div className="employees-org-others">
-          <h3>{lang === "zh" ? "其他数字员工" : "Other employees"}</h3>
+          <h3>{lang === "zh" ? "未挂接汇报线的员工" : "Unlinked employees"}</h3>
           <div className="employees-org-row">
-            {otherEmployees.map((emp) => (
+            {tree.unassigned.map((emp) => (
               <OrgNode
                 key={emp.id}
                 emp={emp}
-                spec={null}
                 lang={lang}
                 activeLabel={activeLabel}
                 pausedLabel={pausedLabel}

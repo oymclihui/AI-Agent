@@ -6,25 +6,35 @@ from app.db.base import Base, generate_uuid
 from app.db import models  # noqa: F401 - ensure all models are registered
 
 
-async def init_db(engine: AsyncEngine) -> None:
+async def init_db(engine: AsyncEngine, schema: str | None = None) -> None:
+    from sqlalchemy import text
+
+    target_schema = schema if schema and schema != "public" else None
     async with engine.begin() as conn:
         if str(engine.url).startswith("sqlite"):
             await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
             await conn.exec_driver_sql("PRAGMA busy_timeout=30000")
-        await conn.run_sync(Base.metadata.create_all)
-    await _migrate_schema(engine)
+        elif target_schema:
+            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{target_schema}"'))
+            await conn.execute(text(f'SET LOCAL search_path TO "{target_schema}", public'))
+
+        def _create_all(sync_conn) -> None:
+            Base.metadata.create_all(sync_conn)
+
+        await conn.run_sync(_create_all)
+    await _migrate_schema(engine, schema=target_schema)
 
 
-async def _migrate_schema(engine: AsyncEngine) -> None:
+async def _migrate_schema(engine: AsyncEngine, schema: str | None = None) -> None:
     """Lightweight schema patches (create_all does not alter existing tables)."""
     from sqlalchemy import inspect, text
 
     async with engine.begin() as conn:
         def _add_skills_config(sync_conn) -> None:
             inspector = inspect(sync_conn)
-            if not inspector.has_table("agents"):
+            if not inspector.has_table("agents", schema=schema):
                 return
-            cols = {c["name"] for c in inspector.get_columns("agents")}
+            cols = {c["name"] for c in inspector.get_columns("agents", schema=schema)}
             if "skills_config" in cols:
                 return
             if engine.dialect.name == "sqlite":
@@ -40,11 +50,34 @@ async def _migrate_schema(engine: AsyncEngine) -> None:
                 )
 
         await conn.run_sync(_add_skills_config)
-        await conn.run_sync(_add_user_isolation_columns)
-        await conn.run_sync(_add_org_rbac_columns)
-        await conn.run_sync(_add_users_admin_column)
+        await conn.run_sync(lambda c: _add_conversation_skills_config(c, schema))
+        await conn.run_sync(lambda c: _add_user_isolation_columns(c, schema))
+        await conn.run_sync(lambda c: _add_org_rbac_columns(c, schema))
+        await conn.run_sync(lambda c: _add_users_admin_column(c, schema))
         await conn.run_sync(_ensure_users_table)
         await conn.run_sync(_ensure_postgres_enum_values)
+
+
+def _add_conversation_skills_config(sync_conn, schema: str | None = None) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("conversations", schema=schema):
+        return
+    cols = {c["name"] for c in inspector.get_columns("conversations", schema=schema)}
+    if "skills_config" in cols:
+        return
+    if sync_conn.dialect.name == "sqlite":
+        sync_conn.execute(
+            text("ALTER TABLE conversations ADD COLUMN skills_config JSON DEFAULT '[]'")
+        )
+    else:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS "
+                "skills_config JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
+        )
 
 
 def _ensure_postgres_enum_values(sync_conn) -> None:
@@ -224,12 +257,12 @@ async def seed_org_rbac(session) -> None:
     await session.commit()
 
 
-def _add_org_rbac_columns(sync_conn) -> None:
+def _add_org_rbac_columns(sync_conn, schema: str | None = None) -> None:
     from sqlalchemy import inspect, text
 
     inspector = inspect(sync_conn)
-    if inspector.has_table("users"):
-        cols = {c["name"] for c in inspector.get_columns("users")}
+    if inspector.has_table("users", schema=schema):
+        cols = {c["name"] for c in inspector.get_columns("users", schema=schema)}
         if "primary_department_id" not in cols:
             if sync_conn.dialect.name == "sqlite":
                 sync_conn.execute(text("ALTER TABLE users ADD COLUMN primary_department_id VARCHAR(36)"))
@@ -241,8 +274,8 @@ def _add_org_rbac_columns(sync_conn) -> None:
                     text("CREATE INDEX IF NOT EXISTS ix_users_primary_department_id ON users (primary_department_id)")
                 )
 
-    if inspector.has_table("digital_employees"):
-        cols = {c["name"] for c in inspector.get_columns("digital_employees")}
+    if inspector.has_table("digital_employees", schema=schema):
+        cols = {c["name"] for c in inspector.get_columns("digital_employees", schema=schema)}
         if "department_id" not in cols:
             if sync_conn.dialect.name == "sqlite":
                 sync_conn.execute(text("ALTER TABLE digital_employees ADD COLUMN department_id VARCHAR(36)"))
@@ -257,17 +290,31 @@ def _add_org_rbac_columns(sync_conn) -> None:
                     )
                 )
 
-    _add_column(inspector, sync_conn, "users", "user_tier", "VARCHAR(32) DEFAULT 'staff' NOT NULL")
-    _add_column(inspector, sync_conn, "departments", "liaison_user_id", "VARCHAR(36)")
-    _add_column(inspector, sync_conn, "departments", "dept_tier", "VARCHAR(32) DEFAULT 'business' NOT NULL")
+    _add_column(
+        inspector, sync_conn, "digital_employees", "parent_employee_id", "VARCHAR(36)", schema=schema
+    )
+    _add_column(
+        inspector, sync_conn, "digital_employees", "sort_order", "INTEGER DEFAULT 0 NOT NULL", schema=schema
+    )
+    if inspector.has_table("digital_employees", schema=schema) and sync_conn.dialect.name != "sqlite":
+        sync_conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_digital_employees_parent_employee_id "
+                "ON digital_employees (parent_employee_id)"
+            )
+        )
+
+    _add_column(inspector, sync_conn, "users", "user_tier", "VARCHAR(32) DEFAULT 'staff' NOT NULL", schema=schema)
+    _add_column(inspector, sync_conn, "departments", "liaison_user_id", "VARCHAR(36)", schema=schema)
+    _add_column(inspector, sync_conn, "departments", "dept_tier", "VARCHAR(32) DEFAULT 'business' NOT NULL", schema=schema)
 
 
-def _add_column(inspector, sync_conn, table: str, col: str, col_def: str) -> None:
+def _add_column(inspector, sync_conn, table: str, col: str, col_def: str, schema: str | None = None) -> None:
     from sqlalchemy import text
 
-    if not inspector.has_table(table):
+    if not inspector.has_table(table, schema=schema):
         return
-    cols = {c["name"] for c in inspector.get_columns(table)}
+    cols = {c["name"] for c in inspector.get_columns(table, schema=schema)}
     if col in cols:
         return
     if sync_conn.dialect.name == "sqlite":
@@ -280,14 +327,14 @@ def _ensure_users_table(sync_conn) -> None:
     pass  # create_all handles new tables
 
 
-def _add_users_admin_column(sync_conn) -> None:
+def _add_users_admin_column(sync_conn, schema: str | None = None) -> None:
     from sqlalchemy import inspect, text
     from app.config import settings
 
     inspector = inspect(sync_conn)
-    if not inspector.has_table("users"):
+    if not inspector.has_table("users", schema=schema):
         return
-    cols = {c["name"] for c in inspector.get_columns("users")}
+    cols = {c["name"] for c in inspector.get_columns("users", schema=schema)}
     if "is_admin" not in cols:
         if sync_conn.dialect.name == "sqlite":
             sync_conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL"))
@@ -301,7 +348,7 @@ def _add_users_admin_column(sync_conn) -> None:
     )
 
 
-def _add_user_isolation_columns(sync_conn) -> None:
+def _add_user_isolation_columns(sync_conn, schema: str | None = None) -> None:
     from sqlalchemy import inspect, text
 
     inspector = inspect(sync_conn)
@@ -314,9 +361,9 @@ def _add_user_isolation_columns(sync_conn) -> None:
         "digital_employees": "digital_employees",
     }
     for table in tables.values():
-        if not inspector.has_table(table):
+        if not inspector.has_table(table, schema=schema):
             continue
-        cols = {c["name"] for c in inspector.get_columns(table)}
+        cols = {c["name"] for c in inspector.get_columns(table, schema=schema)}
         if "owner_id" in cols:
             continue
         if sync_conn.dialect.name == "sqlite":
@@ -333,7 +380,7 @@ async def seed_default_models(session) -> None:
     from sqlalchemy import select
     from app.db.models import ModelConfig
     from app.config import settings
-    from app.models_hub.byd_catalog import byd_catalog_entries, has_byd_models
+    from app.models_hub.byd_catalog import byd_catalog_entries
 
     catalog: dict[tuple[str, str], dict] = {}
     default_inference = {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
@@ -343,7 +390,7 @@ async def seed_default_models(session) -> None:
             name="gpt-4o-mini (default)",
             provider="openai",
             model_id="gpt-4o-mini",
-            is_default=not has_byd_models(),
+            is_default=False,
             is_active=True,
             context_window=128000,
             cost_per_1k_input=0.00015,
@@ -365,20 +412,20 @@ async def seed_default_models(session) -> None:
     catalog.update(byd_catalog_entries())
 
     ollama_models = [
-        ("qwen3.6:35b", True, 32768, "Qwen3.6 35B local"),
-        ("gemma4:31b", False, 32768, "Gemma4 31B local"),
-        ("kimi-k2.6:cloud", False, 131072, "Kimi K2.6 cloud-routed"),
-        ("deepseek-v4-pro:cloud", False, 65536, "DeepSeek V4 Pro cloud-routed"),
-        ("deepseek-v4-flash:cloud", False, 65536, "DeepSeek V4 Flash cloud-routed"),
-        ("qwen3.5:cloud", False, 32768, "Qwen3.5 cloud-routed"),
+        ("qwen3.6:35b", 32768, "Qwen3.6 35B local"),
+        ("gemma4:31b", 32768, "Gemma4 31B local"),
+        ("kimi-k2.6:cloud", 131072, "Kimi K2.6 cloud-routed"),
+        ("deepseek-v4-pro:cloud", 65536, "DeepSeek V4 Pro cloud-routed"),
+        ("deepseek-v4-flash:cloud", 65536, "DeepSeek V4 Flash cloud-routed"),
+        ("qwen3.5:cloud", 32768, "Qwen3.5 cloud-routed"),
     ]
-    for model_id, is_default, ctx, label in ollama_models:
+    for model_id, ctx, label in ollama_models:
         catalog[("ollama", model_id)] = dict(
             name=f"ollama/{model_id}",
             provider="ollama",
             model_id=model_id,
             base_url=settings.OLLAMA_BASE_URL,
-            is_default=is_default and not bool(settings.OPENAI_API_KEY) and not has_byd_models(),
+            is_default=False,
             is_active=True,
             context_window=ctx,
             config={"label": label, "inference": default_inference},
@@ -401,8 +448,10 @@ async def seed_default_models(session) -> None:
             merged_cfg = dict(cfg.config or {})
             merged_cfg.update(spec.get("config") or {})
             cfg.config = merged_cfg
-            if spec.get("is_default"):
-                cfg.is_default = True
+        elif cfg.provider == "ollama" and spec.get("base_url"):
+            # Keep Ollama endpoint in sync with OLLAMA_BASE_URL in .env (migration-safe).
+            cfg.base_url = spec["base_url"]
+            cfg.is_active = True
         # Other existing rows are left unchanged so user edits in Model Hub persist.
 
     for (provider, model_id), cfg in existing.items():
@@ -410,28 +459,11 @@ async def seed_default_models(session) -> None:
             cfg.is_active = False
             cfg.is_default = False
 
-    active = [c for c in existing.values() if c.is_active]
-    defaults = [c for c in active if c.is_default]
-    if not defaults:
-        if has_byd_models():
-            target_key = ("openai", "byd-deepseek-v4-flash")
-        elif settings.OPENAI_API_KEY:
-            target_key = ("openai", "gpt-4o-mini")
-        else:
-            target_key = ("ollama", "qwen3.6:35b")
-        target = existing.get(target_key)
-        if target:
-            target.is_default = True
-    elif len(defaults) > 1:
-        if has_byd_models():
-            keep = ("openai", "byd-deepseek-v4-flash")
-        elif settings.OPENAI_API_KEY:
-            keep = ("openai", "gpt-4o-mini")
-        else:
-            keep = ("ollama", "qwen3.6:35b")
-        for cfg in defaults:
-            cfg.is_default = (cfg.provider, cfg.model_id) == keep
+    await session.flush()
 
+    from app.models_hub.connectivity import apply_connectivity_default
+
+    await apply_connectivity_default(session)
     await session.commit()
 
 

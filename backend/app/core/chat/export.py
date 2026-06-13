@@ -46,6 +46,139 @@ async def _unique_skill_slug(db: AsyncSession, base: str) -> str:
         n += 1
 
 
+async def materialize_skill_from_spec(
+    db: AsyncSession,
+    conv: Conversation,
+    user_id: str,
+    skill_spec: dict,
+    *,
+    title: Optional[str] = None,
+    knowledge_base_ids: Optional[list[str]] = None,
+) -> Skill:
+    """Create a Skill from deposit draft JSON; LLM fallback if body missing."""
+    skill_title = title or skill_spec.get("display_name") or conv.title or "对话技能"
+    instructions = (skill_spec.get("instructions_md") or skill_spec.get("instructions") or "").strip()
+    if not instructions:
+        skill = await export_conversation_to_skill(db, conv, user_id, title=skill_title)
+        if knowledge_base_ids:
+            skill.knowledge_base_ids = list(knowledge_base_ids)
+            await db.flush()
+        return skill
+
+    slug = await _unique_skill_slug(db, skill_title)
+    description = (skill_spec.get("description") or f"由对话「{conv.title or conv.id[:8]}」沉淀的技能 SOP").strip()
+    skill = Skill(
+        id=generate_uuid(),
+        owner_id=user_id,
+        slug=slug,
+        display_name=str(skill_title)[:255],
+        description=description[:2000],
+        instructions_md=instructions,
+        status=SkillStatus.active,
+        scope="user",
+        auto_invoke=False,
+        tags=["from-chat"],
+        knowledge_base_ids=list(knowledge_base_ids or []),
+        metadata_={"source_conversation_id": conv.id, "from_deposit": True},
+    )
+    db.add(skill)
+    await db.flush()
+    await db.refresh(skill)
+    return skill
+
+
+async def _ingest_markdown_document(
+    db: AsyncSession,
+    conv: Conversation,
+    user_id: str,
+    markdown_body: str,
+    *,
+    kb_id: Optional[str] = None,
+    kb_name: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> tuple[KnowledgeBase, Document]:
+    from app.config import settings
+
+    if kb_id:
+        kb = await db.get(KnowledgeBase, kb_id)
+        if not kb or (kb.owner_id not in (None, user_id)):
+            raise ValueError("Knowledge base not found")
+        if kb.owner_id is None:
+            raise ValueError("Cannot write to shared knowledge base")
+    else:
+        name = kb_name or f"对话沉淀-{conv.title or conv.id[:8]}"
+        kb = KnowledgeBase(
+            id=generate_uuid(),
+            owner_id=user_id,
+            name=name[:255],
+            description="由对话自动沉淀的知识",
+            status=KBStatus.processing,
+            embedding_model=settings.DEFAULT_EMBEDDING_MODEL,
+            chunk_size=1000,
+            chunk_overlap=200,
+            metadata_={"source": "chat-export"},
+        )
+        db.add(kb)
+        await db.flush()
+
+    doc_id = generate_uuid()
+    safe_name = filename or f"chat-{conv.id[:8]}.md"
+    file_bytes = markdown_body.encode("utf-8")
+    doc = Document(
+        id=doc_id,
+        knowledge_base_id=kb.id,
+        filename=safe_name,
+        file_type="md",
+        file_size=len(file_bytes),
+        status=KBStatus.processing,
+        storage_path=save_document_file(kb.id, doc_id, safe_name, file_bytes),
+        metadata_={"source_conversation_id": conv.id, "from_deposit": True},
+    )
+    db.add(doc)
+    await db.flush()
+
+    pipeline = IngestionPipeline(
+        knowledge_base_id=kb.id,
+        embedding_model=kb.embedding_model,
+        chunk_size=kb.chunk_size,
+        chunk_overlap=kb.chunk_overlap,
+    )
+    chunk_count = await pipeline.ingest_file(file_bytes, safe_name, doc.id)
+    doc.status = KBStatus.ready
+    doc.chunk_count = chunk_count
+    kb.status = KBStatus.ready
+    kb.document_count = (kb.document_count or 0) + 1
+    await db.flush()
+    await db.refresh(kb)
+    await db.refresh(doc)
+    return kb, doc
+
+
+async def materialize_knowledge_from_spec(
+    db: AsyncSession,
+    conv: Conversation,
+    user_id: str,
+    kb_spec: dict,
+    *,
+    kb_id: Optional[str] = None,
+    kb_name: Optional[str] = None,
+) -> tuple[KnowledgeBase, Document]:
+    """Create KB document from deposit draft JSON; LLM fallback if body missing."""
+    body = (kb_spec.get("document_md") or kb_spec.get("summary") or "").strip()
+    if not body:
+        return await export_conversation_to_knowledge(
+            db, conv, user_id, kb_id=kb_id, kb_name=kb_name or kb_spec.get("kb_name"),
+        )
+    return await _ingest_markdown_document(
+        db,
+        conv,
+        user_id,
+        body,
+        kb_id=kb_id,
+        kb_name=kb_name or kb_spec.get("kb_name"),
+    )
+
+
 async def export_conversation_to_skill(
     db: AsyncSession,
     conv: Conversation,

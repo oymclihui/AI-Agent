@@ -26,6 +26,12 @@ export function canReadEmployees(user: AuthUser | null | undefined): boolean {
   return hasPermission(user, "employees:read");
 }
 
+/** Delete agents / skills — platform admins only. */
+export function canDeleteAgentsOrSkills(user: AuthUser | null | undefined): boolean {
+  if (!user) return false;
+  return !!user.is_admin;
+}
+
 export function mergeUserProfile(existing: AuthUser | null, profile: AuthUser): AuthUser {
   return { ...existing, ...profile };
 }

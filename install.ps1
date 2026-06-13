@@ -60,6 +60,30 @@ if (-not (Test-Path ".env")) {
     Write-Host "  Created backend/.env from .env.example" -ForegroundColor Gray
 }
 
+$envPath = Join-Path "$Root\backend" ".env"
+$envText = Get-Content $envPath -Raw -ErrorAction SilentlyContinue
+if ($envText -notmatch "(?m)^SETUP_TOKEN=.+") {
+    $setupToken = [guid]::NewGuid().ToString("N")
+    if ($envText -match "(?m)^SETUP_TOKEN=") {
+        $envText = $envText -replace "(?m)^SETUP_TOKEN=.*", "SETUP_TOKEN=$setupToken"
+    } else {
+        $envText = $envText.TrimEnd() + "`nSETUP_TOKEN=$setupToken`n"
+    }
+    Set-Content -Path $envPath -Value $envText -Encoding UTF8 -NoNewline
+    $adminTokenFile = Join-Path $Root "SETUP_TOKEN.admin.txt"
+    @"
+AI-AGENT 首次部署安装令牌（仅管理员持有）
+========================================
+请勿将此文件随安装包发给普通用户。
+
+安装令牌：
+$setupToken
+
+管理员首次部署：启动后打开 http://localhost:3000/setup 并输入上方令牌。
+"@ | Set-Content -Path $adminTokenFile -Encoding UTF8
+    Write-Host "  Generated admin setup token -> SETUP_TOKEN.admin.txt" -ForegroundColor Yellow
+}
+
 if (-not (Test-Path ".venv")) {
     & $python -m venv .venv
 }
@@ -120,6 +144,8 @@ Write-Host "  Install complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Next: run .\start_prod.ps1" -ForegroundColor Cyan
-Write-Host "  Login: admin / admin123 (change in backend/.env)" -ForegroundColor Gray
+Write-Host "  Admin first-time setup: http://localhost:3000/setup (token in SETUP_TOKEN.admin.txt)" -ForegroundColor Cyan
+Write-Host "  After setup + restart, login: admin / admin123" -ForegroundColor Gray
+Write-Host "  Do NOT distribute SETUP_TOKEN.admin.txt to end users." -ForegroundColor Yellow
 Write-Host ""
 Read-Host "Press Enter to exit"

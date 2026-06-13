@@ -10,7 +10,7 @@ from app.db.base import generate_uuid
 from app.schemas.skill import SkillCreate, SkillUpdate, SkillResponse, SkillLibraryImportRequest, SkillLibraryTemplate
 from app.core.skills.i18n import skill_to_response_dict
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user
+from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user, assert_admin_user
 
 router = APIRouter(prefix="/skills", tags=["Skills"])
 
@@ -194,7 +194,7 @@ async def delete_skill(
     skill = await db.get(Skill, skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
-    assert_mutable_by_user(skill, user.id, "skill")
+    assert_admin_user(user, "delete skills")
     await db.delete(skill)
 
 

@@ -25,6 +25,9 @@ else:
         connect_args["ssl"] = ssl.create_default_context()
     if _is_vastbase:
         connect_args.setdefault("server_settings", {})["application_name"] = "aiagnet"
+    schema = (settings.DB_SCHEMA or "public").strip()
+    if schema and schema != "public" and not _is_sqlite:
+        connect_args.setdefault("server_settings", {})["search_path"] = f"{schema},public"
     if connect_args:
         _engine_kwargs["connect_args"] = connect_args
 

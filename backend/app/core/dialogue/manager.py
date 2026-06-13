@@ -182,6 +182,18 @@ class DialogueManager:
         if attachment_context:
             messages.append(SystemMessage(content=attachment_context))
 
+        rag_context = ""
+        if self.retriever:
+            try:
+                docs = await self.retriever.aretrieve(user_message)
+                if docs:
+                    rag_context = "\n\n".join(d.page_content for d in docs[:5])
+                    messages.append(SystemMessage(
+                        content=f"Relevant knowledge base context:\n{rag_context}"
+                    ))
+            except Exception as e:
+                logger.warning("rag_retrieval_failed", error=str(e))
+
         history = await self.memory.get_history(session_id)
         messages.extend(history)
         messages.append(HumanMessage(content=user_message))

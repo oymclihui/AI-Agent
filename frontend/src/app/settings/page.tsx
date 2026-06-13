@@ -10,6 +10,7 @@ import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { ModelKeysPanel } from "@/components/ModelKeysPanel";
 import { canManageOrg, canDelegateDept, canDelegateExec } from "@/lib/permissions";
 
 export default function SettingsPage() {
@@ -20,11 +21,6 @@ export default function SettingsPage() {
   const s = translations.settings;
   const c = translations.common;
 
-  const [provider, setProvider] = useState("openai");
-  const [modelId, setModelId] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [keys, setKeys] = useState<Array<{ id: string; provider: string; model_id?: string; api_key_preview: string }>>([]);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -33,10 +29,6 @@ export default function SettingsPage() {
   const [mailboxEmail, setMailboxEmail] = useState("");
   const [mailboxPassword, setMailboxPassword] = useState("");
   const [mailboxSaved, setMailboxSaved] = useState<{ email: string; password_preview: string; imap_host: string; imap_port: number } | null>(null);
-
-  const loadKeys = () => {
-    authApi.listModelKeys().then(({ data }) => setKeys(data)).catch(() => {});
-  };
 
   const loadMailbox = () => {
     authApi.getMailbox().then(({ data }) => {
@@ -47,7 +39,7 @@ export default function SettingsPage() {
     }).catch(() => {});
   };
 
-  useEffect(() => { loadKeys(); loadMailbox(); }, []);
+  useEffect(() => { loadMailbox(); }, []);
 
   useEffect(() => {
     authApi.me().then(({ data }) => {
@@ -56,23 +48,6 @@ export default function SettingsPage() {
       if (data.email && !mailboxEmail) setMailboxEmail(data.email);
     }).catch(() => {});
   }, []);
-
-  const saveKey = async () => {
-    if (!apiKey.trim()) return;
-    try {
-      await authApi.saveModelKey({
-        provider,
-        model_id: modelId.trim() || null,
-        api_key: apiKey.trim(),
-        base_url: baseUrl.trim() || null,
-      });
-      setApiKey("");
-      toast.success(s.keySaved[lang]);
-      loadKeys();
-    } catch {
-      toast.error(lang === "zh" ? "保存失败" : "Save failed");
-    }
-  };
 
   const handleLogout = () => {
     logout();
@@ -169,6 +144,10 @@ export default function SettingsPage() {
         </button>
       </div>
 
+      <div className="theme-card mb-6 border-violet-500/20 p-6">
+        <ModelKeysPanel lang={lang} />
+      </div>
+
       <div className="theme-card mb-6 p-6">
         <h2 className="mb-2 text-lg font-semibold theme-text">{s.changePwdTitle[lang]}</h2>
         <p className="mb-4 text-sm theme-muted">{s.changePwdDesc[lang]}</p>
@@ -211,6 +190,14 @@ export default function SettingsPage() {
       )}
 
       {canManageOrg(user) && (
+        <div className="theme-card mb-6 border-emerald-500/20 p-6">
+          <h2 className="mb-2 text-lg font-semibold theme-text">{s.databaseLinkTitle[lang]}</h2>
+          <p className="mb-4 text-sm theme-muted">{s.databaseLinkDesc[lang]}</p>
+          <Link href="/settings/database" className="theme-btn-primary inline-block">{s.orgLinkBtn[lang]}</Link>
+        </div>
+      )}
+
+      {canManageOrg(user) && (
         <div className="theme-card mb-6 border-cyan-500/20 p-6">
           <h2 className="mb-2 text-lg font-semibold theme-text">{s.integrationsLinkTitle[lang]}</h2>
           <p className="mb-4 text-sm theme-muted">{s.integrationsLinkDesc[lang]}</p>
@@ -245,28 +232,6 @@ export default function SettingsPage() {
           <button onClick={handleAdminReset} className="rounded-lg border border-amber-500/40 px-4 py-2 text-sm text-amber-300 hover:bg-amber-500/10">{s.resetPwdBtn[lang]}</button>
         </div>
       )}
-
-      <div className="theme-card mb-6 p-6">
-        <h2 className="mb-2 text-lg font-semibold theme-text">{s.modelKeysTitle[lang]}</h2>
-        <p className="mb-4 text-sm theme-muted">{s.modelKeysDesc[lang]}</p>
-        <div className="mb-4 grid gap-2 md:grid-cols-2">
-          <input placeholder={s.keyProvider[lang]} className="theme-input w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-slate-400" value={provider} onChange={(e) => setProvider(e.target.value)} />
-          <input placeholder={s.keyModelId[lang]} className="theme-input w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-slate-400" value={modelId} onChange={(e) => setModelId(e.target.value)} />
-          <input placeholder={s.keyValue[lang]} className="theme-input w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-slate-400 md:col-span-2" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-          <input placeholder={s.keyBaseUrl[lang]} className="theme-input w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-slate-400 md:col-span-2" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-        </div>
-        <button onClick={saveKey} className="theme-btn-primary">{c.save[lang]}</button>
-        {keys.length > 0 && (
-          <ul className="mt-4 space-y-2 text-xs theme-muted">
-            {keys.map((k) => (
-              <li key={k.id} className="flex justify-between rounded border theme-border px-3 py-2">
-                <span>{k.provider}{k.model_id ? ` / ${k.model_id}` : ""} · {k.api_key_preview}</span>
-                <button onClick={() => authApi.deleteModelKey(k.id).then(loadKeys)} className="text-red-400">{c.delete[lang]}</button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
 
       <div className="theme-card mb-6 p-6">
         <h2 className="mb-2 text-lg font-semibold theme-text">{s.langTitle[lang]}</h2>

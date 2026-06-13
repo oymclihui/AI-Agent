@@ -16,20 +16,61 @@
 
 | 模块 | 说明 |
 |------|------|
-| **Agents** | 创建与管理智能体，支持角色、目标、工具绑定、**技能绑定**与自然语言生成 |
-| **Skills** | 可复用 SOP / 方法论沉淀（对齐 Cursor `SKILL.md`），在线技能库（约 1123 模板）、**中英双语展示**、运行时注入 |
+| **Agents** | 创建与管理智能体，支持角色、目标、工具绑定、技能绑定与自然语言生成；**删除仅限管理员** |
+| **Skills** | 可复用 SOP / 方法论沉淀（对齐 Cursor `SKILL.md`），在线技能库（约 1123 模板）、运行时注入；**删除仅限管理员** |
 | **Digital Employees** | **数字员工**：岗位化绑定智能体，Cron / 间隔定时任务；**从模板一键创建**（含 11 个 bundled 岗位模板） |
 | **Operations Screen** | 运营大屏 **`/screen`**：KPI、员工状态、任务趋势；**按组织 RBAC 过滤**；Dashboard API + SSE（需登录） |
 | **Organization RBAC** | **8 角色**、部门树、**接口人 / 高管秘书** 分层赋权；数字员工与大屏按 scope 隔离 |
 | **Workflows** | n8n 风格可视化设计器（675+ 节点库）、**自然语言生成工作流**、节点 AI 配置助手 |
-| **Chat** | 多轮对话、流式输出、**附件上传与推荐问题**、会话删除、**存为技能 / 知识库** |
-| **Knowledge** | 文档上传、向量检索（RAG）；平台路线图文档自动种子与 **content_sha256 再索引** |
+| **Chat** | 多轮对话、流式输出、**SessionContext**、**语音对话**（STT 自动发送 + TTS 朗读）、智能沉淀、附件与推荐问题 |
+| **Knowledge** | 文档上传、向量检索（RAG，对话多库联合检索）；平台路线图自动种子与 **content_sha256 再索引** |
 | **Model Hub** | 模型配置 **增删改查**、设默认、**推理参数**（temperature / top_p / max_tokens 等）、OpenAI 兼容 Base URL |
 | **用户与权限** | 工号 / 邮箱登录、JWT、**组织 RBAC + 分层赋权**、个人模型 API Key |
 | **Tools** | 内置计算器、HTTP 请求、网页搜索、日期时间等工具 |
 | **Orchestrator** | 多智能体协同编排（CrewAI 风格 sequential 流程） |
 
 前端支持 **中 / 英** 双语界面。
+
+---
+
+## 更新日志
+
+### 2026-06 — 语音对话
+
+- **语音对话模式**：对话页扬声器按钮开启；麦克风录音 → 自动转写发送 → AI 回复 **浏览器 TTS 朗读**
+- **普通语音输入**：关闭语音对话模式时，识别结果仍填入输入框（原行为）
+- 依赖：`ollama pull whisper` 或 `OPENAI_API_KEY`；详见 [用户操作手册](docs/用户操作手册.md) 5.5 节
+
+### 2026-06 — SessionContext 整合（P0）
+
+**一句话：** 对话里选的技能 / 资料库 = 运行时真正生效 = 沉淀后自动互绑。
+
+| 能力 | 说明 |
+|------|------|
+| **会话上下文包** | 对话页下拉（智能体 · 技能 · 资料库 · 模型 · 连接器）统一为 `SessionContext`，切换即 `PATCH` 持久化 |
+| **技能注入** | 合并 `conversation.skills_config` + `agent.skills_config`；**只选技能、不选智能体** 也能注入 SOP |
+| **对话 RAG** | 合并会话资料库 + 技能关联资料库，多库向量检索注入（含 BYD KMS）；流式与非流式均支持 |
+| **智能沉淀互绑** | `deposit/confirm` 时 Skill ↔ KB 自动关联，并回写当前会话；新建 Agent / 员工与对话上下文一致 |
+| **一次抽取** | `suggest-deposit` 生成含 `instructions_md` / `document_md` 的草案；confirm 优先物化草案（缺正文时 LLM 兜底） |
+| **权限** | 技能、智能体 **删除仅限管理员**（`user.is_admin`） |
+
+**新增 / 变更 API：**
+
+- `GET /chat/conversations/{id}` — 含 `skills_config`
+- `PATCH /chat/conversations/{id}/context` — 更新 SessionContext
+- `POST /chat/conversations/{id}/messages` — 合并技能注入 + 多库 RAG
+
+**涉及模块：** `backend/app/api/chat.py`、`core/chat/deposit.py`、`core/chat/export.py`、`core/skills/injector.py`、`knowledge/retriever.py`、`frontend/src/app/chat/page.tsx`
+
+**冒烟测试：**
+
+```bash
+cd backend
+python scripts/smoke_test_session_context.py   # SessionContext P0（ASGI 进程内，19 项）
+python scripts/smoke_test_new_features.py        # 需 uvicorn :8000
+python scripts/smoke_test_new_features_asgi.py   # 新特性 ASGI 快速检
+python smoke_test.py                             # 全量冒烟
+```
 
 ---
 
@@ -80,9 +121,17 @@
 
 ### 对话（Chat）增强
 
-- **附件上传**：支持文档类附件；上传后 LLM 自动生成 **3 条推荐问题**，点击即可填入输入框
-- **会话管理**：单条删除、**清空全部**；超过 **30 天**（可配置 `CONVERSATION_RETENTION_DAYS`）的会话自动清理
-- **沉淀导出**：当前会话可 **存为技能**（AI 提炼 SOP）或 **存入知识库**（写入 Markdown 文档并索引）
+- **SessionContext（会话上下文包）**：智能体 / 技能 / 资料库 / 模型 / 连接器下拉统一持久化
+- **语音对话**：扬声器开关 + 麦克风；识别后自动发送、回复自动朗读
+- **对话 RAG**：选定资料库后自动检索注入
+- **智能沉淀（Deposit）**：AI 分析对话 → 推荐技能 / 知识 / 智能体 / 数字员工 → 确认发布并互绑
+- **附件上传**：支持文档类附件；上传后 LLM 自动生成 **3 条推荐问题**
+- **会话管理**：单条删除、清空全部；超过 **30 天** 自动清理
+- **快捷导出**：存为技能 / 存入知识库（`save-as-skill` / `save-to-knowledge`）
+
+### 技能与智能体权限
+
+- 技能、智能体 **删除按钮仅管理员可见**；非管理员调 API 返回 403
 
 ### 用户登录、组织权限与数据隔离
 
@@ -101,7 +150,7 @@
 
 **Backend**
 
-- Python 3.11+ · FastAPI · SQLAlchemy (async) · SQLite（默认）/ PostgreSQL（可配置）
+- Python 3.11+ · FastAPI · SQLAlchemy (async) · PostgreSQL / VastBase（必填）
 - LangChain · LangGraph · Ollama
 - ChromaDB（本地向量库，默认）/ Milvus（可选）
 - Uvicorn
@@ -123,12 +172,12 @@ AI-Agent/
 │   │   ├── api/          # REST API 路由
 │   │   ├── core/         # 智能体、工作流、对话、工具、技能、数字员工调度
 │   │   │   ├── auth/         # JWT、密码、用户数据范围
-│   │   │   ├── chat/         # 推荐问题、会话清理、导出技能/知识库
+│   │   │   ├── chat/         # 推荐问题、会话清理、导出技能/知识库、对话沉淀（deposit）
 │   │   │   ├── skills/       # 技能注入、在线技能库
 │   │   │   ├── employees/    # 定时任务调度与执行
 │   │   │   └── workflow/     # 工作流引擎、节点库、NL 生成
 │   │   ├── db/           # 数据库模型与初始化
-│   │   ├── knowledge/    # RAG 管道与向量存储
+│   │   ├── knowledge/    # RAG 管道、向量存储、多库检索（retriever）
 │   │   └── models_hub/   # LLM 路由与调用
 │   └── smoke_test.py     # 端到端冒烟测试
 ├── frontend/
@@ -150,7 +199,7 @@ Screenshots: [`docs/screenshot.png`](docs/screenshot.png) (中文) · [`docs/scr
 - **Ollama**（推荐，本地 LLM）：[https://ollama.com](https://ollama.com)
   - 默认模型：`qwen3.6:35b`
   - 默认嵌入模型：`nomic-embed-text`（`ollama pull nomic-embed-text`）
-- 可选：Milvus、Redis、MinIO（不配置时使用本地 SQLite / Chroma / 文件系统）
+- 可选：Milvus、Redis、MinIO（不配置时使用本地 Chroma / 文件系统；**数据库须 PostgreSQL**）
 
 ---
 
@@ -238,9 +287,13 @@ python integration_test.py
 | `frontend/.env.example` | 前端 API 地址，复制为 `frontend/.env.local` |
 | `backend/requirements.txt` | Python 依赖锁定列表 |
 
-### 数据库（SQLite / PostgreSQL）
+### 数据库（PostgreSQL / VastBase，必填）
 
-默认使用本地 **SQLite**（`backend/aiagnet.db`），无需额外服务。生产或远程部署可切换到 **PostgreSQL**：
+业务库仅支持 **PostgreSQL** 或兼容协议 **VastBase**。本地开发可先启动 Docker 中的 PG：
+
+```powershell
+docker compose up -d postgres
+```
 
 **方式 A — 完整连接串（推荐远程服务器）**
 
@@ -263,26 +316,24 @@ DB_NAME=aiagnet
 DB_SSL=prefer
 ```
 
-**从 SQLite 迁移到 PostgreSQL**
+**首次建库**
 
 ```powershell
 cd backend
-pip install -r requirements.txt
-
-# 1. 在 .env 中配置目标 PostgreSQL（见上）
-# 2. 预览源库行数
-python scripts/migrate_sqlite_to_postgres.py --dry-run
-
-# 3. 创建表结构并复制数据（目标已有数据时加 --clear）
-python scripts/migrate_sqlite_to_postgres.py
-
-# 4. 重启后端
-cd .. ; .\start_backend.ps1
+python scripts/provision_postgres.py
 ```
 
-> 迁移脚本只复制 **关系型表**（Agents、Workflows、Knowledge 元数据等）。**Chroma 向量索引** 与 **`uploads/` 文件** 需在本机保留或重新上传文档。
+**从旧版 SQLite 迁移到 PostgreSQL**（历史数据）
 
-健康检查 `/health` 会返回 `database.backend`（`sqlite` / `postgresql`）与连接状态。
+```powershell
+cd backend
+python scripts/migrate_sqlite_to_postgres.py --dry-run
+python scripts/migrate_sqlite_to_postgres.py
+```
+
+> 迁移脚本只复制 **关系型表**。**Chroma 向量索引** 与 **`uploads/` 文件** 需在本机保留或重新上传文档。
+
+健康检查 `/health` 会返回 `database.backend`（`postgresql` / `vastbase`）与连接状态。
 
 一键配置示例：
 
@@ -318,12 +369,12 @@ cd frontend && cp .env.example .env.local
 | 路径 | 功能 |
 |------|------|
 | `/auth` | 登录、注册、`/me` 当前用户、**个人模型 Key** CRUD |
-| `/agents` | 智能体 CRUD、运行、技能绑定 |
-| `/skills` | 技能 CRUD；`/skills/library/*` 在线技能库浏览与导入 |
+| `/chat` | 对话、SessionContext（`GET/PATCH context`）、**对话 RAG**、推荐问题、智能沉淀、存为技能/知识库 |
+| `/skills` | 技能 CRUD（**删除需管理员**）；`/skills/library/*` 在线技能库 |
+| `/agents` | 智能体 CRUD（**删除需管理员**）、运行、技能绑定 |
 | `/employees` | 数字员工 CRUD、**模板导入**、定时任务、手动执行、运行记录、调度状态 |
 | `/dashboard` | 运营大屏概览、SSE 流式刷新 |
 | `/workflows` | 工作流管理、执行、NL 生成、节点库、AI 配置助手 |
-| `/chat` | 对话、**推荐问题**、会话删除、**存为技能 / 知识库** |
 | `/knowledge` | 知识库与文档检索 |
 | `/models` | 模型配置 CRUD、设默认、推理参数、可用模型列表 |
 | `/tools` | 工具注册表 |
@@ -354,9 +405,251 @@ docker run -p 3000:3000 aiagnet-frontend
 
 ---
 
+## 技能 · 知识 · 对话 · 沉淀整合
+
+> **状态：P0 已上线（2026-06）；P1/P2 规划中**  
+> 目标：一次选型、全链路一致 —— **对话里选的 = 运行时生效的 = 沉淀后绑定的 = 员工定时跑的**
+
+### 已上线能力（P0）
+
+| 能力 | 实现要点 |
+|------|----------|
+| 会话 `skills_config` | `Conversation` 表新增字段；启动时自动迁移 |
+| SessionContext API | `GET/PATCH /chat/conversations/{id}/context` |
+| 技能合并注入 | `merge_skill_bindings(conv, agent)` → `SkillInjector` |
+| 多库 RAG | `collect_knowledge_base_ids` + `knowledge/retriever.py` |
+| 沉淀互绑 | confirm 写入 Skill.knowledge_base_ids、回写 conv 技能与资料库 |
+| 草案物化 | `materialize_skill_from_spec` / `materialize_knowledge_from_spec` |
+| 前端联动 | 下拉变更 PATCH；切换会话恢复；沉淀后刷新上下文 |
+| 管理员删除 | 技能 / 智能体删除需 `user.is_admin` |
+
+### 设计分层
+
+| 层级 | 模块 | 职责 |
+|------|------|------|
+| 事实层 | **Knowledge（资料库）** | 制度、数据、结论 —— 知道什么 |
+| 方法层 | **Skills（技能）** | SOP、步骤、输出格式 —— 怎么做 |
+| 角色层 | **Agents / Employees** | 谁来做、何时做 |
+| 体验层 | **Chat SessionContext** | 对话页四个下拉统一为运行时上下文包 |
+
+### 已修复的历史问题
+
+| 原问题 | 现状态 |
+|--------|--------|
+| 对话技能下拉未入库 | ✅ 已 PATCH 到 `conv.skills_config` |
+| 资料库只写一次 | ✅ 切换下拉实时 PATCH |
+| 对话 RAG 未接线 | ✅ `MultiKnowledgeRetriever` 已接入 |
+| 沉淀 Skill/KB 不互绑 | ✅ confirm 自动关联并回写会话 |
+| 沉淀后上下文不一致 | ✅ Agent/Employee 与 conv 同步 |
+| 非管理员可删技能/智能体 | ✅ 前后端均限制为管理员 |
+
+### 核心概念：`SessionContext`（会话上下文包）
+
+对话页 **智能体 · 技能 · 资料库 · 模型 · 连接器** 统一抽象为运行时上下文，贯穿 **对话 → 沉淀 → 发布**：
+
+```typescript
+SessionContext {
+  agent_id?: string
+  skills_config: SkillBinding[]      // [{ skill_id, always_load, priority }]
+  knowledge_base_ids: string[]
+  model_config_id?: string
+  connector_id?: string
+}
+```
+
+**运行时合并规则：**
+
+```
+effective_skills = dedupe( conv.skills_config ∪ agent.skills_config )
+effective_kbs    = dedupe( conv.knowledge_base_ids ∪ skill.knowledge_base_ids[] )
+```
+
+- 会话级技能与智能体绑定技能**合并注入**（去重）
+- Skill 上已有的 `knowledge_base_ids` **自动并入 RAG**，用户无需重复选资料库
+
+### 数据模型（P0 已落地）
+
+| 对象 | 字段 | 说明 |
+|------|------|------|
+| `Conversation` | `skills_config` | 会话级技能绑定，与 Agent 结构一致 |
+| `Conversation` | `knowledge_base_ids` | 支持 PATCH 动态更新 |
+| `Skill` | `knowledge_base_ids` | 沉淀 confirm 时自动回填 |
+
+启动后端时 `init_db` 自动执行迁移（PostgreSQL / VastBase）。
+
+#### Phase 1 — 沉淀包表（规划中）
+
+```text
+deposit_bundles
+  id, owner_id, department_id
+  source_type       -- conversation | desktop_demo | employee_run
+  source_id
+  status            -- draft | published | archived
+  extracted_json    -- 一次 LLM 结构化输出
+  published_refs    -- { skill_id, kb_id, doc_id, agent_id, employee_id }
+  parent_id         -- 版本链
+  created_at, published_at
+```
+
+Phase 0 草稿仍存 `conv.metadata.deposit_draft`；P1 将迁出至独立 `deposit_bundles` 表。
+
+### 运行时链路（已实现）
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as 对话页
+    participant API as chat API
+    participant Inj as SkillInjector
+    participant RAG as KB Search
+    participant LLM
+
+    U->>FE: 选 智能体 + 技能 + 资料库
+    FE->>API: PATCH /conversations/{id}/context
+    U->>FE: 发送消息
+    FE->>API: POST /messages
+    API->>API: merge skills + kbs
+    API->>Inj: build_messages(effective_skills)
+    API->>RAG: search(effective_kbs, query)
+    Inj->>LLM: system SOP
+    RAG->>LLM: system 事实引用
+    LLM->>U: 流式回复
+```
+
+**`send_message` 改造要点：**
+
+1. 合并 `conv.skills_config` 与 `agent.skills_config` → `SkillInjector.build_messages`
+2. 合并 `conv.knowledge_base_ids` 与各 Skill 的 `knowledge_base_ids` → 构建 retriever
+3. `DialogueManager(memory, knowledge_retriever=retriever)` 接入现有 `/knowledge/{id}/search` 能力
+
+**前端行为（已实现）：**
+
+| 行为 | 说明 |
+|------|------|
+| 选技能 / 资料库 / 智能体 | `PATCH /chat/conversations/{id}/context` |
+| 切换会话 | 从 `ConversationResponse` 恢复全部下拉 |
+| 新建会话 | `createConversation` 携带完整 SessionContext |
+| 沉淀完成 | 自动刷新当前会话上下文 |
+
+### 沉淀链路（已实现）
+
+#### 统一抽取（一次 LLM）
+
+`suggest-deposit` 输出单一 JSON，供预览与 confirm 共用；**confirm 不再二次调 LLM**：
+
+```json
+{
+  "worth_deposit": true,
+  "confidence": 0.85,
+  "skill": {
+    "display_name": "月度管报核对 SOP",
+    "instructions_md": "## 适用场景\n...",
+    "tools_required": ["calculator"]
+  },
+  "knowledge": {
+    "kb_name": "管报核对-对话沉淀",
+    "document_md": "## 摘要\n...",
+    "citation_message_ids": ["msg-3", "msg-7"]
+  },
+  "agent": { "name": "...", "role": "...", "goal": "..." },
+  "employee": { "name": "...", "tasks": [] }
+}
+```
+
+#### Confirm 物化与互绑规则
+
+1. 同时选 skill + knowledge → 自动写入 `skill.knowledge_base_ids = [kb_id]`
+2. 新 KB **追加**到 `conv.knowledge_base_ids`（不覆盖用户已选）
+3. 新 Skill **追加**到 `conv.skills_config`
+4. 创建 Agent 时 `skills_config` = 新 Skill + 会话已有 Skill
+5. 创建 Employee 时 KB / Skill 与 Agent 保持一致
+6. 沉淀完成后用户继续对话 → **立刻生效**新 Skill + 新 KB
+
+**方法 vs 事实边界：** 可检索引用的事实进 Knowledge；可逐步执行的流程进 Skill；Skill 通过 `knowledge_base_ids` 指向依据。
+
+草案缺 `instructions_md` / `document_md` 时，`export.py` 中 LLM 兜底生成。
+
+### API 清单
+
+| 方法 | 路径 | 状态 |
+|------|------|------|
+| PATCH | `/chat/conversations/{id}/context` | ✅ P0 |
+| GET | `/chat/conversations/{id}` | ✅ P0 |
+| POST | `/chat/conversations/{id}/messages` | ✅ P0（技能合并 + RAG） |
+| POST | `/chat/conversations/{id}/suggest-deposit` | ✅ |
+| POST | `/chat/conversations/{id}/deposit/confirm` | ✅ P0（互绑 + 回写） |
+| GET | `/deposits` | 🔲 P1 |
+| GET | `/deposits/{id}/lineage` | 🔲 P1 |
+
+### P0 验收（已通过）
+
+- [x] 对话只选技能（不选智能体）也能注入 SOP
+- [x] 选资料库后对话可返回 `rag_used: true`
+- [x] 沉淀 skill + knowledge 后，继续对话自动用新 Skill + 新 KB
+- [x] 新建 Agent / Employee 绑定与对话上下文一致
+
+### 后续规划
+
+#### P1 — 可运营
+
+| # | 任务 |
+|---|------|
+| 1 | `deposit_bundles` 表，草稿迁出 `conversation.metadata` |
+| 2 | `/deposits` 工作台：草稿 / 已发布 / 溯源 |
+| 3 | 发布前 Markdown 编辑预览 |
+| 4 | 相似 Skill / KB 去重提示 |
+| 5 | 组织级沉淀：`pending_review` → 管理员批准 |
+
+#### P2 — 与知识库增强对齐
+
+| # | 任务 |
+|---|------|
+| 6 | Hybrid 检索 + Rerank（见 [知识库增强规划](docs/知识库增强规划.md)） |
+| 7 | Skill 运行时只检索关联 KB（降噪） |
+| 8 | 逐句溯源：SOP 步骤 ↔ 对话消息 ↔ KB chunk |
+| 9 | 桌面录制 / 员工执行记录统一进 Deposit Hub |
+
+详见 [docs/知识库增强规划.md](docs/知识库增强规划.md)。
+
+### 刻意不做（避免过度工程）
+
+| 不做 | 原因 |
+|------|------|
+| Skill 与 KB 合并成一种实体 | 方法 / 事实分层清晰，现有模型够用 |
+| Phase 0 上 GraphRAG | 不阻塞主链路 |
+| 每次发消息都 PATCH context | 仅下拉变更时 PATCH |
+| 重写 SkillInjector | 扩展 `merge_skill_bindings()` 即可 |
+| 沉淀时删除用户已选技能 | 默认追加，可选「仅保留新沉淀」 |
+
+### 代码映射（P0 已改动文件）
+
+| 模块 | 改动 |
+|------|------|
+| `backend/app/db/models.py` | `Conversation.skills_config` |
+| `backend/app/db/init_db.py` | 自动迁移 `skills_config` 列 |
+| `backend/app/schemas/chat.py` | `ConversationContextUpdate`；Response 含 skills |
+| `backend/app/api/chat.py` | `_resolve_effective_context`；RAG retriever |
+| `backend/app/core/chat/deposit.py` | confirm 互绑 + 回写 conv |
+| `backend/app/core/chat/export.py` | `materialize_*_from_spec` 物化 |
+| `backend/app/core/skills/injector.py` | `merge_skill_bindings()`、`collect_knowledge_base_ids()` |
+| `backend/app/knowledge/retriever.py` | **新增** 多库联合检索 |
+| `frontend/src/app/chat/page.tsx` | PATCH context；恢复下拉；沉淀后刷新 |
+| `frontend/src/lib/api.ts` | `getConversation`、`updateContext` |
+| `frontend/src/lib/permissions.ts` | `canDeleteAgentsOrSkills()` |
+
+---
+
 ## 开发路线
 
 以下规划已写入知识库 **「AI-AGENT 平台文档」**（启动后端时自动创建并嵌入 `platform-roadmap.md`），可在 **Knowledge** 页检索，例如：「数字员工 Phase 2 计划是什么？」
+
+**技能 · 知识 · 对话 · 沉淀整合（见上一节）：**
+
+- [x] P0：`SessionContext` — 会话 `skills_config` + `PATCH /context` + 对话技能/RAG 生效
+- [x] P0：沉淀 confirm 互绑（Skill ↔ KB ↔ Conv ↔ Agent/Employee）+ 一次 LLM 抽取（confirm 复用 suggest 草案，缺正文时 LLM 兜底）
+- [ ] P1：沉淀包表 + `/deposits` 工作台 + 发布前编辑 + 去重提示
+- [ ] P2：Hybrid RAG + Skill 关联 KB 降噪 + 逐句溯源 + 多来源统一沉淀
+- [x] 技能 / 智能体删除仅限管理员
 
 - [x] n8n 风格工作流节点库与设计器
 - [x] 自然语言创建工作流 / 智能体
@@ -368,7 +661,8 @@ docker run -p 3000:3000 aiagnet-frontend
 - [x] 飞书 / 钉钉等 IM 机器人接入（Webhook 回调 + `/settings/integrations` 配置说明）
 - [x] Chat 内图表 / KPI 结构化渲染（`data-qa-intent` 协议：`[kpi]` / `[chart]` / `[choices]`）
 - [x] 定时任务支持工作流 / 多 Agent 编排执行（数字员工任务类型 `workflow` / `crew`）
-- [x] 从对话「保存为技能 / 知识库」
+- [x] SessionContext 整合 P0（对话技能/RAG/沉淀互绑）
+- [x] 从对话「智能沉淀」与「保存为技能 / 知识库」
 - [x] 用户登录与按用户数据隔离（个人 API Key、30 天会话清理）
 - [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户 — `/settings/organization`）
 - [~] Docker Compose 一键部署（compose 文件已有，待完善）
@@ -386,4 +680,6 @@ docker run -p 3000:3000 aiagnet-frontend
 - 仓库：[https://github.com/oymclihui/AI-Agent](https://github.com/oymclihui/AI-Agent)
 - 英文说明：[README.en.md](README.en.md)
 - 用户操作手册：[docs/用户操作手册.md](docs/用户操作手册.md)
+- 技能 · 知识 · 沉淀整合：见上文 [技能 · 知识 · 对话 · 沉淀整合](#技能--知识--对话--沉淀整合)
+- 知识库增强规划：[docs/知识库增强规划.md](docs/知识库增强规划.md)
 - 桌面自动化与 Harness：[docs/桌面自动化与Harness说明.md](docs/桌面自动化与Harness说明.md)

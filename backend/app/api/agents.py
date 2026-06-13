@@ -20,7 +20,7 @@ from app.config import settings
 from app.core.agents.base import AgentDefinition, Task
 from app.core.skills.factory import build_agent_executor
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user
+from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user, assert_admin_user
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -246,7 +246,7 @@ async def delete_agent(
     agent = await db.get(AgentModel, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    assert_mutable_by_user(agent, user.id, "agent")
+    assert_admin_user(user, "delete agents")
     await db.delete(agent)
 
 

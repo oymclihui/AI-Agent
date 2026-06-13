@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { LogIn } from "lucide-react";
+import { LogIn, ShieldAlert } from "lucide-react";
 import toast from "react-hot-toast";
-import { authApi } from "@/lib/api";
-import { readStoredAuth, useAuthStore } from "@/lib/authStore";
+import { authApi, setupApi } from "@/lib/api";
+import { useAuthStore } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { useClientAuth } from "@/hooks/useClientAuth";
@@ -21,10 +21,17 @@ export default function LoginPage() {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingSetup, setPendingSetup] = useState(false);
+
+  useEffect(() => {
+    setupApi.status()
+      .then(({ data }) => setPendingSetup(Boolean(data.setup_required)))
+      .catch(() => setPendingSetup(false));
+  }, []);
 
   useEffect(() => {
     if (!ready || !token) return;
-    router.replace("/");
+    router.replace("/chat");
   }, [ready, token, router]);
 
   const submit = async (e: React.FormEvent) => {
@@ -37,7 +44,7 @@ export default function LoginPage() {
     try {
       const { data } = await authApi.login(login.trim(), password);
       setAuth(data.access_token, data.user);
-      router.replace("/");
+      router.replace("/chat");
     } catch (err: unknown) {
       const ax = err as {
         response?: { data?: { detail?: unknown }; status?: number };
@@ -53,7 +60,7 @@ export default function LoginPage() {
           .map((d) => (typeof d === "object" && d && "msg" in d ? String((d as { msg: string }).msg) : String(d)))
           .join("; ");
       } else if (!ax.response) {
-        msg = lang === "zh" ? "无法连接服务器，请确认 Docker 服务已启动" : "Cannot reach server — check Docker is running";
+        msg = lang === "zh" ? "无法连接服务器，请确认服务已启动" : "Cannot reach server — check the server is running";
       } else if (ax.response.status === 502 || ax.response.status === 503) {
         msg = lang === "zh" ? "后端服务未就绪，请等待 30 秒后重试" : "Backend not ready — wait ~30s and retry";
       }
@@ -66,6 +73,19 @@ export default function LoginPage() {
   return (
     <div className="fixed inset-0 flex items-center justify-center theme-bg p-4">
       <div className="w-full max-w-md rounded-2xl border theme-border theme-surface p-8 shadow-lg">
+        {pendingSetup && (
+          <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+            <div className="mb-1 flex items-center gap-2 font-medium text-amber-700 dark:text-amber-300">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              {a.pendingSetupTitle[lang]}
+            </div>
+            <p className="theme-muted">{a.pendingSetupBody[lang]}</p>
+            <Link href="/setup" className="mt-3 inline-block text-xs font-medium text-blue-500 hover:underline">
+              {a.adminSetupLink[lang]}
+            </Link>
+          </div>
+        )}
+
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 font-bold text-white">
             AI
@@ -106,6 +126,9 @@ export default function LoginPage() {
             <LogIn className="h-4 w-4" />
             {loading ? a.loggingIn[lang] : a.login[lang]}
           </button>
+          {!pendingSetup && (
+            <p className="text-center text-xs theme-muted">{a.defaultHint[lang]}</p>
+          )}
         </form>
       </div>
     </div>

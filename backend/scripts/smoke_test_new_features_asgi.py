@@ -9,6 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from scripts._bootstrap import bootstrap_backend
+
+bootstrap_backend()
+
 import httpx
 from app.main import app
 

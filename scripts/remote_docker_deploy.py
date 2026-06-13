@@ -11,6 +11,8 @@ import paramiko
 from scp import SCPClient
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from deploy_env import deploy_db_host, deploy_host, deploy_milvus_uri, deploy_ollama_url  # noqa: E402
 REMOTE_DIR = os.environ.get("DEPLOY_REMOTE_DIR", "/opt/aiagnet-docker")
 EXCLUDE_DIRS = {
     ".git", ".venv", "node_modules", "__pycache__", ".next", ".next/cache",
@@ -101,12 +103,16 @@ def _write_remote_file(sftp: paramiko.SFTPClient, path: str, content: str) -> No
 
 
 def main() -> None:
-    host = os.environ.get("DEPLOY_HOST", "192.168.50.10")
+    host = deploy_host()
     user = os.environ.get("DEPLOY_USER", "ai-lab")
     password = os.environ.get("DEPLOY_PASSWORD")
     if not password:
         print("Set DEPLOY_PASSWORD environment variable", file=sys.stderr)
         sys.exit(1)
+
+    db_host = deploy_db_host()
+    ollama_url = deploy_ollama_url()
+    milvus_uri = deploy_milvus_uri()
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -155,21 +161,20 @@ def main() -> None:
     db_name = os.environ.get("DEPLOY_DB_NAME", "AI-AGENT")
     secret = os.environ.get("DEPLOY_SECRET_KEY", "ai-agent-docker-prod-secret-32chars!!")
     vector_type = os.environ.get("DEPLOY_VECTOR_STORE", "chroma")
-    ollama_url = os.environ.get("DEPLOY_OLLAMA_URL", "http://192.168.50.10:11434")
     llm_model = os.environ.get("DEPLOY_LLM_MODEL", "qwen3.6:35b")
 
     env_content = f"""APP_PUBLIC_URL=http://{host}
 ALLOWED_ORIGINS=["http://{host}","http://localhost","http://127.0.0.1"]
 HTTP_PORT=80
 SECRET_KEY={secret}
-DB_HOST=192.168.50.10
+DB_HOST={db_host}
 DB_PORT=5432
 DB_USER={db_user}
 DB_PASSWORD={db_pass}
 DB_NAME={db_name}
 DB_SSL=prefer
 VECTOR_STORE_TYPE={vector_type}
-MILVUS_URI=http://192.168.50.10:19530
+MILVUS_URI={milvus_uri}
 MILVUS_DB=default
 OLLAMA_BASE_URL={ollama_url}
 DEFAULT_LLM_PROVIDER=ollama

@@ -124,3 +124,53 @@ class SkillInjector:
             logger.debug("skill_injected", skill_id=skill.id, slug=skill.slug)
 
         return messages
+
+
+def merge_skill_bindings(
+    primary: list[Any] | None,
+    secondary: list[Any] | None,
+) -> list[dict[str, Any]]:
+    """Merge skill bindings; primary list order wins, dedupe by skill_id."""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _append(item: Any) -> None:
+        if isinstance(item, str):
+            sid = item
+            binding: dict[str, Any] = {"skill_id": sid, "always_load": True, "priority": 0}
+        elif isinstance(item, dict) and item.get("skill_id"):
+            sid = str(item["skill_id"])
+            binding = dict(item)
+            binding["skill_id"] = sid
+        else:
+            return
+        if sid in seen:
+            return
+        seen.add(sid)
+        merged.append(binding)
+
+    for config in (primary, secondary):
+        for item in config or []:
+            _append(item)
+    return merged
+
+
+async def collect_knowledge_base_ids(
+    db: AsyncSession,
+    conv_kb_ids: list[str] | None,
+    skills_config: list[Any] | None,
+) -> list[str]:
+    """Union conversation KB ids with those linked from bound skills."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for kid in conv_kb_ids or []:
+        if kid and kid not in seen:
+            seen.add(kid)
+            ordered.append(kid)
+    skills = await SkillInjector.load_skills(db, skills_config)
+    for skill in skills:
+        for kid in skill.knowledge_base_ids or []:
+            if kid and kid not in seen:
+                seen.add(kid)
+                ordered.append(kid)
+    return ordered

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers } from "lucide-react";
+import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
 import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi } from "@/lib/api";
@@ -12,7 +13,11 @@ import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 import { clsx } from "clsx";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { useVoiceOutput } from "@/hooks/useVoiceOutput";
+import { useIsMobile } from "@/hooks/useMediaQuery";
+import { useVoiceChatStore } from "@/lib/voiceChatStore";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import CapsuleScrollRow from "@/components/CapsuleScrollRow";
 import {
   CHAT_SCENES,
   capsulesForScene,
@@ -47,6 +52,8 @@ interface Conversation {
   id: string;
   title: string | null;
   agent_id: string | null;
+  knowledge_base_ids?: string[];
+  skills_config?: { skill_id: string; always_load?: boolean; priority?: number }[];
   model_config_id?: string | null;
   connector_id?: string | null;
   created_at: string;
@@ -147,6 +154,8 @@ export default function ChatPage() {
   const router = useRouter();
   const { lang } = useLangStore();
   const t = translations.chat;
+  const isMobile = useIsMobile();
+  const [convDrawerOpen, setConvDrawerOpen] = useState(false);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -200,23 +209,18 @@ export default function ChatPage() {
     setInput((prev) => (prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
   }, []);
 
+  const voiceDialog = useVoiceChatStore((s) => s.enabled);
+  const setVoiceDialog = useVoiceChatStore((s) => s.setEnabled);
+
+  const { speak, stop: stopSpeaking, isSpeaking } = useVoiceOutput(lang);
   const { isRecording, isProcessing, toggle: toggleVoice } = useVoiceInput(
     lang,
-    streaming,
+    streaming || isSpeaking,
   );
 
-  const handleVoiceClick = async () => {
-    try {
-      await toggleVoice(appendVoiceText);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "";
-      if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("notallowed")) {
-        toast.error(t.voiceDenied[lang]);
-      } else {
-        toast.error(msg ? `${t.voiceFailed[lang]}: ${msg}` : t.voiceFailed[lang]);
-      }
-    }
-  };
+  const sendRef = useRef<
+    (text?: string, opts?: { fromVoice?: boolean }) => Promise<string | null>
+  >(async () => null);
 
   const inspirePendingRef = useRef<InspirePendingPayload | null>(null);
 
@@ -296,6 +300,10 @@ export default function ChatPage() {
     const timer = setInterval(loadPendingActions, 8000);
     return () => clearInterval(timer);
   }, [loadPendingActions, activeConv]);
+
+  useEffect(() => {
+    if (isMobile && !activeConv) setConvDrawerOpen(true);
+  }, [isMobile, activeConv]);
 
   const approveDesktopTask = async (taskId: string) => {
     setDesktopConfirmBusy(taskId);
@@ -488,6 +496,13 @@ export default function ChatPage() {
       } else if (data.agent_id) {
         router.push("/agents");
       }
+      try {
+        const { data: conv } = await chatApi.getConversation(activeConv);
+        applyConversationContext(conv);
+        setConversations((list) => list.map((c) => (c.id === conv.id ? conv : c)));
+      } catch {
+        /* ignore */
+      }
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(detail ? `${t.depositConfirmFailed[lang]}: ${detail}` : t.depositConfirmFailed[lang]);
@@ -498,23 +513,52 @@ export default function ChatPage() {
 
   const onSkillChange = (skillId: string) => {
     setSelectedSkill(skillId);
-    if (!skillId) return;
-    const bound = agents.find((a) =>
-      (a.skills_config || []).some((b) => b.skill_id === skillId),
-    );
-    if (bound) setSelectedAgent(bound.id);
+    let agentId = selectedAgent;
+    if (skillId) {
+      const bound = agents.find((a) =>
+        (a.skills_config || []).some((b) => b.skill_id === skillId),
+      );
+      if (bound) {
+        agentId = bound.id;
+        setSelectedAgent(bound.id);
+      }
+    }
+    void syncContextToServer({
+      skills_config: skillId ? [{ skill_id: skillId, always_load: true, priority: 0 }] : [],
+      agent_id: agentId || null,
+    });
+  };
+
+  const onAgentChange = (agentId: string) => {
+    setSelectedAgent(agentId);
+    void syncContextToServer({ agent_id: agentId || null });
+  };
+
+  const onKbChange = (kbId: string) => {
+    setSelectedKbId(kbId);
+    void syncContextToServer({ knowledge_base_ids: kbId ? [kbId] : [] });
+  };
+
+  const onModelChange = (modelId: string) => {
+    setSelectedModelConfigId(modelId);
+    void syncContextToServer({ model_config_id: modelId || null });
   };
 
   const onConnectorChange = (connectorId: string) => {
     setSelectedConnector(connectorId);
-    if (!connectorId) return;
+    if (!connectorId) {
+      void syncContextToServer({ connector_id: null });
+      return;
+    }
     const preset = CHAT_CONNECTORS.find((c) => c.id === connectorId);
     if (!preset) return;
     if (!connectorMatchesMailbox(connectorId, mailboxSaved)) {
       setConnectorSetup(preset);
       setConnectorEmail(mailboxSaved?.email || "");
       setConnectorPassword("");
+      return;
     }
+    void syncContextToServer({ connector_id: connectorId });
   };
 
   const saveConnectorSetup = async () => {
@@ -524,6 +568,7 @@ export default function ChatPage() {
       return;
     }
     try {
+      const connectorId = connectorSetup.id;
       await authApi.saveMailbox({
         email: connectorEmail.trim() || undefined,
         mailbox_password: connectorPassword.trim() || undefined,
@@ -533,22 +578,71 @@ export default function ChatPage() {
       });
       const { data } = await authApi.getMailbox();
       if (data) setMailboxSaved(data);
-      setSelectedConnector(connectorSetup.id);
+      setSelectedConnector(connectorId);
       setConnectorSetup(null);
       setConnectorPassword("");
       toast.success(t.connectorSaved[lang]);
+      void syncContextToServer({ connector_id: connectorId });
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(detail ? `${t.connectorSaveFailed[lang]}: ${detail}` : t.connectorSaveFailed[lang]);
     }
   };
 
-  const conversationContext = () => ({
-    agent_id: selectedAgent || null,
-    knowledge_base_ids: selectedKbId ? [selectedKbId] : [],
-    model_config_id: selectedModelConfigId || null,
-    connector_id: selectedConnector || null,
-  });
+  const applyConversationContext = (conv: Conversation) => {
+    if (conv.agent_id) setSelectedAgent(conv.agent_id);
+    else setSelectedAgent("");
+    if (conv.model_config_id) setSelectedModelConfigId(conv.model_config_id);
+    if (conv.connector_id) setSelectedConnector(conv.connector_id);
+    const kbIds = conv.knowledge_base_ids || [];
+    setSelectedKbId(kbIds[0] || "");
+    const skillIds = (conv.skills_config || []).map((s) => s.skill_id);
+    setSelectedSkill(skillIds[0] || "");
+  };
+
+  const syncContextToServer = async (overrides?: {
+    agent_id?: string | null;
+    knowledge_base_ids?: string[];
+    skills_config?: { skill_id: string; always_load: boolean; priority: number }[];
+    model_config_id?: string | null;
+    connector_id?: string | null;
+  }) => {
+    if (!activeConv) return;
+    const skillId = overrides?.skills_config?.[0]?.skill_id ?? selectedSkill;
+    const kbIds = overrides?.knowledge_base_ids ?? (selectedKbId ? [selectedKbId] : []);
+    const payload = {
+      agent_id: overrides?.agent_id !== undefined ? overrides.agent_id : (selectedAgent || null),
+      knowledge_base_ids: kbIds,
+      skills_config: overrides?.skills_config ?? (
+        skillId ? [{ skill_id: skillId, always_load: true, priority: 0 }] : []
+      ),
+      model_config_id: overrides?.model_config_id !== undefined
+        ? overrides.model_config_id
+        : (selectedModelConfigId || null),
+      connector_id: overrides?.connector_id !== undefined
+        ? overrides.connector_id
+        : (selectedConnector || null),
+    };
+    try {
+      const { data } = await chatApi.updateContext(activeConv, payload);
+      setConversations((list) => list.map((c) => (c.id === data.id ? data : c)));
+    } catch {
+      /* non-blocking */
+    }
+  };
+
+  const conversationContext = () => {
+    const skills_config = selectedSkill
+      ? [{ skill_id: selectedSkill, always_load: true, priority: 0 }]
+      : [];
+    return {
+      agent_id: selectedAgent || null,
+      knowledge_base_ids: selectedKbId ? [selectedKbId] : [],
+      skills_config,
+      model_config_id: selectedModelConfigId || null,
+      connector_id: selectedConnector || null,
+    };
+  };
 
   const messageExtras = () => ({
     model_config_id: selectedModelConfigId || null,
@@ -579,6 +673,7 @@ export default function ChatPage() {
       setActiveConv(data.id);
       setMessages([]);
       setDepositOffer(null);
+      if (isMobile) setConvDrawerOpen(false);
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(detail ? `${t.createFailed[lang]}: ${detail}` : t.createFailed[lang]);
@@ -588,11 +683,17 @@ export default function ChatPage() {
   const loadMessages = async (convId: string) => {
     setActiveConv(convId);
     setDepositOffer(null);
-    const conv = conversations.find((c) => c.id === convId);
-    if (conv) {
-      if (conv.agent_id) setSelectedAgent(conv.agent_id);
-      if (conv.model_config_id) setSelectedModelConfigId(conv.model_config_id);
-      if (conv.connector_id) setSelectedConnector(conv.connector_id);
+    if (isMobile) setConvDrawerOpen(false);
+    try {
+      const { data: conv } = await chatApi.getConversation(convId);
+      applyConversationContext(conv);
+      setConversations((list) => {
+        const exists = list.some((c) => c.id === conv.id);
+        return exists ? list.map((c) => (c.id === conv.id ? conv : c)) : [conv, ...list];
+      });
+    } catch {
+      const conv = conversations.find((c) => c.id === convId);
+      if (conv) applyConversationContext(conv);
     }
     try {
       const { data } = await chatApi.getMessages(convId);
@@ -690,11 +791,14 @@ export default function ChatPage() {
     }
   };
 
-  const send = async (textOverride?: string) => {
+  const send = async (
+    textOverride?: string,
+    opts?: { fromVoice?: boolean },
+  ): Promise<string | null> => {
     const messageText = (textOverride ?? input).trim();
     const hasText = messageText.length > 0;
     const hasFiles = pendingFiles.length > 0;
-    if ((!hasText && !hasFiles) || streaming) return;
+    if ((!hasText && !hasFiles) || streaming) return null;
 
     let convId = activeConv;
     if (!convId) {
@@ -710,7 +814,7 @@ export default function ChatPage() {
       } catch (err: unknown) {
         const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
         toast.error(detail ? `${t.createFailed[lang]}: ${detail}` : t.createFailed[lang]);
-        return;
+        return null;
       }
     }
 
@@ -780,7 +884,7 @@ export default function ChatPage() {
         setStreaming(false);
         setStreamingContent("");
         setStreamingThinking("");
-        return;
+        return null;
       }
       try {
         if (filesToSend.length > 0) {
@@ -817,7 +921,7 @@ export default function ChatPage() {
         setStreaming(false);
         setStreamingContent("");
         setStreamingThinking("");
-        return;
+        return null;
       }
     }
 
@@ -829,6 +933,39 @@ export default function ChatPage() {
     if (convId && full.trim()) {
       void fetchDepositSuggestion(convId);
     }
+
+    if (opts?.fromVoice && voiceDialog && full.trim()) {
+      void speak(full);
+    }
+    return full.trim() ? full : null;
+  };
+
+  sendRef.current = send;
+
+  const handleVoiceClick = async () => {
+    if (isSpeaking) {
+      stopSpeaking();
+      return;
+    }
+    try {
+      await toggleVoice(async (text) => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        if (voiceDialog) {
+          stopSpeaking();
+          await sendRef.current(trimmed, { fromVoice: true });
+        } else {
+          appendVoiceText(trimmed);
+        }
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("notallowed")) {
+        toast.error(t.voiceDenied[lang]);
+      } else {
+        toast.error(msg ? `${t.voiceFailed[lang]}: ${msg}` : t.voiceFailed[lang]);
+      }
+    }
   };
 
   const handleQaChoice = (text: string) => {
@@ -838,9 +975,30 @@ export default function ChatPage() {
 
   const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming;
 
+  const activeConvTitle =
+    conversations.find((c) => c.id === activeConv)?.title?.trim() || t.untitled[lang];
+
   return (
-    <div className="flex h-screen">
-      <div className="theme-surface flex w-56 flex-col border-r theme-border">
+    <div className="chat-page flex h-full min-h-0">
+      {convDrawerOpen && isMobile && (
+        <button
+          type="button"
+          className="chat-mobile-backdrop md:hidden"
+          onClick={() => setConvDrawerOpen(false)}
+          aria-label={t.closeDrawer[lang]}
+        />
+      )}
+      <div
+        className={clsx(
+          "chat-conv-sidebar theme-surface flex flex-col border-r theme-border",
+          isMobile
+            ? clsx(
+                "chat-conv-drawer fixed inset-y-0 left-0 z-50 w-[min(18rem,88vw)] transition-transform duration-200 ease-out md:relative md:z-auto md:w-56 md:translate-x-0",
+                convDrawerOpen ? "translate-x-0" : "-translate-x-full",
+              )
+            : "relative w-56 shrink-0",
+        )}
+      >
         <div className="p-3">
           <button
             onClick={newConversation}
@@ -890,7 +1048,26 @@ export default function ChatPage() {
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="chat-mobile-header md:hidden">
+          <button
+            type="button"
+            onClick={() => setConvDrawerOpen(true)}
+            className="rounded-lg p-2 text-slate-400 hover:bg-[var(--hover)] hover:text-white"
+            aria-label={t.openConversations[lang]}
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <span className="chat-mobile-header-title">{activeConv ? activeConvTitle : t.conversations[lang]}</span>
+          <Link
+            href="/home"
+            className="rounded-lg p-2 text-slate-400 hover:bg-[var(--hover)] hover:text-white"
+            title={t.moreModules[lang]}
+            aria-label={t.moreModules[lang]}
+          >
+            <LayoutGrid className="h-5 w-5" />
+          </Link>
+        </div>
         {activeConv && messages.length > 0 && (
           <div className="chat-export-bar">
             <button
@@ -922,7 +1099,7 @@ export default function ChatPage() {
             </button>
           </div>
         )}
-        <div className="flex-1 space-y-4 overflow-y-auto p-6">
+        <div className="flex-1 space-y-4 overflow-y-auto p-3 md:p-6">
           {messages.length === 0 && !streaming && (
             <div className="flex h-full flex-col items-center justify-center px-4 text-center">
               <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-500/10">
@@ -936,7 +1113,12 @@ export default function ChatPage() {
                 options={sceneOptions}
                 className="mb-6"
               />
-              <div className="chat-capsule-scroll max-w-2xl w-full justify-center pb-1">
+              <CapsuleScrollRow
+                className="max-w-2xl w-full"
+                centerWhenFit
+                scrollLeftLabel={t.scrollLeft[lang]}
+                scrollRightLabel={t.scrollRight[lang]}
+              >
                 {visibleCapsules.map((cap) => (
                   <button
                     key={cap.id}
@@ -947,7 +1129,7 @@ export default function ChatPage() {
                     {lang === "zh" ? cap.label.zh : cap.label.en}
                   </button>
                 ))}
-              </div>
+              </CapsuleScrollRow>
             </div>
           )}
           {messages.map((msg) => (
@@ -1030,7 +1212,7 @@ export default function ChatPage() {
           <div ref={bottomRef} />
         </div>
 
-        <div className="border-t border-[#2d2d4e] bg-[#1a1a2e] p-4">
+        <div className="shrink-0 border-t border-[#2d2d4e] bg-[#1a1a2e] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:p-4">
           {messages.length > 0 && (
             <div className="mb-3 flex items-center gap-2">
               <SegmentedControl
@@ -1039,7 +1221,12 @@ export default function ChatPage() {
                 options={sceneOptions}
                 size="sm"
               />
-              <div className="chat-capsule-scroll flex-1 min-w-0">
+              <CapsuleScrollRow
+                className="flex-1 min-w-0"
+                fadeFrom="footer"
+                scrollLeftLabel={t.scrollLeft[lang]}
+                scrollRightLabel={t.scrollRight[lang]}
+              >
                 {visibleCapsules.map((cap) => (
                   <button
                     key={cap.id}
@@ -1050,8 +1237,7 @@ export default function ChatPage() {
                     {lang === "zh" ? cap.label.zh : cap.label.en}
                   </button>
                 ))}
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-slate-600" aria-hidden />
+              </CapsuleScrollRow>
             </div>
           )}
           {pendingFiles.length > 0 && (
@@ -1239,12 +1425,12 @@ export default function ChatPage() {
               )}
             </div>
           )}
-          <div className="rounded-xl border border-[#2d2d4e] bg-[#0d0d1a]">
+          <div className="chat-input-area rounded-xl border border-[#2d2d4e] bg-[#0d0d1a]">
             <div className="chat-input-toolbar">
               <Cpu className="h-3.5 w-3.5 text-slate-500" />
               <select
                 value={selectedModelConfigId}
-                onChange={(e) => setSelectedModelConfigId(e.target.value)}
+                onChange={(e) => onModelChange(e.target.value)}
                 disabled={streaming}
                 title={t.selectModel[lang]}
               >
@@ -1258,7 +1444,7 @@ export default function ChatPage() {
               <Bot className="h-3.5 w-3.5 text-slate-500" />
               <select
                 value={selectedAgent}
-                onChange={(e) => setSelectedAgent(e.target.value)}
+                onChange={(e) => onAgentChange(e.target.value)}
                 disabled={streaming}
                 title={t.selectAgent[lang]}
               >
@@ -1282,7 +1468,7 @@ export default function ChatPage() {
               <FolderOpen className="h-3.5 w-3.5 text-slate-500" />
               <select
                 value={selectedKbId}
-                onChange={(e) => setSelectedKbId(e.target.value)}
+                onChange={(e) => onKbChange(e.target.value)}
                 disabled={streaming}
                 title={t.selectWorkspace[lang]}
               >
@@ -1319,7 +1505,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={streaming || isRecording || isProcessing}
+              disabled={streaming || isRecording || isProcessing || isSpeaking}
               className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-blue-400 disabled:opacity-40"
               title={t.attachFiles[lang]}
             >
@@ -1327,22 +1513,48 @@ export default function ChatPage() {
             </button>
             <button
               type="button"
+              onClick={() => {
+                const next = !voiceDialog;
+                setVoiceDialog(next);
+                toast.success(next ? t.voiceDialogOn[lang] : t.voiceDialogOffOk[lang], { duration: 3500 });
+              }}
+              disabled={streaming}
+              className={clsx(
+                "rounded-lg p-2 transition-colors disabled:opacity-40",
+                voiceDialog
+                  ? "bg-emerald-500/20 text-emerald-400"
+                  : "text-slate-400 hover:bg-white/5 hover:text-emerald-400",
+              )}
+              title={voiceDialog ? t.voiceDialogOn[lang] : t.voiceDialogOff[lang]}
+            >
+              <Volume2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
               onClick={handleVoiceClick}
-              disabled={streaming || isProcessing}
+              disabled={(streaming && !voiceDialog) || (isProcessing && !isRecording)}
               className={clsx(
                 "rounded-lg p-2 transition-colors disabled:opacity-40",
                 isRecording
                   ? "bg-red-500/20 text-red-400 animate-pulse"
+                  : isSpeaking
+                    ? "bg-amber-500/20 text-amber-400 animate-pulse"
                   : isProcessing
                     ? "text-blue-400"
-                    : "text-slate-400 hover:bg-white/5 hover:text-blue-400",
+                    : voiceDialog
+                      ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                      : "text-slate-400 hover:bg-white/5 hover:text-blue-400",
               )}
               title={
-                isRecording
-                  ? t.voiceRecording[lang]
-                  : isProcessing
-                    ? t.voiceProcessing[lang]
-                    : t.voiceInput[lang]
+                isSpeaking
+                  ? t.voiceSpeaking[lang]
+                  : isRecording
+                    ? t.voiceRecording[lang]
+                    : isProcessing
+                      ? t.voiceProcessing[lang]
+                      : voiceDialog
+                        ? t.voiceDialogOn[lang]
+                        : t.voiceInput[lang]
               }
             >
               <Mic className="h-4 w-4" />
@@ -1362,7 +1574,7 @@ export default function ChatPage() {
             />
             <button
               onClick={() => void send()}
-              disabled={!canSend || isRecording || isProcessing}
+              disabled={!canSend || isRecording || isProcessing || isSpeaking}
               className="rounded-lg bg-blue-600 p-2 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
               <Send className="h-4 w-4" />
@@ -1376,11 +1588,15 @@ export default function ChatPage() {
             </p>
           )}
           <p className="mt-1.5 text-center text-xs text-slate-600">
-            {isRecording
-              ? t.voiceRecording[lang]
-              : isProcessing
-                ? t.voiceProcessing[lang]
-                : `${t.hint[lang]} · ${t.fileTypesHint[lang]}`}
+            {isSpeaking
+              ? t.voiceSpeaking[lang]
+              : isRecording
+                ? t.voiceRecording[lang]
+                : isProcessing
+                  ? t.voiceProcessing[lang]
+                  : voiceDialog
+                    ? t.voiceDialogOn[lang]
+                    : `${t.hint[lang]} · ${t.fileTypesHint[lang]}`}
           </p>
         </div>
       </div>

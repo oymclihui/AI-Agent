@@ -6,7 +6,11 @@ import sys
 
 import paramiko
 
-HOST = "192.168.50.10"
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from deploy_env import deploy_host  # noqa: E402
+
+HOST = deploy_host()
 USER = "ai-lab"
 
 CMDS = [
