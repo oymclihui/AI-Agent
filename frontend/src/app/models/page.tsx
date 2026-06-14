@@ -213,6 +213,7 @@ export default function ModelsPage() {
       provider: cfg.provider,
       model_id: cfg.model_id,
       label: `${cfg.name} (${cfg.provider}/${cfg.model_id})`,
+      base_url: cfg.base_url,
     })),
     [configs],
   );

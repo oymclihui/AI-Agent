@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.session import get_db
 from app.db.models import User, UserModelCredential, UserMailboxCredential, UserKmsCredential
@@ -396,32 +397,46 @@ async def upsert_my_model_key(
     db: AsyncSession = Depends(get_db),
 ):
     provider = payload.provider.strip().lower()
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider is required")
     model_id = payload.model_id.strip() if payload.model_id else None
-    result = await db.execute(
-        select(UserModelCredential).where(
-            UserModelCredential.user_id == user.id,
-            UserModelCredential.provider == provider,
-            UserModelCredential.model_id == model_id,
-        ).limit(1)
-    )
-    row = result.scalar_one_or_none()
-    if row:
-        row.api_key = payload.api_key.strip()
-        row.base_url = (payload.base_url or "").strip() or None
-        row.is_active = True
+    filters = [
+        UserModelCredential.user_id == user.id,
+        UserModelCredential.provider == provider,
+    ]
+    if model_id is None:
+        filters.append(UserModelCredential.model_id.is_(None))
     else:
-        row = UserModelCredential(
-            id=generate_uuid(),
-            user_id=user.id,
-            provider=provider,
-            model_id=model_id,
-            api_key=payload.api_key.strip(),
-            base_url=(payload.base_url or "").strip() or None,
-            is_active=True,
-        )
-        db.add(row)
-    await db.flush()
-    await db.refresh(row)
+        filters.append(UserModelCredential.model_id == model_id)
+
+    try:
+        result = await db.execute(select(UserModelCredential).where(*filters).limit(1))
+        row = result.scalar_one_or_none()
+        if row:
+            row.api_key = payload.api_key.strip()
+            row.base_url = (payload.base_url or "").strip() or None
+            row.is_active = True
+        else:
+            row = UserModelCredential(
+                id=generate_uuid(),
+                user_id=user.id,
+                provider=provider,
+                model_id=model_id,
+                api_key=payload.api_key.strip(),
+                base_url=(payload.base_url or "").strip() or None,
+                is_active=True,
+            )
+            db.add(row)
+        await db.flush()
+        await db.refresh(row)
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="数据库连接异常，请检查 PostgreSQL / VastBase 是否可用。",
+        ) from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=400, detail="保存模型 Key 失败，请检查输入后重试。") from exc
+
     from app.models_hub.router import ModelRouter
     ModelRouter.clear_cache()
     return _serialize_key(row)

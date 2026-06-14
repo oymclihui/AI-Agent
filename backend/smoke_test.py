@@ -88,6 +88,61 @@ def main() -> None:
         print("Cannot authenticate — aborting protected tests.")
         sys.exit(1)
 
+    reg_emp = f"smoke{suffix}"
+    reg_pwd = f"Smoke{suffix}!"
+    try:
+        r = client.post(
+            f"{API}/auth/register",
+            json={
+                "employee_no": reg_emp,
+                "display_name": f"Smoke User {suffix}",
+                "password": reg_pwd,
+            },
+        )
+        if r.status_code >= 400:
+            fail("auth/register", f"{r.status_code}: {_detail(r)}")
+        else:
+            ok("auth/register", reg_emp)
+            r2 = client.post(
+                f"{API}/auth/login",
+                json={"login": reg_emp, "password": reg_pwd},
+            )
+            r2.raise_for_status()
+            ok("auth/register-login", reg_emp)
+    except Exception as exc:
+        fail("auth/register", str(exc))
+
+    try:
+        r = client.get(f"{API}/setup/status")
+        r.raise_for_status()
+        setup_st = r.json()
+        ok("setup/status", f"setup_required={setup_st.get('setup_required')}")
+        r2 = client.get(f"{API}/setup/presets")
+        if r2.status_code == 403:
+            ok("setup/presets-guard", "403 without token")
+        elif setup_st.get("setup_required"):
+            ok("setup/presets-guard", f"{r2.status_code} while setup pending")
+        else:
+            fail("setup/presets-guard", f"unexpected {r2.status_code}: {_detail(r2)}")
+    except Exception as exc:
+        fail("setup/status", str(exc))
+
+    if ":8000" not in BASE:
+        try:
+            r = client.get(f"{BASE}/login", follow_redirects=True)
+            r.raise_for_status()
+            html = r.text
+            if "前往首次部署" in html or "administrator — open setup" in html:
+                fail("frontend/login-hidden-setup", "setup banner text still in login page")
+            else:
+                ok("frontend/login-hidden-setup", "no setup banner on login")
+            if "注册" in html or "Register" in html:
+                ok("frontend/login-register-ui", "register tab visible")
+            else:
+                skip("frontend/login-register-ui", "redeploy frontend to pick up register UI")
+        except Exception as exc:
+            fail("frontend/login", str(exc))
+
     # 3. Models
     try:
         r = client.get(f"{API}/models/available", headers=auth)
@@ -108,6 +163,33 @@ def main() -> None:
         )
     except Exception as exc:
         fail("models/configs", str(exc))
+
+    try:
+        r = client.get(f"{API}/auth/me/model-keys", headers=auth)
+        r.raise_for_status()
+        ok("auth/model-keys/list", f"{len(r.json())} keys")
+    except Exception as exc:
+        fail("auth/model-keys/list", str(exc))
+
+    try:
+        r = client.post(
+            f"{API}/auth/me/model-keys",
+            headers=auth,
+            json={
+                "provider": "openai",
+                "model_id": f"smoke-test-{suffix}",
+                "api_key": f"smoke-key-{suffix}",
+            },
+        )
+        if r.status_code >= 400:
+            fail("auth/model-keys/save", f"{r.status_code}: {_detail(r)}")
+        else:
+            key_id = r.json().get("id", "")
+            ok("auth/model-keys/save", f"id={key_id[:8] if key_id else '?'}")
+            if key_id:
+                client.delete(f"{API}/auth/me/model-keys/{key_id}", headers=auth)
+    except Exception as exc:
+        fail("auth/model-keys/save", str(exc))
 
     # 4. Tools
     try:

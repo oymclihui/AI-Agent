@@ -2,6 +2,35 @@ import axios from "axios";
 import type { DashboardOverview } from "@/lib/dashboardTypes";
 import { getAuthToken, useAuthStore } from "@/lib/authStore";
 
+/** Extract a human-readable message from an axios/API error. */
+export function formatApiError(err: unknown, fallback: string): string {
+  const ax = err as { response?: { data?: { detail?: unknown } }; message?: string };
+  const detail = ax.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (item && typeof item === "object" && "msg" in item) {
+          const loc = Array.isArray((item as { loc?: unknown }).loc)
+            ? (item as { loc: unknown[] }).loc.filter((p) => p !== "body").join(".")
+            : "";
+          const msg = String((item as { msg?: unknown }).msg ?? "");
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return typeof item === "string" ? item : "";
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  if (typeof detail === "object" && detail !== null) {
+    return JSON.stringify(detail);
+  }
+  if (ax.message && !ax.message.startsWith("Request failed with status code")) {
+    return ax.message;
+  }
+  return fallback;
+}
+
 /** Same-origin proxy via app/api/v1/[...path]/route.ts → BACKEND_URL (default 8000). */
 export const api = axios.create({
   baseURL: "/api/v1",
@@ -149,8 +178,8 @@ export const chatApi = {
   getMessages: (id: string) => api.get(`/chat/conversations/${id}/messages`),
   saveAsSkill: (id: string, data: object) => api.post(`/chat/conversations/${id}/save-as-skill`, data),
   saveToKnowledge: (id: string, data: object) => api.post(`/chat/conversations/${id}/save-to-knowledge`, data),
-  suggestDeposit: (id: string, lang: string) =>
-    api.post(`/chat/conversations/${id}/suggest-deposit`, { lang }, { timeout: 180000 }),
+  suggestDeposit: (id: string, lang: string, signal?: AbortSignal) =>
+    api.post(`/chat/conversations/${id}/suggest-deposit`, { lang }, { timeout: 180000, signal }),
   confirmDeposit: (id: string, data: object) =>
     api.post(`/chat/conversations/${id}/deposit/confirm`, data, { timeout: 180000 }),
   sendMessage: (id: string, data: object) => api.post(`/chat/conversations/${id}/messages`, data),

@@ -8,6 +8,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.core.chat.export import (
@@ -32,6 +33,16 @@ from app.db.models import (
 logger = structlog.get_logger(__name__)
 
 DepositType = Literal["skill", "knowledge", "agent", "employee"]
+
+
+def _set_conv_metadata(conv: Conversation, meta: dict[str, Any]) -> None:
+    conv.metadata_ = meta
+    flag_modified(conv, "metadata_")
+
+
+def _get_deposit_draft(meta: dict[str, Any]) -> dict[str, Any] | None:
+    draft = meta.get("deposit_draft")
+    return draft if isinstance(draft, dict) and draft.get("draft_id") else None
 
 
 def _append_skill_binding(conv: Conversation, skill_id: str) -> None:
@@ -231,9 +242,40 @@ JSON schema:
     draft_body = spec.get("draft") if isinstance(spec.get("draft"), dict) else {}
 
     if not worth or not suggestions:
-        meta = dict(conv.metadata_ or {})
-        meta.pop("deposit_draft", None)
-        conv.metadata_ = meta
+        # Do not clear an existing draft — a follow-up message may re-analyze as
+        # "not worth depositing" while the user still has the panel open.
+        existing = _get_deposit_draft(conv.metadata_ or {})
+        if existing:
+            draft_body = existing.get("draft") if isinstance(existing.get("draft"), dict) else {}
+            emp = draft_body.get("employee") if isinstance(draft_body.get("employee"), dict) else {}
+            skill = draft_body.get("skill") if isinstance(draft_body.get("skill"), dict) else {}
+            kb = draft_body.get("knowledge") if isinstance(draft_body.get("knowledge"), dict) else {}
+            agent = draft_body.get("agent") if isinstance(draft_body.get("agent"), dict) else {}
+            tasks_preview = []
+            for t in emp.get("tasks") or []:
+                if isinstance(t, dict):
+                    prompt = (t.get("task_config") or {}).get("prompt", "")
+                    tasks_preview.append({
+                        "name": t.get("name", ""),
+                        "schedule_type": t.get("schedule_type", "cron"),
+                        "cron_expression": t.get("cron_expression"),
+                        "schedule_label": t.get("schedule_label"),
+                        "prompt_preview": (prompt[:200] + "…") if len(prompt) > 200 else prompt,
+                    })
+            return {
+                "worth_deposit": True,
+                "draft_id": existing.get("draft_id"),
+                "suggestions": existing.get("suggestions") or [],
+                "draft": {
+                    "skill_title": skill.get("display_name"),
+                    "knowledge_title": kb.get("kb_name"),
+                    "agent_name": agent.get("name"),
+                    "employee_name": emp.get("name"),
+                    "employee_title": emp.get("title"),
+                    "employee_description": emp.get("description"),
+                    "tasks": tasks_preview,
+                },
+            }
         return {"worth_deposit": False, "suggestions": [], "draft_id": None, "draft": None}
 
     suggestion_types = {
@@ -254,7 +296,7 @@ JSON schema:
     }
     meta = dict(conv.metadata_ or {})
     meta["deposit_draft"] = draft_record
-    conv.metadata_ = meta
+    _set_conv_metadata(conv, meta)
     await db.flush()
 
     tasks_preview = []
@@ -416,8 +458,20 @@ async def confirm_conversation_deposit(
     skill_title: Optional[str] = None,
 ) -> dict[str, Any]:
     meta = conv.metadata_ or {}
-    draft_record = meta.get("deposit_draft")
-    if not draft_record or draft_record.get("draft_id") != draft_id:
+    draft_record = _get_deposit_draft(meta)
+    if not draft_record:
+        raise ValueError("Deposit draft not found or expired. Run suggest-deposit again.")
+
+    stored_id = str(draft_record.get("draft_id") or "")
+    if stored_id and stored_id != draft_id:
+        logger.warning(
+            "deposit_draft_id_mismatch",
+            client_draft_id=draft_id,
+            stored_draft_id=stored_id,
+            conversation_id=conv.id,
+        )
+        draft_id = stored_id
+    elif not stored_id:
         raise ValueError("Deposit draft not found or expired. Run suggest-deposit again.")
 
     draft_body = draft_record.get("draft") if isinstance(draft_record.get("draft"), dict) else {}
@@ -505,6 +559,6 @@ async def confirm_conversation_deposit(
         "types": list(selected),
         "result": {k: v for k, v in result.items() if v is not None},
     }
-    conv.metadata_ = meta
+    _set_conv_metadata(conv, meta)
     await db.flush()
     return result

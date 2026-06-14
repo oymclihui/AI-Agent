@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { KeyRound } from "lucide-react";
-import { authApi } from "@/lib/api";
+import { authApi, formatApiError } from "@/lib/api";
 import { translations } from "@/lib/i18n";
 
 export interface ModelKeyOption {
   provider: string;
   model_id: string;
   label: string;
+  base_url?: string | null;
 }
 
 interface ModelKeyRow {
@@ -36,6 +37,7 @@ export function ModelKeysPanel({ lang, modelOptions = [], className = "" }: Mode
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const loadKeys = useCallback(() => {
     authApi.listModelKeys()
@@ -65,18 +67,26 @@ export function ModelKeysPanel({ lang, modelOptions = [], className = "" }: Mode
       toast.error(lang === "zh" ? "请填写 API Key" : "Enter API Key");
       return;
     }
+    const trimmedBaseUrl = baseUrl.trim();
+    if (trimmedBaseUrl.length > 512) {
+      toast.error(lang === "zh" ? "Base URL 不能超过 512 个字符" : "Base URL must be at most 512 characters");
+      return;
+    }
+    setSaving(true);
     try {
       await authApi.saveModelKey({
         provider,
         model_id: modelId.trim() || null,
         api_key: apiKey.trim(),
-        base_url: baseUrl.trim() || null,
+        base_url: trimmedBaseUrl || null,
       });
       setApiKey("");
       toast.success(s.keySaved[lang]);
       loadKeys();
-    } catch {
-      toast.error(c.saveFailed[lang]);
+    } catch (err: unknown) {
+      toast.error(formatApiError(err, c.saveFailed[lang]));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -89,6 +99,7 @@ export function ModelKeysPanel({ lang, modelOptions = [], className = "" }: Mode
     if (opt) {
       setProvider(opt.provider);
       setModelId(opt.model_id);
+      if (opt.base_url) setBaseUrl(opt.base_url);
     }
   };
 
@@ -184,7 +195,9 @@ export function ModelKeysPanel({ lang, modelOptions = [], className = "" }: Mode
           />
         </label>
       </div>
-      <button type="button" onClick={() => void saveKey()} className="theme-btn-primary">{c.save[lang]}</button>
+      <button type="button" onClick={() => void saveKey()} disabled={saving} className="theme-btn-primary disabled:opacity-60">
+        {saving ? c.loading[lang] : c.save[lang]}
+      </button>
 
       {loading ? (
         <p className="mt-4 text-xs theme-muted">{c.loading[lang]}</p>

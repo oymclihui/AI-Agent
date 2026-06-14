@@ -90,6 +90,6 @@ Write-Host "  Install complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Next: double-click AI-AGENT.bat or run .\start_prod.ps1" -ForegroundColor Cyan
-Write-Host "  Admin setup: http://localhost:3000/setup (token in SETUP_TOKEN.admin.txt)" -ForegroundColor Cyan
+Write-Host "  Admin setup: http://localhost:3000/setup?token=<SETUP_TOKEN.admin.txt>" -ForegroundColor Cyan
 Write-Host ""
 Read-Host "Press Enter to exit"

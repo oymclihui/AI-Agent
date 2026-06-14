@@ -93,9 +93,9 @@ Only a PostgreSQL / VastBase database is required.
 
 1. Unzip to any folder, e.g. D:\AIAGNET
 2. Double-click AI-AGENT.bat
-3. Admin: open SETUP_TOKEN.admin.txt, visit http://localhost:3000/setup
-4. After DB init + restart, login admin / admin123
-5. End users: use accounts created by admin only
+3. Admin: open SETUP_TOKEN.admin.txt, visit http://localhost:3000/setup?token=<token>
+4. After DB init + restart, login admin / admin123 (or register with employee ID)
+5. End users: register on login page or use accounts created by admin
 
 URL: http://localhost:3000
 "@

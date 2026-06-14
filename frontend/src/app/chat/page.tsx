@@ -191,6 +191,8 @@ export default function ChatPage() {
   const [depositSelected, setDepositSelected] = useState<Set<string>>(new Set());
   const [depositDraftOnly, setDepositDraftOnly] = useState(false);
   const depositDismissedRef = useRef<Set<string>>(new Set());
+  const depositOfferRef = useRef<DepositOffer | null>(null);
+  const depositSuggestAbortRef = useRef<AbortController | null>(null);
   const [pendingDesktopTasks, setPendingDesktopTasks] = useState<Array<{
     id: string; demo_name?: string | null; action: string; instructions?: string | null;
   }>>([]);
@@ -429,12 +431,19 @@ export default function ChatPage() {
 
   const fetchDepositSuggestion = useCallback(async (convId: string, force = false) => {
     if (!force && depositDismissedRef.current.has(convId)) return;
+    depositSuggestAbortRef.current?.abort();
+    const controller = new AbortController();
+    depositSuggestAbortRef.current = controller;
     setDepositLoading(true);
     try {
-      const { data } = await chatApi.suggestDeposit(convId, lang);
+      const { data } = await chatApi.suggestDeposit(convId, lang, controller.signal);
+      if (controller.signal.aborted) return;
       if (!data.worth_deposit || !data.draft_id) {
         setDepositOffer(null);
-        toast(t.depositNoContent[lang], { icon: "ℹ️" });
+        depositOfferRef.current = null;
+        if (force) {
+          toast(t.depositNoContent[lang], { icon: "ℹ️" });
+        }
         return;
       }
       const offer = data as DepositOffer;
@@ -444,8 +453,11 @@ export default function ChatPage() {
       );
       setDepositDraftOnly(false);
       setDepositOffer(offer);
+      depositOfferRef.current = offer;
     } catch (err: unknown) {
+      if (controller.signal.aborted) return;
       setDepositOffer(null);
+      depositOfferRef.current = null;
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       const isTimeout = (err as { code?: string })?.code === "ECONNABORTED";
       toast.error(
@@ -463,6 +475,7 @@ export default function ChatPage() {
   const dismissDeposit = () => {
     if (activeConv) depositDismissedRef.current.add(activeConv);
     setDepositOffer(null);
+    depositOfferRef.current = null;
   };
 
   const toggleDepositType = (type: string) => {
@@ -485,6 +498,7 @@ export default function ChatPage() {
       });
       toast.success(t.depositConfirmOk[lang]);
       setDepositOffer(null);
+      depositOfferRef.current = null;
       depositDismissedRef.current.add(activeConv);
       if (data.employee_id) {
         toast(
@@ -517,7 +531,13 @@ export default function ChatPage() {
       }
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ? `${t.depositConfirmFailed[lang]}: ${detail}` : t.depositConfirmFailed[lang]);
+      const detailStr = typeof detail === "string" ? detail : "";
+      if (detailStr.includes("Deposit draft not found") || detailStr.includes("suggest-deposit again")) {
+        toast(t.depositDraftExpired[lang], { icon: "⚠️" });
+        await fetchDepositSuggestion(activeConv, true);
+        return;
+      }
+      toast.error(detailStr ? `${t.depositConfirmFailed[lang]}: ${detailStr}` : t.depositConfirmFailed[lang]);
     } finally {
       setDepositConfirming(false);
     }
@@ -958,7 +978,11 @@ export default function ChatPage() {
     setStreaming(false);
     void loadPendingActions();
     if (convId && full.trim()) {
-      void fetchDepositSuggestion(convId);
+      const hasOpenDeposit =
+        depositOfferRef.current?.draft_id && activeConv === convId;
+      if (!hasOpenDeposit) {
+        void fetchDepositSuggestion(convId);
+      }
     }
 
     if (opts?.fromVoice && voiceDialog && full.trim()) {

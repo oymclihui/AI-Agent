@@ -152,7 +152,7 @@ Do NOT share this file with end users.
 Setup token:
 $setupToken
 
-Open http://localhost:3000/setup and enter the token on first deploy.
+Open http://localhost:3000/setup?token=<your-token> on first deploy (token in SETUP_TOKEN.admin.txt).
 "@ | Set-Content -Path $adminTokenFile -Encoding UTF8
     }
 

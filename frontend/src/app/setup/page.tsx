@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Database, KeyRound, LogIn, Rocket, Server } from "lucide-react";
+import { Database, LogIn, Rocket, Server } from "lucide-react";
 import toast from "react-hot-toast";
 import { setupApi, SETUP_TOKEN_STORAGE_KEY } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
@@ -43,7 +43,6 @@ export default function SetupPage() {
   const [loading, setLoading] = useState(true);
   const [tokenRequired, setTokenRequired] = useState(true);
   const [setupToken, setSetupToken] = useState("");
-  const [tokenInput, setTokenInput] = useState("");
   const [tokenVerified, setTokenVerified] = useState(false);
   const [presets, setPresets] = useState<DbPreset[]>([]);
   const [done, setDone] = useState<{ login: string; password: string } | null>(null);
@@ -90,41 +89,28 @@ export default function SetupPage() {
         if (st.db_name) setDatabase(st.db_name);
         if (st.db_schema) setSchema(st.db_schema);
 
+        const urlToken = new URLSearchParams(window.location.search).get("token")?.trim() ?? "";
         const saved = sessionStorage.getItem(SETUP_TOKEN_STORAGE_KEY) ?? "";
+        const candidate = urlToken || saved;
+
         if (!st.setup_token_required) {
           setTokenVerified(true);
           return loadPresets("");
         }
-        if (saved) {
-          setSetupToken(saved);
-          return loadPresets(saved).catch(() => {
-            sessionStorage.removeItem(SETUP_TOKEN_STORAGE_KEY);
-            setSetupToken("");
-          });
+        if (!candidate) {
+          router.replace("/login");
+          return;
         }
-        return undefined;
+        setSetupToken(candidate);
+        return loadPresets(candidate).catch(() => {
+          sessionStorage.removeItem(SETUP_TOKEN_STORAGE_KEY);
+          setSetupToken("");
+          router.replace("/login");
+        });
       })
-      .catch(() => toast.error(s.loadFail[lang]))
+      .catch(() => router.replace("/login"))
       .finally(() => setLoading(false));
-  }, [lang, loadPresets, router, s.loadFail]);
-
-  const verifyToken = async () => {
-    const token = tokenInput.trim();
-    if (!token) {
-      toast.error(s.tokenInvalid[lang]);
-      return;
-    }
-    setBusy("token");
-    try {
-      await loadPresets(token);
-      setSetupToken(token);
-      toast.success(lang === "zh" ? "验证通过" : "Verified");
-    } catch {
-      toast.error(s.tokenInvalid[lang]);
-    } finally {
-      setBusy(null);
-    }
-  };
+  }, [loadPresets, router]);
 
   const onDriverChange = (value: string) => {
     setDriver(value);
@@ -236,38 +222,8 @@ export default function SetupPage() {
 
   if (!tokenVerified && tokenRequired) {
     return (
-      <div className="flex min-h-screen items-center justify-center theme-bg p-4">
-        <div className="w-full max-w-md rounded-2xl border theme-border theme-surface p-8 shadow-lg">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/15 text-blue-500">
-              <KeyRound className="h-6 w-6" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold theme-text">{s.tokenTitle[lang]}</h1>
-              <p className="text-sm theme-muted">{s.tokenSubtitle[lang]}</p>
-            </div>
-          </div>
-          <input
-            type="password"
-            className="theme-input mb-4 w-full rounded-lg px-3 py-2.5 text-sm"
-            placeholder={s.tokenLabel[lang]}
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && verifyToken()}
-          />
-          <button
-            type="button"
-            disabled={busy === "token"}
-            onClick={verifyToken}
-            className="theme-btn-primary mb-4 w-full rounded-lg py-2.5 text-sm font-medium"
-          >
-            {busy === "token" ? "…" : s.tokenSubmit[lang]}
-          </button>
-          <p className="text-xs theme-muted">{s.adminOnlyNote[lang]}</p>
-          <Link href="/login" className="mt-4 inline-block text-xs text-blue-500 hover:underline">
-            {s.goLogin[lang]}
-          </Link>
-        </div>
+      <div className="flex min-h-screen items-center justify-center theme-bg theme-muted text-sm">
+        {s.loading[lang]}
       </div>
     );
   }
