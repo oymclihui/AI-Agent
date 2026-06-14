@@ -32,6 +32,7 @@ from app.core.chat.storage import save_attachment_bytes, delete_conversation_upl
 from app.core.chat.suggestions import generate_attachment_questions
 from app.core.speech.transcriber import transcribe_audio
 from app.core.chat.connectors import build_connector_messages
+from app.core.chat.web_context import build_web_search_messages
 from app.core.chat.deposit import analyze_conversation_deposit, confirm_conversation_deposit as execute_deposit_confirm
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -143,6 +144,7 @@ def _merge_conversation_preferences(
     *,
     model_config_id: str | None = None,
     connector_id: str | None = None,
+    web_search_enabled: bool | None = None,
 ) -> None:
     meta = dict(conv.metadata_ or {})
     if model_config_id is not None:
@@ -155,7 +157,25 @@ def _merge_conversation_preferences(
             meta["connector_id"] = connector_id
         else:
             meta.pop("connector_id", None)
+    if web_search_enabled is not None:
+        if web_search_enabled:
+            meta["web_search_enabled"] = True
+        else:
+            meta.pop("web_search_enabled", None)
     conv.metadata_ = meta
+
+
+def _parse_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off", ""):
+        return False
+    return None
 
 
 async def _get_user_conversation(db: AsyncSession, conv_id: str, user: User) -> Conversation:
@@ -181,7 +201,7 @@ async def _remove_conversation(db: AsyncSession, conv: Conversation) -> None:
 
 async def _parse_request_body(
     request: Request,
-) -> tuple[str, bool, list[tuple[str, bytes]], str | None, str | None]:
+) -> tuple[str, bool, list[tuple[str, bytes]], str | None, str | None, bool | None]:
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type:
         form = await request.form()
@@ -189,6 +209,7 @@ async def _parse_request_body(
         stream = str(form.get("stream", "false")).lower() in ("true", "1", "yes")
         model_config_id = str(form.get("model_config_id") or "").strip() or None
         connector_id = str(form.get("connector_id") or "").strip() or None
+        web_search_enabled = _parse_bool(form.get("web_search_enabled"))
         file_items: list[tuple[str, bytes]] = []
         for item in form.getlist("files"):
             if hasattr(item, "read"):
@@ -201,7 +222,7 @@ async def _parse_request_body(
             raise HTTPException(status_code=400, detail="message or files required")
         if not message:
             message = "请分析以上附件内容，给出结构化的分析结论与建议。"
-        return message, stream, file_items, model_config_id, connector_id
+        return message, stream, file_items, model_config_id, connector_id, web_search_enabled
 
     try:
         payload = ChatRequest(**await request.json())
@@ -213,6 +234,7 @@ async def _parse_request_body(
         [],
         payload.model_config_id,
         payload.connector_id,
+        payload.web_search_enabled,
     )
 
 
@@ -341,6 +363,7 @@ async def create_conversation(
         conv,
         model_config_id=payload.model_config_id,
         connector_id=payload.connector_id,
+        web_search_enabled=payload.web_search_enabled,
     )
     db.add(conv)
     await db.flush()
@@ -399,11 +422,12 @@ async def update_conversation_context(
             s.model_dump() if hasattr(s, "model_dump") else s for s in raw_skills
         ]
 
-    if "model_config_id" in unset or "connector_id" in unset:
+    if "model_config_id" in unset or "connector_id" in unset or "web_search_enabled" in unset:
         _merge_conversation_preferences(
             conv,
             model_config_id=unset.get("model_config_id") if "model_config_id" in unset else None,
             connector_id=unset.get("connector_id") if "connector_id" in unset else None,
+            web_search_enabled=unset.get("web_search_enabled") if "web_search_enabled" in unset else None,
         )
 
     await db.flush()
@@ -463,16 +487,18 @@ async def send_message(
 ):
     conv = await _get_user_conversation(db, conv_id, user)
 
-    message, stream, file_items, model_config_id, connector_id = await _parse_request_body(request)
+    message, stream, file_items, model_config_id, connector_id, web_search_enabled = await _parse_request_body(request)
     _merge_conversation_preferences(
         conv,
         model_config_id=model_config_id,
         connector_id=connector_id,
+        web_search_enabled=web_search_enabled,
     )
     await db.flush()
 
     agent_definition, skill_messages, agent_model, retriever = await _resolve_effective_context(db, conv, user)
-    connector_id_active = (conv.metadata_ or {}).get("connector_id")
+    meta = conv.metadata_ or {}
+    connector_id_active = meta.get("connector_id")
     if connector_id_active:
         skill_messages = [
             *skill_messages,
@@ -482,6 +508,12 @@ async def send_message(
                 db=db,
             ),
         ]
+
+    web_search_active = bool(meta.get("web_search_enabled"))
+    web_search_used = False
+    if web_search_active:
+        web_messages, web_search_used = await build_web_search_messages(message)
+        skill_messages = [*skill_messages, *web_messages]
     memory = await _ensure_memory_loaded(conv_id, conv.memory_type, db)
     dialogue = DialogueManager(memory_manager=memory, knowledge_retriever=retriever)
 
@@ -569,6 +601,7 @@ async def send_message(
             "content": assistant_content,
             "token_usage": token_usage,
             "rag_used": False,
+            "web_search_used": web_search_used,
             "attachments": stored_attachments,
             "agent_tools_used": True,
             "harness_trace": harness_trace,
@@ -650,6 +683,7 @@ async def send_message(
         "thinking": thinking,
         "token_usage": result.get("token_usage"),
         "rag_used": result.get("rag_used", False),
+        "web_search_used": web_search_used,
         "attachments": stored_attachments,
     }
 

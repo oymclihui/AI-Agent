@@ -213,8 +213,10 @@ export default function EmployeesPage() {
       setShowCreate(false);
       setForm({ name: "", title: "", description: "", agent_id: agents[0]?.id ?? "", timezone: "Asia/Shanghai" });
       load();
-    } catch {
-      toast.error(lang === "zh" ? "创建失败" : "Create failed");
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      const msg = typeof detail === "string" ? detail : (lang === "zh" ? "创建失败" : "Create failed");
+      toast.error(msg);
     } finally {
       setSaving(false);
     }

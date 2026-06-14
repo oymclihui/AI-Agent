@@ -35,6 +35,36 @@
 
 ## 更新日志
 
+### 2026-06 — Windows 自包含交付包
+
+**一句话：** 解压 zip 后双击 `AI-AGENT.bat` 即可运行，**目标机无需安装 Python / Node.js**。
+
+| 能力 | 说明 |
+|------|------|
+| **内置运行时** | `runtime/python/`（Python 3.12 + 全部后端依赖）、`runtime/node/`（Node 20） |
+| **预装依赖** | 打包机已完成 `pip install` 与 `npm ci` + `next build`，含 `frontend/node_modules` 与 `.next` |
+| **一键启动** | `AI-AGENT.bat` → `launch.ps1` → `start_prod.ps1`；出错暂停并写入 `ai-agent-start.log` |
+| **首次配置** | 仅生成 `backend/.env`、`SETUP_TOKEN.admin.txt` 与数据目录；数据库在 `/setup` 向导配置 |
+| **仍须自备** | **PostgreSQL 或 VastBase**（业务库无法打入 zip） |
+
+**开发机打包：**
+
+```powershell
+cd E:\AIAGNET
+.\scripts\package_win_release.ps1
+```
+
+输出：`release\aiagnet-win-YYYYMMDD-HHmm\` 与同目录 `.zip`（体积较大，含完整运行时）。
+
+**目标机使用：**
+
+1. 完整解压 zip（勿在压缩包内直接双击）
+2. 双击 **`AI-AGENT.bat`**
+3. 管理员打开 **`SETUP_TOKEN.admin.txt`**，浏览器访问 `http://localhost:3000/setup` 配置数据库
+4. 重启后使用 `admin / admin123` 登录
+
+相关脚本：`win_runtime.ps1`、`launch.ps1`、`install.ps1`、`start_prod.ps1`；详见 [单位部署与首次登录](docs/单位部署与首次登录.md)。
+
 ### 2026-06 — 语音对话
 
 - **语音对话模式**：对话页扬声器按钮开启；麦克风录音 → 自动转写发送 → AI 回复 **浏览器 TTS 朗读**
@@ -109,8 +139,9 @@ python smoke_test.py                             # 全量冒烟
 ### 品牌与部署
 
 - 产品名称统一为 **AI-AGENT**（界面、API 文档、配置项 `APP_NAME`）
-- **远程 Linux 部署脚本**：`backend/scripts/remote_deploy.py` 等（systemd + Nginx）
-- 根目录 **`docker-compose.yml`** 初版（PG / Redis / Chroma / 前后端 / Nginx）；Ollama 需宿主机，一键流程待完善
+- **Windows 自包含交付包**：`scripts/package_win_release.ps1` → zip 内含 Python + Node + 依赖，双击 `AI-AGENT.bat` 启动（见 [Windows 交付包](#windows-交付包自包含)）
+- **远程 Linux 部署脚本**：`backend/scripts/remote_deploy.py`、`scripts/remote_docker_deploy.py`（Docker / systemd + Nginx）
+- 根目录 **`docker-compose.yml`** 初版（PG / Redis / Chroma / 前后端 / Nginx）；Ollama 需宿主机
 
 ### Model Hub 增强
 
@@ -405,6 +436,68 @@ docker run -p 3000:3000 aiagnet-frontend
 
 ---
 
+## Windows 交付包（自包含）
+
+适用于 **Windows 10/11 演示机、单位内网**：目标机**不必**单独安装 Python 或 Node.js。
+
+### 打包（开发机）
+
+```powershell
+cd E:\AIAGNET
+.\scripts\package_win_release.ps1
+```
+
+脚本会：
+
+1. 下载并缓存便携 **Python 3.12**、**Node 20**（`runtime/cache/`，仅打包机使用）
+2. 复制到交付目录 `runtime/python`、`runtime/node`
+3. 在交付目录内完成 `pip install -r backend/requirements.txt` 与 `npm ci` + `npm run build`
+4. 输出 `AI-AGENT.bat`、`launch.ps1`、`install.ps1`、`win_runtime.ps1` 等
+
+| 输出 | 说明 |
+|------|------|
+| `release\aiagnet-win-YYYYMMDD-HHmm\` | 解压即用目录 |
+| `release\aiagnet-win-YYYYMMDD-HHmm.zip` | 压缩包（约 1GB+，含完整运行时与依赖） |
+
+### 部署（目标机）
+
+| 项目 | 要求 |
+|------|------|
+| 操作系统 | Windows 10/11 |
+| Python / Node | **不需要**（已内置 `runtime/`） |
+| 数据库 | **PostgreSQL 或 VastBase**（在 `/setup` 配置） |
+
+**步骤：**
+
+1. **完整解压** zip（勿在压缩包内直接双击）
+2. 双击 **`AI-AGENT.bat`**
+3. 管理员查看 **`SETUP_TOKEN.admin.txt`**，访问 `http://localhost:3000/setup` 配置数据库
+4. 重启后登录 `admin / admin123`，在「设置 → 组织」创建用户
+
+**交付包目录结构（节选）：**
+
+```
+aiagnet-win-*/
+├── AI-AGENT.bat          # 双击启动
+├── launch.ps1            # 启动入口（环境检查）
+├── install.ps1           # 首次配置（交付包内为轻量模式）
+├── start_prod.ps1        # 生产模式启停
+├── win_runtime.ps1       # 内置运行时路径解析
+├── runtime/
+│   ├── python/           # Python 3.12 + 后端依赖
+│   └── node/             # Node 20
+├── backend/              # 后端源码
+└── frontend/
+    ├── .next/            # 预构建前端
+    └── node_modules/     # 前端依赖
+```
+
+**故障排查：** 若窗口一闪关闭，查看同目录 **`ai-agent-start.log`**。
+
+更多说明：[docs/单位部署与首次登录.md](docs/单位部署与首次登录.md) · [docs/Windows交付说明.md](docs/Windows交付说明.md)
+
+---
+
 ## 技能 · 知识 · 对话 · 沉淀整合
 
 > **状态：P0 已上线（2026-06）；P1/P2 规划中**  
@@ -665,6 +758,7 @@ sequenceDiagram
 - [x] 从对话「智能沉淀」与「保存为技能 / 知识库」
 - [x] 用户登录与按用户数据隔离（个人 API Key、30 天会话清理）
 - [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户 — `/settings/organization`）
+- [x] Windows 自包含交付包（`package_win_release.ps1`：内置 Python/Node/依赖 + `AI-AGENT.bat`）
 - [~] Docker Compose 一键部署（compose 文件已有，待完善）
 
 ---
@@ -682,4 +776,5 @@ sequenceDiagram
 - 用户操作手册：[docs/用户操作手册.md](docs/用户操作手册.md)
 - 技能 · 知识 · 沉淀整合：见上文 [技能 · 知识 · 对话 · 沉淀整合](#技能--知识--对话--沉淀整合)
 - 知识库增强规划：[docs/知识库增强规划.md](docs/知识库增强规划.md)
-- 桌面自动化与 Harness：[docs/桌面自动化与Harness说明.md](docs/桌面自动化与Harness说明.md)
+- 单位部署指南：[docs/单位部署与首次登录.md](docs/单位部署与首次登录.md)
+- Windows 交付说明：[docs/Windows交付说明.md](docs/Windows交付说明.md)

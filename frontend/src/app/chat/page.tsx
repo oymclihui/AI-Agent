@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid } from "lucide-react";
+import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
 import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi } from "@/lib/api";
@@ -56,6 +56,7 @@ interface Conversation {
   skills_config?: { skill_id: string; always_load?: boolean; priority?: number }[];
   model_config_id?: string | null;
   connector_id?: string | null;
+  web_search_enabled?: boolean;
   created_at: string;
 }
 interface ModelConfigOption {
@@ -174,6 +175,7 @@ export default function ChatPage() {
   const [selectedKbId, setSelectedKbId] = useState<string>("");
   const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>("");
   const [selectedConnector, setSelectedConnector] = useState<string>("");
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [modelConfigs, setModelConfigs] = useState<ModelConfigOption[]>([]);
   const [mailboxSaved, setMailboxSaved] = useState<{
     email: string;
@@ -432,6 +434,7 @@ export default function ChatPage() {
       const { data } = await chatApi.suggestDeposit(convId, lang);
       if (!data.worth_deposit || !data.draft_id) {
         setDepositOffer(null);
+        toast(t.depositNoContent[lang], { icon: "ℹ️" });
         return;
       }
       const offer = data as DepositOffer;
@@ -441,8 +444,17 @@ export default function ChatPage() {
       );
       setDepositDraftOnly(false);
       setDepositOffer(offer);
-    } catch {
+    } catch (err: unknown) {
       setDepositOffer(null);
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      const isTimeout = (err as { code?: string })?.code === "ECONNABORTED";
+      toast.error(
+        detail
+          ? `${t.depositSuggestFailed[lang]}: ${detail}`
+          : isTimeout
+            ? `${t.depositSuggestFailed[lang]} (${lang === "zh" ? "请求超时，分析耗时较长" : "timeout"})`
+            : t.depositSuggestFailed[lang],
+      );
     } finally {
       setDepositLoading(false);
     }
@@ -594,6 +606,8 @@ export default function ChatPage() {
     else setSelectedAgent("");
     if (conv.model_config_id) setSelectedModelConfigId(conv.model_config_id);
     if (conv.connector_id) setSelectedConnector(conv.connector_id);
+    else setSelectedConnector("");
+    setWebSearchEnabled(Boolean(conv.web_search_enabled));
     const kbIds = conv.knowledge_base_ids || [];
     setSelectedKbId(kbIds[0] || "");
     const skillIds = (conv.skills_config || []).map((s) => s.skill_id);
@@ -606,6 +620,7 @@ export default function ChatPage() {
     skills_config?: { skill_id: string; always_load: boolean; priority: number }[];
     model_config_id?: string | null;
     connector_id?: string | null;
+    web_search_enabled?: boolean;
   }) => {
     if (!activeConv) return;
     const skillId = overrides?.skills_config?.[0]?.skill_id ?? selectedSkill;
@@ -622,6 +637,9 @@ export default function ChatPage() {
       connector_id: overrides?.connector_id !== undefined
         ? overrides.connector_id
         : (selectedConnector || null),
+      web_search_enabled: overrides?.web_search_enabled !== undefined
+        ? overrides.web_search_enabled
+        : webSearchEnabled,
     };
     try {
       const { data } = await chatApi.updateContext(activeConv, payload);
@@ -641,12 +659,14 @@ export default function ChatPage() {
       skills_config,
       model_config_id: selectedModelConfigId || null,
       connector_id: selectedConnector || null,
+      web_search_enabled: webSearchEnabled,
     };
   };
 
   const messageExtras = () => ({
     model_config_id: selectedModelConfigId || null,
     connector_id: selectedConnector || null,
+    web_search_enabled: webSearchEnabled,
   });
 
   const contextSummary = () => {
@@ -660,6 +680,7 @@ export default function ChatPage() {
     const kb = knowledgeBases.find((k) => k.id === selectedKbId);
     if (kb) parts.push(kb.name);
     if (selectedConnector) parts.push(connectorLabel(selectedConnector, lang));
+    if (webSearchEnabled) parts.push(t.webSearch[lang]);
     return parts.join(" · ");
   };
 
@@ -842,6 +863,10 @@ export default function ChatPage() {
     setStreamingContent("");
     setStreamingThinking("");
 
+    if (webSearchEnabled) {
+      toast.loading(t.webSearchSearching[lang], { id: "web-search", duration: 8000 });
+    }
+
     let full = "";
     let thinking = "";
     let streamError = "";
@@ -876,6 +901,8 @@ export default function ChatPage() {
       }
     } catch (err: unknown) {
       streamError = err instanceof Error ? err.message : "";
+    } finally {
+      toast.dismiss("web-search");
     }
 
     if (!full) {
@@ -1493,6 +1520,26 @@ export default function ChatPage() {
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !webSearchEnabled;
+                  setWebSearchEnabled(next);
+                  toast.success(next ? t.webSearchOn[lang] : t.webSearchOff[lang], { duration: 3500 });
+                  void syncContextToServer({ web_search_enabled: next });
+                }}
+                disabled={streaming}
+                title={t.webSearch[lang]}
+                className={clsx(
+                  "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors",
+                  webSearchEnabled
+                    ? "bg-blue-600/20 text-blue-300 ring-1 ring-blue-500/40"
+                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200",
+                )}
+              >
+                <Globe className="h-3.5 w-3.5" />
+                <span>{t.webSearch[lang]}</span>
+              </button>
             </div>
             <div className="flex items-end gap-2 px-3 py-3">
             <input

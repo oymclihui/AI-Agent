@@ -89,7 +89,7 @@ export const authApi = {
 // ── Agents ──────────────────────────────────────────
 export const agentsApi = {
   list: (lang?: string) => api.get("/agents/", { params: lang ? { lang } : {} }),
-  create: (data: object) => api.post("/agents", data),
+  create: (data: object) => api.post("/agents/", data),
   get: (id: string) => api.get(`/agents/${id}`),
   update: (id: string, data: object) => api.patch(`/agents/${id}`, data),
   delete: (id: string) => api.delete(`/agents/${id}`),
@@ -114,7 +114,7 @@ export const agentsApi = {
 // ── Workflows ────────────────────────────────────────
 export const workflowsApi = {
   list: () => api.get("/workflows"),
-  create: (data: object) => api.post("/workflows", data),
+  create: (data: object) => api.post("/workflows/", data),
   get: (id: string) => api.get(`/workflows/${id}`),
   update: (id: string, data: object) => api.patch(`/workflows/${id}`, data),
   delete: (id: string) => api.delete(`/workflows/${id}`),
@@ -150,22 +150,30 @@ export const chatApi = {
   saveAsSkill: (id: string, data: object) => api.post(`/chat/conversations/${id}/save-as-skill`, data),
   saveToKnowledge: (id: string, data: object) => api.post(`/chat/conversations/${id}/save-to-knowledge`, data),
   suggestDeposit: (id: string, lang: string) =>
-    api.post(`/chat/conversations/${id}/suggest-deposit`, { lang }),
+    api.post(`/chat/conversations/${id}/suggest-deposit`, { lang }, { timeout: 180000 }),
   confirmDeposit: (id: string, data: object) =>
-    api.post(`/chat/conversations/${id}/deposit/confirm`, data),
+    api.post(`/chat/conversations/${id}/deposit/confirm`, data, { timeout: 180000 }),
   sendMessage: (id: string, data: object) => api.post(`/chat/conversations/${id}/messages`, data),
   sendMessageWithFiles: (
     id: string,
     message: string,
     files: File[],
     stream = true,
-    extras?: { model_config_id?: string | null; connector_id?: string | null },
+    extras?: {
+      model_config_id?: string | null;
+      connector_id?: string | null;
+      web_search_enabled?: boolean | null;
+    },
   ) => {
     const form = new FormData();
     form.append("message", message);
     form.append("stream", stream ? "true" : "false");
     form.append("model_config_id", extras?.model_config_id ?? "");
     form.append("connector_id", extras?.connector_id ?? "");
+    form.append(
+      "web_search_enabled",
+      extras?.web_search_enabled ? "true" : "false",
+    );
     for (const file of files) {
       form.append("files", file);
     }
@@ -218,7 +226,7 @@ export const chatApi = {
 // ── Knowledge Base ───────────────────────────────────
 export const knowledgeApi = {
   list: () => api.get("/knowledge"),
-  create: (data: object) => api.post("/knowledge", data),
+  create: (data: object) => api.post("/knowledge/", data),
   get: (id: string) => api.get(`/knowledge/${id}`),
   delete: (id: string) => api.delete(`/knowledge/${id}`),
   uploadDocument: (kbId: string, file: File) => {
@@ -285,7 +293,7 @@ export const harnessApi = {
 // ── Skills ────────────────────────────────────────────
 export const skillsApi = {
   list: (lang?: string) => api.get("/skills", { params: lang ? { lang } : {} }),
-  create: (data: object) => api.post("/skills", data),
+  create: (data: object) => api.post("/skills/", data),
   get: (id: string, opts?: { lang?: string; raw?: boolean }) =>
     api.get(`/skills/${id}`, { params: { ...(opts?.lang ? { lang: opts.lang } : {}), ...(opts?.raw ? { raw: true } : {}) } }),
   update: (id: string, data: object) => api.patch(`/skills/${id}`, data),
@@ -370,7 +378,7 @@ export const employeesApi = {
   list: () => api.get("/employees"),
   orgTree: (sync = true) => api.get("/employees/org-tree", { params: { sync } }),
   syncOrgTree: () => api.post("/employees/org-tree/sync"),
-  create: (data: object) => api.post("/employees", data),
+  create: (data: object) => api.post("/employees/", data),
   get: (id: string) => api.get(`/employees/${id}`),
   update: (id: string, data: object) => api.patch(`/employees/${id}`, data),
   delete: (id: string) => api.delete(`/employees/${id}`),

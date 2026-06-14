@@ -498,6 +498,13 @@ export const translations = {
     noModel:      { zh: "默认模型", en: "Default model" },
     selectConnector: { zh: "连接器", en: "Connector" },
     noConnector:  { zh: "无连接器", en: "No connector" },
+    webSearch: { zh: "联网", en: "Web" },
+    webSearchOn: {
+      zh: "已开启联网：发送前将先检索互联网再回答",
+      en: "Web search on: queries the internet before the model reply",
+    },
+    webSearchOff: { zh: "已关闭联网", en: "Web search off" },
+    webSearchSearching: { zh: "正在联网检索…", en: "Searching the web…" },
     connectorSetupTitle: { zh: "配置邮箱连接器", en: "Configure mail connector" },
     connectorSetupDesc: {
       zh: "填写邮箱与密码/授权码，保存后即可在对话中读取邮件。",
@@ -535,6 +542,8 @@ export const translations = {
     depositSchedule: { zh: "排班", en: "Schedule" },
     depositConfirmOk: { zh: "沉淀完成", en: "Deposit published" },
     depositConfirmFailed: { zh: "沉淀失败", en: "Deposit failed" },
+    depositSuggestFailed: { zh: "沉淀分析失败，请稍后重试", en: "Deposit analysis failed, try again" },
+    depositNoContent: { zh: "当前对话内容较少，暂无可沉淀项", en: "Not enough content to deposit yet" },
     depositEmployeeLink: { zh: "查看数字员工", en: "View employee" },
     depositAgentLink: { zh: "查看智能体", en: "View agent" },
   },

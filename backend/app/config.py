@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     STT_TIMEOUT_SECONDS: int = 120
     OPENAI_STT_MODEL: str = "whisper-1"
 
+    # Chat web search — domestic providers first (comma-separated)
+    # Supported: bing_cn, baidu, ddg
+    WEB_SEARCH_PROVIDERS: str = "bing_cn,baidu"
+    WEB_SEARCH_TIMEOUT: float = 10.0
+
     # Default model settings (fallback when DB has no reachable model yet)
     DEFAULT_LLM_PROVIDER: str = "ollama"
     DEFAULT_LLM_MODEL: str = "qwen3.6:35b"

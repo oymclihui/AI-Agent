@@ -63,7 +63,7 @@ Write-Host "  Backend dependencies installed." -ForegroundColor Green
 Write-Host "[5/7] Copying frontend + npm install + build..." -ForegroundColor Yellow
 $frontendDest = Join-Path $OutDir "frontend"
 New-Item -ItemType Directory -Path $frontendDest -Force | Out-Null
-robocopy "$Root\frontend" $frontendDest /E /XD .git "lowcode-designer\node_modules" "lowcode-designer\build" .next .next\cache `
+robocopy "$Root\frontend" $frontendDest /E /XD .git lowcode-designer "lowcode-designer\node_modules" "lowcode-designer\build" .next .next\cache `
     /XF .env .env.local /NFL /NDL /NJH /NJS /NC /NS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Frontend copy failed (robocopy $LASTEXITCODE)" }
 Install-BundledFrontendDeps $OutDir
@@ -72,7 +72,7 @@ Write-Host "  Frontend build OK." -ForegroundColor Green
 
 # ── Copy root scripts & docs ──────────────────────────────────
 Write-Host "[6/7] Adding launch scripts + first-run config..." -ForegroundColor Yellow
-foreach ($file in @("install.ps1", "start_prod.ps1", "launch.ps1", "AI-AGENT.bat", "win_runtime.ps1")) {
+foreach ($file in @("install.ps1", "start_prod.ps1", "launch.ps1", "AI-AGENT.bat", "win_runtime.ps1", "diagnose_local.ps1")) {
     Copy-Item (Join-Path $Root $file) (Join-Path $OutDir $file)
 }
 Initialize-ReleaseConfig $OutDir
@@ -105,7 +105,28 @@ $quickStart | Set-Content -Path (Join-Path $OutDir "单位部署.txt") -Encoding
 Write-Host "[7/7] Creating zip archive (may take a few minutes)..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Path (Join-Path $Root "release") -Force | Out-Null
 if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
-Compress-Archive -Path $OutDir -DestinationPath $ZipPath -CompressionLevel Optimal
+
+$lcDesigner = Join-Path $OutDir "frontend\lowcode-designer"
+if (Test-Path $lcDesigner) {
+    Write-Host "  Removing frontend\lowcode-designer (not needed in delivery)..." -ForegroundColor Gray
+    Remove-Item $lcDesigner -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$zipOk = $false
+if (Get-Command tar -ErrorAction SilentlyContinue) {
+    try {
+        $parent = Split-Path $OutDir -Parent
+        $leaf = Split-Path $OutDir -Leaf
+        Push-Location $parent
+        & tar.exe -a -c -f $ZipPath $leaf
+        if ($LASTEXITCODE -eq 0) { $zipOk = $true }
+    } finally {
+        Pop-Location
+    }
+}
+if (-not $zipOk) {
+    Compress-Archive -Path $OutDir -DestinationPath $ZipPath -CompressionLevel Optimal
+}
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green

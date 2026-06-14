@@ -84,12 +84,30 @@ def _sudo(ssh: paramiko.SSHClient, password: str, cmd: str, check: bool = True) 
 
 
 def _run(ssh: paramiko.SSHClient, cmd: str, check: bool = True) -> tuple[int, str, str]:
-    print(f"$ {cmd}")
+    import time
+
+    print(f"$ {cmd}", flush=True)
     _, stdout, stderr = ssh.exec_command(cmd, get_pty=True)
-    out = stdout.read().decode("utf-8", errors="replace")
+    chan = stdout.channel
+    out_parts: list[str] = []
+    while True:
+        if chan.recv_ready():
+            chunk = chan.recv(8192).decode("utf-8", errors="replace")
+            out_parts.append(chunk)
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+        elif chan.exit_status_ready():
+            break
+        else:
+            time.sleep(0.3)
+    while chan.recv_ready():
+        chunk = chan.recv(8192).decode("utf-8", errors="replace")
+        out_parts.append(chunk)
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+    out = "".join(out_parts)
     err = stderr.read().decode("utf-8", errors="replace")
-    code = stdout.channel.recv_exit_status()
-    _safe_print(out)
+    code = chan.recv_exit_status()
     if err.strip():
         _safe_print(err, stream=sys.stderr)
     if check and code != 0:

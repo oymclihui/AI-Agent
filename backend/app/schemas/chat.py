@@ -28,6 +28,7 @@ class ConversationCreate(BaseModel):
     system_prompt: Optional[str] = None
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
+    web_search_enabled: bool = False
 
 
 class ConversationContextUpdate(BaseModel):
@@ -36,6 +37,7 @@ class ConversationContextUpdate(BaseModel):
     skills_config: Optional[list[SkillBinding]] = None
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
+    web_search_enabled: Optional[bool] = None
 
 
 class ConversationResponse(BaseModel):
@@ -49,6 +51,7 @@ class ConversationResponse(BaseModel):
     is_active: bool
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
+    web_search_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -76,6 +79,7 @@ class ConversationResponse(BaseModel):
             is_active=conv.is_active,
             model_config_id=meta.get("model_config_id"),
             connector_id=meta.get("connector_id"),
+            web_search_enabled=bool(meta.get("web_search_enabled")),
             created_at=conv.created_at,
             updated_at=conv.updated_at,
         )
@@ -116,6 +120,7 @@ class ChatRequest(BaseModel):
     context: Optional[dict[str, Any]] = None
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
+    web_search_enabled: Optional[bool] = None
 
 
 class SuggestQuestionsResponse(BaseModel):

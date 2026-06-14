@@ -34,6 +34,23 @@ The frontend supports **Chinese / English** UI.
 
 ## Changelog
 
+### 2026-06 — Self-contained Windows release zip
+
+**Summary:** Unzip and double-click `AI-AGENT.bat` — **no Python or Node.js install** on the target PC.
+
+| Item | Details |
+|------|---------|
+| **Bundled runtime** | `runtime/python/` (Python 3.12 + backend deps), `runtime/node/` (Node 20) |
+| **Pre-built app** | `pip install`, `npm ci`, and `next build` run on the packager machine |
+| **Launch** | `AI-AGENT.bat` → `launch.ps1` → `start_prod.ps1`; errors logged to `ai-agent-start.log` |
+| **Still required** | **PostgreSQL or VastBase** (configured via `/setup`) |
+
+```powershell
+.\scripts\package_win_release.ps1   # output: release\aiagnet-win-YYYYMMDD-HHmm.zip
+```
+
+See [Windows delivery package](#windows-delivery-self-contained) and [README.md](README.md#windows-交付包自包含) (Chinese).
+
 ### 2026-06 — SessionContext integration (P0 shipped)
 
 **Summary:** What you pick in chat (skills / knowledge bases) is what runs at inference time and what gets linked after deposit.
@@ -284,6 +301,23 @@ cd frontend
 docker build -t aiagnet-frontend .
 docker run -p 3000:3000 aiagnet-frontend
 ```
+
+---
+
+## Windows delivery (self-contained)
+
+For **Windows 10/11 demo / intranet** machines — **Python and Node.js are bundled** inside the zip.
+
+| Step | Action |
+|------|--------|
+| Pack (dev) | `.\scripts\package_win_release.ps1` |
+| Deploy | Unzip fully → double-click **`AI-AGENT.bat`** |
+| First run | Open `SETUP_TOKEN.admin.txt` → `http://localhost:3000/setup` → configure PostgreSQL / VastBase |
+| Login | `admin / admin123` after DB init + restart |
+
+The zip includes `runtime/python`, `runtime/node`, `frontend/.next`, and `frontend/node_modules` (~1GB+). If the window closes immediately, check **`ai-agent-start.log`**.
+
+Docs: [docs/单位部署与首次登录.md](docs/单位部署与首次登录.md) · [docs/Windows交付说明.md](docs/Windows交付说明.md)
 
 ---
 

@@ -99,6 +99,22 @@ async def _load_transcript(db: AsyncSession, conv_id: str) -> tuple[list[Message
     return messages, _format_transcript(messages)
 
 
+def _ensure_agent_spec(draft_body: dict[str, Any], conv: Conversation) -> dict[str, Any]:
+    """Fill agent draft from employee / conversation when LLM omits the agent block."""
+    agent = draft_body.get("agent") if isinstance(draft_body.get("agent"), dict) else {}
+    if agent.get("name") and agent.get("role") and agent.get("goal"):
+        return agent
+    emp = draft_body.get("employee") if isinstance(draft_body.get("employee"), dict) else {}
+    return {
+        "name": agent.get("name") or emp.get("name") or conv.title or "对话智能体",
+        "role": agent.get("role") or emp.get("title") or "Assistant",
+        "goal": agent.get("goal") or emp.get("description") or conv.title or "协助完成对话中的工作任务",
+        "backstory": agent.get("backstory") or emp.get("description") or "",
+        "tools": agent.get("tools") or ["web_search", "datetime"],
+        "temperature": float(agent.get("temperature", 0.7)),
+    }
+
+
 async def analyze_conversation_deposit(
     db: AsyncSession,
     conv: Conversation,
@@ -220,6 +236,14 @@ JSON schema:
         conv.metadata_ = meta
         return {"worth_deposit": False, "suggestions": [], "draft_id": None, "draft": None}
 
+    suggestion_types = {
+        str(s.get("type"))
+        for s in suggestions
+        if isinstance(s, dict) and s.get("type")
+    }
+    if suggestion_types & {"employee", "agent"}:
+        draft_body["agent"] = _ensure_agent_spec(draft_body, conv)
+
     draft_id = generate_uuid()
     draft_record = {
         "draft_id": draft_id,
@@ -340,12 +364,16 @@ async def _create_employee_from_draft(
         st = str(raw_task.get("schedule_type") or "cron")
         cron = raw_task.get("cron_expression")
         interval = raw_task.get("interval_seconds")
-        validate_schedule(st, cron, interval)
         raw_type = str(raw_task.get("task_type") or "agent")
         try:
             task_type = EmployeeTaskType(raw_type)
         except ValueError:
             task_type = EmployeeTaskType.agent
+        try:
+            validate_schedule(st, cron, interval)
+        except ValueError as exc:
+            logger.warning("deposit_task_schedule_invalid", name=raw_task.get("name"), error=str(exc))
+            continue
         task = EmployeeScheduledTask(
             id=generate_uuid(),
             employee_id=emp.id,
@@ -443,9 +471,7 @@ async def confirm_conversation_deposit(
 
     agent_id: str | None = conv.agent_id
     if "agent" in selected:
-        agent_spec = draft_body.get("agent") if isinstance(draft_body.get("agent"), dict) else {}
-        if not agent_spec:
-            raise ValueError("Agent draft missing from deposit preview")
+        agent_spec = _ensure_agent_spec(draft_body, conv)
         agent = await _create_agent_from_draft(db, conv, user_id, agent_spec, all_skill_ids)
         agent_id = agent.id
         result["agent_id"] = agent.id

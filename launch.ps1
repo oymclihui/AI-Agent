@@ -29,6 +29,8 @@ try {
 
     if ($bundled) {
         Write-Log "[OK] Self-contained runtime (Python + Node bundled)" "Green"
+        Get-ChildItem -Path (Join-Path $Root "runtime") -Recurse -ErrorAction SilentlyContinue |
+            Unblock-File -ErrorAction SilentlyContinue
         if (-not (Test-BundledBackendReady $Root)) {
             Write-Log "[ERROR] Bundled backend packages missing" "Red"
             Wait-Exit

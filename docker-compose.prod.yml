@@ -63,6 +63,8 @@ services:
       DEFAULT_EMBEDDING_MODEL: ${DEFAULT_EMBEDDING_MODEL:-nomic-embed-text}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost","http://127.0.0.1"]}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost}
+      WEB_SEARCH_PROVIDERS: ${WEB_SEARCH_PROVIDERS:-bing_cn,baidu}
+      WEB_SEARCH_TIMEOUT: ${WEB_SEARCH_TIMEOUT:-10}
       LOCAL_UPLOADS_DIR: /app/uploads
     volumes:
       - backend_uploads:/app/uploads

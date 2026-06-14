@@ -40,8 +40,26 @@ if (-not (Test-Path $pythonExe)) {
 
 if (-not (Test-Path "$Root\frontend\.next\BUILD_ID")) {
     Write-Host "[ERROR] Frontend not built." -ForegroundColor Red
+    Write-Host "  Missing: frontend\.next\BUILD_ID" -ForegroundColor Yellow
+    Write-Host "  Use the full release zip from package_win_release.ps1, or run: cd frontend && npm run build" -ForegroundColor Yellow
     Read-Host "Press Enter to exit"
     exit 1
+}
+
+function Wait-HttpReady([string]$Url, [int]$TimeoutSec = 60, [string]$Label = "service") {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 4 -ErrorAction Stop
+            if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
+                Write-Log "[OK] $Label ready ($Url)"
+                return $true
+            }
+        } catch {}
+        Start-Sleep -Seconds 2
+    }
+    Write-Log "[WARN] $Label not ready after ${TimeoutSec}s ($Url)"
+    return $false
 }
 
 function Stop-PortListeners([string]$Port) {
@@ -91,7 +109,11 @@ try {
     }
     $backendJob = Start-Process -FilePath "powershell.exe" -ArgumentList $backendArgs -PassThru -WindowStyle Normal
 
-    Start-Sleep -Seconds 4
+    $backendOk = Wait-HttpReady "http://127.0.0.1:$BackendPort/health" 90 "Backend"
+    if (-not $backendOk) {
+        Write-Host "[ERROR] Backend did not start. Check the backend PowerShell window for errors." -ForegroundColor Red
+        Write-Host "  Common: database not configured — open http://localhost:$FrontendPort/setup after frontend starts." -ForegroundColor Yellow
+    }
 
     Write-Log "[2/2] Starting frontend on port $FrontendPort ..."
     $frontendDir = Join-Path $Root "frontend"
@@ -108,17 +130,28 @@ try {
     }
     $frontendJob = Start-Process -FilePath "powershell.exe" -ArgumentList $frontendArgs -PassThru -WindowStyle Normal
 
+    $frontendOk = Wait-HttpReady "http://127.0.0.1:$FrontendPort/login" 90 "Frontend"
+    if (-not $frontendOk) {
+        Write-Host "[ERROR] Frontend did not start. Check the frontend PowerShell window." -ForegroundColor Red
+        Write-Host "  Verify frontend\.next exists and runtime\node\node.exe is not blocked by antivirus." -ForegroundColor Yellow
+    }
+
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Green
     Write-Host "  AI-AGENT is running (production)" -ForegroundColor Green
     Write-Host "========================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Frontend:  http://localhost:$FrontendPort" -ForegroundColor Cyan
+    Write-Host "  Login:     http://localhost:$FrontendPort/login" -ForegroundColor Cyan
+    Write-Host "  Setup:     http://localhost:$FrontendPort/setup" -ForegroundColor Cyan
     Write-Host "  API Docs:  http://localhost:$BackendPort/docs" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Opening browser in 6 seconds..." -ForegroundColor Gray
-    Start-Sleep -Seconds 6
-    Start-Process "http://localhost:$FrontendPort"
+    if ($frontendOk) {
+        Write-Host "Opening browser ..." -ForegroundColor Gray
+        Start-Process "http://localhost:$FrontendPort/login"
+    } else {
+        Write-Host "Browser not opened automatically — fix frontend first, then visit /login" -ForegroundColor Yellow
+    }
 
     Write-Host ""
     Write-Host "Press Enter to stop backend and frontend..." -ForegroundColor Yellow
