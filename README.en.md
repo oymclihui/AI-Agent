@@ -16,7 +16,7 @@
 
 | Module | Description |
 |--------|-------------|
-| **Agents** | Create and manage agents; **admin-only delete** |
+| **Agents** | Create and manage agents; **private by default**; rename, **share to users/departments**, **org-wide publish**, copy shared agents; list scopes (mine / shared / org / platform / usable) |
 | **Skills** | Reusable SOPs, online library (~1123 templates), runtime injection; **admin-only delete** |
 | **Chat** | Multi-turn dialogue, **SessionContext** (agent/skill/KB/model/connector), **chat RAG**, smart deposit, attachments |
 | **Knowledge** | Document upload, vector search, multi-KB chat RAG; seeded platform roadmap with **content_sha256 re-index** |
@@ -51,6 +51,26 @@ The frontend supports **Chinese / English** UI.
 
 See [Windows delivery package](#windows-delivery-self-contained) and [README.md](README.md#windows-交付包自包含) (Chinese).
 
+### 2026-06 — Agent visibility & sharing
+
+**Summary:** New agents are private by default. Owners can rename, share to users/departments, publish org-wide, or copy agents shared with them.
+
+| Capability | Details |
+|------------|---------|
+| **Visibility** | `private` → `shared` (grants) → `org` → `platform` (bundled, no owner) |
+| **List scopes** | `?scope=mine\|shared\|org\|platform\|usable\|all`; chat & employees use `usable` |
+| **Sharing API** | Owner `GET/PUT /agents/{id}/sharing`; `GET /agents/share-targets` |
+| **Copy** | `POST /agents/{id}/copy` — duplicate shared/org/platform agent as private |
+| **Rename** | Owners can rename their agents (syncs `metadata.i18n.name`) |
+| **Delete** | Owners delete own agents; admins delete platform agents; skills still admin-only |
+| **Audit** | Share changes logged to `agent_share_audit_logs` |
+| **Migration** | Auto-adds `visibility`, `agent_shares`, `agent_share_audit_logs` on startup |
+
+```bash
+cd backend
+python scripts/smoke_test_agent_permissions.py   # 21 checks
+```
+
 ### 2026-06 — SessionContext integration (P0 shipped)
 
 **Summary:** What you pick in chat (skills / knowledge bases) is what runs at inference time and what gets linked after deposit.
@@ -62,7 +82,7 @@ See [Windows delivery package](#windows-delivery-self-contained) and [README.md]
 | **Chat RAG** | Multi-KB retrieval (including BYD KMS); streaming and non-streaming |
 | **Deposit linking** | Skill ↔ KB auto-bind on confirm; writes back to current conversation |
 | **Single extract** | `suggest-deposit` draft reused on confirm (LLM fallback if body missing) |
-| **Permissions** | Delete skills/agents — **admins only** |
+| **Permissions** | Delete skills — **admins only**; agents — **owners delete own**, admins manage platform |
 
 **New / updated APIs:** `GET/PATCH /chat/conversations/{id}/context`, enhanced `POST .../messages`.
 
@@ -108,6 +128,16 @@ Full spec: [README.md — 技能 · 知识 · 对话 · 沉淀整合](README.md#
 - **Remote Linux deploy scripts**: `backend/scripts/remote_deploy.py`, etc. (systemd + Nginx)
 - Root **`docker-compose.yml`** (PG / Redis / Chroma / backend / frontend / Nginx); Ollama on host — one-click flow still WIP
 
+### Agent visibility & sharing (Agents ACL)
+
+- New agents default to **`private`** — visible only to the owner
+- **Share dialog**: set `shared` with user/department grants, or `org` for org-wide access
+- **List tabs**: Mine / Shared with me / Organization / Platform / All (admin)
+- **Copy**: one-click private copy of shared, org, or platform agents
+- **Rename**: pencil icon on owned agents
+- **Access checks**: chat binding, employee agent picker, and `POST /agents/{id}/run` use `require_agent_use`
+- **Platform agents**: Agency library imports use `platform` visibility (`owner_id IS NULL`)
+
 ### Model Hub, Chat & Auth (latest)
 
 - **SessionContext**: chat toolbar selections persist and restore per conversation
@@ -115,7 +145,7 @@ Full spec: [README.md — 技能 · 知识 · 对话 · 沉淀整合](README.md#
 - **Smart deposit**: analyze → preview → confirm with Skill/KB/Agent/Employee linking
 - **Model Hub CRUD** with inference params and OpenAI-compatible Base URL
 - **Chat**: attachments → suggested questions; session delete / clear-all; 30-day retention
-- **Admin-only delete** for skills and agents
+- **Admin-only delete** for skills; **owners delete own agents**, admins manage platform agents
 - **Login**: JWT; per-user isolation; personal API keys in Settings
 
 See **[User Guide (中文)](docs/用户操作手册.md)** for step-by-step instructions.
@@ -147,6 +177,7 @@ AI-Agent/
 │   ├── app/
 │   │   ├── api/          # REST API routes
 │   │   ├── core/         # Agents, workflows, dialogue, tools, skills, employee scheduler
+│   │   │   ├── auth/         # JWT, agent ACL, user data scope
 │   │   │   ├── skills/       # Skill injection & online library
 │   │   │   ├── employees/    # Scheduled task runner & scheduler
 │   │   │   └── workflow/     # Engine, node catalog, NL generator
@@ -268,7 +299,7 @@ All endpoints are under `/api/v1`:
 
 | Path | Purpose |
 |------|---------|
-| `/agents` | Agent CRUD, execution, skill bindings |
+| `/agents` | Agent CRUD, **scoped lists**, **sharing**, **copy**, run; `GET/PUT /{id}/sharing`, `GET /share-targets` |
 | `/skills` | Skill CRUD; `/skills/library/*` online catalog browse & import |
 | `/employees` | Digital employees, **template import**, scheduled tasks, manual run, run history |
 | `/dashboard` | Operations screen overview & SSE stream |
@@ -347,7 +378,8 @@ Future plans are stored in the seeded knowledge base **「AI-AGENT 平台文档�
 - [x] P0: Deposit confirm linking + single LLM extract (draft reuse)
 - [ ] P1: Deposit bundles + `/deposits` workspace
 - [ ] P2: Hybrid RAG + citations + multi-source deposit hub
-- [x] Admin-only delete for skills/agents
+- [x] Delete permissions (skills: admin; agents: owner / platform admin)
+- [x] Agent visibility & sharing ACL (private / shared / org / platform, copy, rename, scopes)
 
 - [x] n8n-style workflow node catalog & designer
 - [x] Natural-language workflow / agent creation

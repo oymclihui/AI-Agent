@@ -16,7 +16,7 @@
 
 | 模块 | 说明 |
 |------|------|
-| **Agents** | 创建与管理智能体，支持角色、目标、工具绑定、技能绑定与自然语言生成；**删除仅限管理员** |
+| **Agents** | 创建与管理智能体；**默认私有**；支持重命名、**分享给用户/部门**、**组织内发布**、复制共享智能体；列表按 scope 筛选（我的 / 共享 / 组织 / 平台 / 可用） |
 | **Skills** | 可复用 SOP / 方法论沉淀（对齐 Cursor `SKILL.md`），在线技能库（约 1123 模板）、运行时注入；**删除仅限管理员** |
 | **Digital Employees** | **数字员工**：岗位化绑定智能体，Cron / 间隔定时任务；**从模板一键创建**（含 11 个 bundled 岗位模板） |
 | **Operations Screen** | 运营大屏 **`/screen`**：KPI、员工状态、任务趋势；**按组织 RBAC 过滤**；Dashboard API + SSE（需登录） |
@@ -71,6 +71,30 @@ cd E:\AIAGNET
 - **普通语音输入**：关闭语音对话模式时，识别结果仍填入输入框（原行为）
 - 依赖：`ollama pull whisper` 或 `OPENAI_API_KEY`；详见 [用户操作手册](docs/用户操作手册.md) 5.5 节
 
+### 2026-06 — 智能体可见性与分享
+
+**一句话：** 新建智能体默认私有；所有者可重命名、分享给指定用户/部门、组织内发布，或复制他人共享的智能体。
+
+| 能力 | 说明 |
+|------|------|
+| **可见性** | `private`（仅自己）→ `shared`（指定用户/部门）→ `org`（组织内）→ `platform`（平台预置，无 owner） |
+| **列表 scope** | `?scope=mine\|shared\|org\|platform\|usable\|all`；对话 / 数字员工选 Agent 时用 `usable` |
+| **分享设置** | 所有者 `GET/PUT /agents/{id}/sharing`；`GET /agents/share-targets` 搜索用户与部门 |
+| **复制** | `POST /agents/{id}/copy` — 将共享/组织/平台智能体复制为我的私有副本 |
+| **重命名** | 所有者可修改自己智能体名称（同步 `metadata.i18n.name`） |
+| **删除** | 所有者删自己的；管理员删平台智能体；技能删除仍仅限管理员 |
+| **审计** | 分享变更写入 `agent_share_audit_logs` |
+| **DB 迁移** | 启动时自动添加 `agents.visibility`、`agent_shares`、`agent_share_audit_logs` |
+
+**冒烟测试：**
+
+```bash
+cd backend
+python scripts/smoke_test_agent_permissions.py   # 21 项（注册用户 A/B/C + 分享/复制/org/删除）
+```
+
+**涉及模块：** `backend/app/core/auth/agent_access.py`、`backend/app/api/agents.py`、`frontend/src/app/agents/page.tsx`
+
 ### 2026-06 — SessionContext 整合（P0）
 
 **一句话：** 对话里选的技能 / 资料库 = 运行时真正生效 = 沉淀后自动互绑。
@@ -96,6 +120,7 @@ cd E:\AIAGNET
 
 ```bash
 cd backend
+python scripts/smoke_test_agent_permissions.py   # 智能体权限 ACL（21 项）
 python scripts/smoke_test_session_context.py   # SessionContext P0（ASGI 进程内，19 项）
 python scripts/smoke_test_new_features.py        # 需 uvicorn :8000
 python scripts/smoke_test_new_features_asgi.py   # 新特性 ASGI 快速检
@@ -160,9 +185,20 @@ python smoke_test.py                             # 全量冒烟
 - **会话管理**：单条删除、清空全部；超过 **30 天** 自动清理
 - **快捷导出**：存为技能 / 存入知识库（`save-as-skill` / `save-to-knowledge`）
 
+### 智能体可见性与分享（Agents ACL）
+
+- 新建智能体 **默认 `private`**，仅创建者可见、可用
+- **分享弹窗**：设为 `shared` 并授权用户或部门（含子部门匹配）；设为 `org` 后组织内所有人可见
+- **列表 Tab**：我的 / 共享给我 / 组织 / 平台 / 全部（管理员）
+- **复制**：对他人共享或组织/平台智能体一键复制为私有副本
+- **重命名**：我的智能体支持铅笔图标改名
+- **权限校验**：对话绑定、数字员工选 Agent、`POST /agents/{id}/run` 均走 `require_agent_use`
+- **平台智能体**：Agency 库导入、`owner_id IS NULL` 的预置 Agent 为 `platform` 可见性
+
 ### 技能与智能体权限
 
-- 技能、智能体 **删除按钮仅管理员可见**；非管理员调 API 返回 403
+- 技能 **删除仅限管理员**
+- 智能体：**所有者删自己的**；**平台智能体由管理员下架/删除**；非授权用户 GET 返回 404
 
 ### 用户登录、组织权限与数据隔离
 
@@ -202,7 +238,7 @@ AI-Agent/
 │   ├── app/
 │   │   ├── api/          # REST API 路由
 │   │   ├── core/         # 智能体、工作流、对话、工具、技能、数字员工调度
-│   │   │   ├── auth/         # JWT、密码、用户数据范围
+│   │   │   ├── auth/         # JWT、密码、用户数据范围、智能体 ACL
 │   │   │   ├── chat/         # 推荐问题、会话清理、导出技能/知识库、对话沉淀（deposit）
 │   │   │   ├── skills/       # 技能注入、在线技能库
 │   │   │   ├── employees/    # 定时任务调度与执行
@@ -402,7 +438,7 @@ cd frontend && cp .env.example .env.local
 | `/auth` | 登录、注册、`/me` 当前用户、**个人模型 Key** CRUD |
 | `/chat` | 对话、SessionContext（`GET/PATCH context`）、**对话 RAG**、推荐问题、智能沉淀、存为技能/知识库 |
 | `/skills` | 技能 CRUD（**删除需管理员**）；`/skills/library/*` 在线技能库 |
-| `/agents` | 智能体 CRUD（**删除需管理员**）、运行、技能绑定 |
+| `/agents` | 智能体 CRUD、**scope 列表**、**分享设置**、**复制**、运行；`GET/PUT /{id}/sharing`、`GET /share-targets` |
 | `/employees` | 数字员工 CRUD、**模板导入**、定时任务、手动执行、运行记录、调度状态 |
 | `/dashboard` | 运营大屏概览、SSE 流式刷新 |
 | `/workflows` | 工作流管理、执行、NL 生成、节点库、AI 配置助手 |
@@ -534,7 +570,7 @@ aiagnet-win-*/
 | 对话 RAG 未接线 | ✅ `MultiKnowledgeRetriever` 已接入 |
 | 沉淀 Skill/KB 不互绑 | ✅ confirm 自动关联并回写会话 |
 | 沉淀后上下文不一致 | ✅ Agent/Employee 与 conv 同步 |
-| 非管理员可删技能/智能体 | ✅ 前后端均限制为管理员 |
+| 非管理员可删技能/智能体 | ✅ 技能仍限管理员；智能体所有者可删自己的 |
 
 ### 核心概念：`SessionContext`（会话上下文包）
 
@@ -742,7 +778,8 @@ sequenceDiagram
 - [x] P0：沉淀 confirm 互绑（Skill ↔ KB ↔ Conv ↔ Agent/Employee）+ 一次 LLM 抽取（confirm 复用 suggest 草案，缺正文时 LLM 兜底）
 - [ ] P1：沉淀包表 + `/deposits` 工作台 + 发布前编辑 + 去重提示
 - [ ] P2：Hybrid RAG + Skill 关联 KB 降噪 + 逐句溯源 + 多来源统一沉淀
-- [x] 技能 / 智能体删除仅限管理员
+- [x] 技能 / 智能体删除权限（技能管理员；智能体所有者 / 平台管理员）
+- [x] 智能体可见性与分享 ACL（private / shared / org / platform、复制、重命名、scope 列表）
 
 - [x] n8n 风格工作流节点库与设计器
 - [x] 自然语言创建工作流 / 智能体
