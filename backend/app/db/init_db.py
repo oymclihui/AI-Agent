@@ -54,6 +54,7 @@ async def _migrate_schema(engine: AsyncEngine, schema: str | None = None) -> Non
         await conn.run_sync(lambda c: _add_user_isolation_columns(c, schema))
         await conn.run_sync(lambda c: _add_org_rbac_columns(c, schema))
         await conn.run_sync(lambda c: _add_users_admin_column(c, schema))
+        await conn.run_sync(lambda c: _add_agent_visibility_columns(c, schema))
         await conn.run_sync(_ensure_users_table)
         await conn.run_sync(_ensure_postgres_enum_values)
 
@@ -375,6 +376,31 @@ def _add_user_isolation_columns(sync_conn, schema: str | None = None) -> None:
             sync_conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_owner_id ON {table} (owner_id)"))
 
 
+def _add_agent_visibility_columns(sync_conn, schema: str | None = None) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("agents", schema=schema):
+        return
+    _add_column(
+        inspector,
+        sync_conn,
+        "agents",
+        "visibility",
+        "VARCHAR(32) DEFAULT 'private' NOT NULL",
+        schema=schema,
+    )
+    sync_conn.execute(
+        text("UPDATE agents SET visibility = 'platform' WHERE owner_id IS NULL")
+    )
+    sync_conn.execute(
+        text(
+            "UPDATE agents SET visibility = 'private' "
+            "WHERE owner_id IS NOT NULL AND (visibility IS NULL OR visibility = '' OR visibility = 'private')"
+        )
+    )
+
+
 async def seed_default_models(session) -> None:
     """Ensure canonical model configs exist and stay correct (idempotent)."""
     from sqlalchemy import select
@@ -469,7 +495,7 @@ async def seed_default_models(session) -> None:
 
 async def seed_template_agents(session) -> None:
     from sqlalchemy import select
-    from app.db.models import Agent, AgentStatus
+    from app.db.models import Agent, AgentStatus, AgentVisibility
     from app.config import settings
 
     result = await session.execute(select(Agent).limit(1))
@@ -532,6 +558,7 @@ async def seed_template_agents(session) -> None:
             tools_config=tpl.get("tools_config", []),
             memory_config={},
             status=AgentStatus.active,
+            visibility=AgentVisibility.platform.value,
             metadata_=merge_agent_metadata_i18n({"template": "seed"}, i18n) if i18n else {},
         ))
 
@@ -540,7 +567,7 @@ async def seed_template_agents(session) -> None:
 
 async def seed_desktop_operator_agent(session) -> None:
     from sqlalchemy import select
-    from app.db.models import Agent, AgentStatus
+    from app.db.models import Agent, AgentStatus, AgentVisibility
     from app.config import settings
     from app.core.agents.i18n import merge_agent_metadata_i18n
     from app.core.agents.seed_i18n import seed_agent_i18n
@@ -578,6 +605,7 @@ async def seed_desktop_operator_agent(session) -> None:
         tools_config=tpl.get("tools_config", []),
         memory_config={},
         status=AgentStatus.active,
+        visibility=AgentVisibility.platform.value,
         metadata_=merge_agent_metadata_i18n({"template": "desktop_automation"}, i18n) if i18n else {"template": "desktop_automation"},
     ))
     await session.commit()

@@ -128,6 +128,18 @@ function Build-BundledFrontend([string]$Root) {
 }
 
 function Initialize-ReleaseConfig([string]$Root) {
+    $writeEnv = Join-Path $Root "scripts\write_desktop_env.py"
+    $py = Get-BundledPythonPath $Root
+    if (-not (Test-Path $py)) {
+        $py = Join-Path $Root "backend\.venv\Scripts\python.exe"
+    }
+    if ((Test-Path $writeEnv) -and (Test-Path $py)) {
+        & $py $writeEnv --backend $Root
+        if ($LASTEXITCODE -ne 0) { throw "write_desktop_env --backend failed ($LASTEXITCODE)" }
+        return
+    }
+
+    # Fallback when scripts/python missing (dev tree without org config writer)
     Set-Location (Join-Path $Root "backend")
     if (-not (Test-Path ".env")) {
         Copy-Item ".env.example" ".env"

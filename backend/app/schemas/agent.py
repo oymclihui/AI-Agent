@@ -9,6 +9,24 @@ class AgentStatus(str, Enum):
     inactive = "inactive"
 
 
+class AgentVisibility(str, Enum):
+    private = "private"
+    shared = "shared"
+    org = "org"
+    platform = "platform"
+
+
+class AgentShareGranteeType(str, Enum):
+    user = "user"
+    department = "department"
+
+
+class AgentSharePermission(str, Enum):
+    view = "view"
+    use = "use"
+    manage = "manage"
+
+
 class ToolConfig(BaseModel):
     tool_name: str
     config: dict[str, Any] = {}
@@ -45,7 +63,7 @@ class AgentCreate(BaseModel):
 
 
 class AgentUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     role: Optional[str] = None
     goal: Optional[str] = None
     backstory: Optional[str] = None
@@ -61,11 +79,15 @@ class AgentUpdate(BaseModel):
 
 class AgentResponse(BaseModel):
     id: str
+    owner_id: Optional[str] = None
     name: str
     role: str
     goal: str
     backstory: Optional[str]
     status: AgentStatus
+    visibility: AgentVisibility = AgentVisibility.private
+    is_owner: bool = False
+    can_manage: bool = False
     llm_provider: Optional[str]
     llm_model: Optional[str]
     temperature: float
@@ -100,3 +122,46 @@ class AgentRunRequest(BaseModel):
     task: str = Field(..., min_length=1)
     context: Optional[dict[str, Any]] = None
     stream: bool = False
+
+
+class AgentShareGrantIn(BaseModel):
+    grantee_type: AgentShareGranteeType
+    grantee_id: str
+    permission: AgentSharePermission = AgentSharePermission.use
+
+
+class AgentShareGrantOut(BaseModel):
+    id: str
+    grantee_type: AgentShareGranteeType
+    grantee_id: str
+    grantee_name: str = ""
+    permission: AgentSharePermission
+
+
+class AgentSharingUpdate(BaseModel):
+    visibility: AgentVisibility
+    grants: list[AgentShareGrantIn] = Field(default_factory=list)
+
+
+class AgentSharingResponse(BaseModel):
+    visibility: AgentVisibility
+    grants: list[AgentShareGrantOut] = Field(default_factory=list)
+    is_owner: bool = False
+
+
+class ShareTargetUser(BaseModel):
+    id: str
+    display_name: str
+    employee_no: Optional[str] = None
+    primary_department_id: Optional[str] = None
+
+
+class ShareTargetDepartment(BaseModel):
+    id: str
+    name: str
+    path: str
+
+
+class AgentShareTargetsResponse(BaseModel):
+    users: list[ShareTargetUser] = Field(default_factory=list)
+    departments: list[ShareTargetDepartment] = Field(default_factory=list)

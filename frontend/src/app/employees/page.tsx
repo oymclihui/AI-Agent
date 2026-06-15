@@ -145,7 +145,7 @@ export default function EmployeesPage() {
 
   useEffect(() => {
     load();
-    agentsApi.list(lang).then(({ data }) => {
+    agentsApi.list(lang, "usable").then(({ data }) => {
       setAgents(data);
       if (data[0]) setForm((f) => ({ ...f, agent_id: data[0].id }));
     }).catch(() => {});

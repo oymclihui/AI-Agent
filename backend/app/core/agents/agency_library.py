@@ -27,7 +27,7 @@ from app.core.agents.i18n import merge_agent_metadata_i18n
 from app.core.skills.i18n import build_i18n_metadata, merge_skill_metadata_i18n
 from app.core.skills.library import parse_skill_md
 from app.db.base import generate_uuid
-from app.db.models import Agent, AgentStatus, Skill, SkillStatus
+from app.db.models import Agent, AgentStatus, AgentVisibility, Skill, SkillStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -620,6 +620,7 @@ class AgencyAgentLibrary:
                         {**(existing.metadata_ or {}), **meta_base},
                         i18n,
                     )
+                    existing.visibility = AgentVisibility.platform.value
                 else:
                     db.add(Agent(
                         id=generate_uuid(),
@@ -635,6 +636,7 @@ class AgencyAgentLibrary:
                         skills_config=[],
                         memory_config={},
                         status=AgentStatus.active,
+                        visibility=AgentVisibility.platform.value,
                         metadata_=merge_agent_metadata_i18n(meta_base, i18n),
                     ))
                 imported_agents.append(slug)
@@ -710,6 +712,7 @@ class AgencyAgentLibrary:
                 {**(existing.metadata_ or {}), **meta_base},
                 i18n,
             )
+            existing.visibility = AgentVisibility.platform
         else:
             db.add(Agent(
                 id=generate_uuid(),
@@ -725,6 +728,7 @@ class AgencyAgentLibrary:
                 skills_config=[],
                 memory_config={},
                 status=AgentStatus.active,
+                visibility=AgentVisibility.platform.value,
                 metadata_=merge_agent_metadata_i18n(meta_base, i18n),
             ))
         imported_agents.append(slug)

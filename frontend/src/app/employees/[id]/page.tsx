@@ -127,7 +127,7 @@ export default function EmployeeDetailPage() {
     workflowsApi.list()
       .then(({ data }) => setWorkflowOptions((data as WorkflowOption[]) || []))
       .catch(() => setWorkflowOptions([]));
-    agentsApi.list()
+    agentsApi.list(undefined, "usable")
       .then(({ data }) => setAgentOptions((data as AgentOption[]) || []))
       .catch(() => setAgentOptions([]));
   }, [showTaskModal]);

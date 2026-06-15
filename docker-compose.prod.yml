@@ -63,6 +63,11 @@ services:
       DEFAULT_EMBEDDING_MODEL: ${DEFAULT_EMBEDDING_MODEL:-nomic-embed-text}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost","http://127.0.0.1"]}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      BYD_DEEPSEEK_V4_FLASH_API_KEY: ${BYD_DEEPSEEK_V4_FLASH_API_KEY:-}
+      BYD_DEEPSEEK_V4_FLASH_BASE_URL: ${BYD_DEEPSEEK_V4_FLASH_BASE_URL:-https://eisapi.byd.com/open-api/1.0/llm/v1/deepseek-v4-flash}
+      BYD_QWEN35_35B_API_KEY: ${BYD_QWEN35_35B_API_KEY:-}
+      BYD_QWEN35_35B_BASE_URL: ${BYD_QWEN35_35B_BASE_URL:-https://eisapi.byd.com/open-api/1.0/llm/v1/qwen35-35b-a3b-fp8}
       WEB_SEARCH_PROVIDERS: ${WEB_SEARCH_PROVIDERS:-bing_cn,baidu}
       WEB_SEARCH_TIMEOUT: ${WEB_SEARCH_TIMEOUT:-10}
       LOCAL_UPLOADS_DIR: /app/uploads

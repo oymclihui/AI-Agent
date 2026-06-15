@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Cpu, CheckCircle, Server, Cloud, Plus, Pencil, Trash2, Star, Loader2, PlugZap, Search } from "lucide-react";
-import { modelsApi } from "@/lib/api";
+import { modelsApi, formatApiError } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { agentAvatarTone } from "@/lib/agentCatalog";
@@ -289,8 +289,7 @@ export default function ModelsPage() {
       setShowModal(false);
       load();
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ?? m.saveFailed[lang]);
+      toast.error(formatApiError(err, m.saveFailed[lang]));
     } finally {
       setSaving(false);
     }
@@ -303,8 +302,7 @@ export default function ModelsPage() {
       toast.success(m.deleteOk[lang]);
       load();
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ?? m.deleteFailed[lang]);
+      toast.error(formatApiError(err, m.deleteFailed[lang]));
     }
   };
 
@@ -314,8 +312,7 @@ export default function ModelsPage() {
       await modelsApi.setDefaultConfig(cfg.id);
       load();
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ?? m.saveFailed[lang]);
+      toast.error(formatApiError(err, m.saveFailed[lang]));
     }
   };
 

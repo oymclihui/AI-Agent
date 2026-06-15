@@ -117,13 +117,18 @@ export const authApi = {
 
 // ── Agents ──────────────────────────────────────────
 export const agentsApi = {
-  list: (lang?: string) => api.get("/agents/", { params: lang ? { lang } : {} }),
+  list: (lang?: string, scope?: string) =>
+    api.get("/agents/", { params: { ...(lang ? { lang } : {}), ...(scope ? { scope } : {}) } }),
   create: (data: object) => api.post("/agents/", data),
-  get: (id: string) => api.get(`/agents/${id}`),
+  get: (id: string, lang?: string) => api.get(`/agents/${id}`, { params: lang ? { lang } : {} }),
   update: (id: string, data: object) => api.patch(`/agents/${id}`, data),
   delete: (id: string) => api.delete(`/agents/${id}`),
   run: (id: string, data: object) => api.post(`/agents/${id}/run`, data),
   generate: (description: string) => api.post("/agents/generate", { description }),
+  copy: (id: string) => api.post(`/agents/${id}/copy`),
+  getSharing: (id: string) => api.get(`/agents/${id}/sharing`),
+  updateSharing: (id: string, data: object) => api.put(`/agents/${id}/sharing`, data),
+  shareTargets: (q?: string) => api.get("/agents/share-targets", { params: q ? { q } : {} }),
   seedTemplates: () => api.post("/agents/seed-templates"),
   librarySources: () => api.get("/agents/library/sources"),
   libraryCatalog: (params?: { source?: string; division?: string; q?: string }) =>

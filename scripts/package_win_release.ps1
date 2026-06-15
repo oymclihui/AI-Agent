@@ -85,19 +85,18 @@ $deployDoc = Join-Path $Root "docs\单位部署与首次登录.md"
 if (Test-Path $deployDoc) { Copy-Item $deployDoc (Join-Path $OutDir "docs\单位部署与首次登录.md") }
 
 $quickStart = @"
-AI-AGENT Windows delivery package (self-contained)
-==================================================
+AI-AGENT Windows delivery (self-contained, per-PC server)
+=========================================================
 
-No need to install Python or Node.js on the target PC.
-Only a PostgreSQL / VastBase database is required.
+Each PC runs frontend + backend locally. Shared database:
+  10.9.240.114:5432 / fian / schema aiagent
 
 1. Unzip to any folder, e.g. D:\AIAGNET
 2. Double-click AI-AGENT.bat
-3. Admin: open SETUP_TOKEN.admin.txt, visit http://localhost:3000/setup?token=<token>
-4. After DB init + restart, login admin / admin123 (or register with employee ID)
-5. End users: register on login page or use accounts created by admin
+3. Browser: http://localhost:3000
+4. Admin first-time: SETUP_TOKEN.admin.txt (if DB has no users yet)
 
-URL: http://localhost:3000
+No Python/Node install needed. Chroma vector data stays on each PC.
 "@
 $quickStart | Set-Content -Path (Join-Path $OutDir "单位部署.txt") -Encoding UTF8
 

@@ -20,6 +20,24 @@ class AgentStatus(str, enum.Enum):
     inactive = "inactive"
 
 
+class AgentVisibility(str, enum.Enum):
+    private = "private"
+    shared = "shared"
+    org = "org"
+    platform = "platform"
+
+
+class AgentShareGranteeType(str, enum.Enum):
+    user = "user"
+    department = "department"
+
+
+class AgentSharePermission(str, enum.Enum):
+    view = "view"
+    use = "use"
+    manage = "manage"
+
+
 class WorkflowStatus(str, enum.Enum):
     draft = "draft"
     active = "active"
@@ -207,6 +225,7 @@ class Agent(Base, TimestampMixin):
     goal = Column(Text, nullable=False)
     backstory = Column(Text, nullable=True)
     status = Column(SAEnum(AgentStatus), default=AgentStatus.active, nullable=False)
+    visibility = Column(String(32), default=AgentVisibility.private.value, nullable=False, index=True)
     llm_provider = Column(String(64), nullable=True)
     llm_model = Column(String(128), nullable=True)
     temperature = Column(Float, default=0.7)
@@ -217,6 +236,35 @@ class Agent(Base, TimestampMixin):
     metadata_ = Column("metadata", JSON, default=dict)
 
     executions = relationship("AgentExecution", back_populates="agent", cascade="all, delete-orphan")
+    shares = relationship("AgentShare", back_populates="agent", cascade="all, delete-orphan")
+    share_audit_logs = relationship(
+        "AgentShareAuditLog", back_populates="agent", cascade="all, delete-orphan"
+    )
+
+
+class AgentShare(Base, TimestampMixin):
+    __tablename__ = "agent_shares"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=False, index=True)
+    grantee_type = Column(SAEnum(AgentShareGranteeType), nullable=False)
+    grantee_id = Column(String(36), nullable=False, index=True)
+    permission = Column(SAEnum(AgentSharePermission), default=AgentSharePermission.use, nullable=False)
+    granted_by = Column(String(36), ForeignKey("users.id"), nullable=False)
+
+    agent = relationship("Agent", back_populates="shares")
+
+
+class AgentShareAuditLog(Base, TimestampMixin):
+    __tablename__ = "agent_share_audit_logs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    actor_user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=False, index=True)
+    action = Column(String(64), nullable=False)
+    details = Column(JSON, default=dict)
+
+    agent = relationship("Agent", back_populates="share_audit_logs")
 
 
 # ──────────────────────────────────────────────

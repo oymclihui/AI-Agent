@@ -19,6 +19,7 @@ from app.schemas.chat import (
 )
 from app.core.auth.deps import get_current_user
 from app.core.auth.scoping import scope_owned_only, assert_mutable_by_user
+from app.core.auth.agent_access import require_agent_use
 from app.core.chat.cleanup import cleanup_stale_conversations
 from app.core.chat.export import export_conversation_to_skill, export_conversation_to_knowledge
 from app.core.agents.base import AgentDefinition, Task
@@ -257,12 +258,17 @@ async def _parse_suggest_form(request: Request) -> tuple[str, str | None, list[t
     return lang, agent_id, file_items
 
 
-async def _agent_definition_from_id(db: AsyncSession, agent_id: str | None):
+async def _agent_definition_from_id(db: AsyncSession, agent_id: str | None, user: User | None = None):
     if not agent_id:
         return None
     agent_model = await db.get(AgentModel, agent_id)
     if not agent_model:
         return None
+    if user is not None:
+        try:
+            await require_agent_use(db, agent_model, user)
+        except HTTPException:
+            return None
     return AgentDefinition(
         id=agent_model.id,
         name=agent_model.name,
@@ -284,7 +290,7 @@ async def suggest_questions(
     """Analyze uploaded attachments and return 3 suggested user questions."""
     lang, agent_id, file_items = await _parse_suggest_form(request)
     attachment_context, attachment_meta = await build_attachment_context(file_items)
-    agent_definition = await _agent_definition_from_id(db, agent_id)
+    agent_definition = await _agent_definition_from_id(db, agent_id, user)
     result = await generate_attachment_questions(
         attachment_context,
         attachment_meta,
@@ -340,8 +346,7 @@ async def create_conversation(
 ):
     if payload.agent_id:
         agent = await db.get(AgentModel, payload.agent_id)
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"Agent not found: {payload.agent_id}")
+        await require_agent_use(db, agent, user)
     if payload.workflow_id:
         from app.db.models import Workflow as WorkflowModel
         wf = await db.get(WorkflowModel, payload.workflow_id)
@@ -409,8 +414,7 @@ async def update_conversation_context(
         agent_id = unset["agent_id"]
         if agent_id:
             agent = await db.get(AgentModel, agent_id)
-            if not agent:
-                raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+            await require_agent_use(db, agent, user)
         conv.agent_id = agent_id or None
 
     if "knowledge_base_ids" in unset:

@@ -105,6 +105,22 @@ def localize_catalog_agent(item: dict[str, Any], lang: str | None) -> dict[str, 
     return out
 
 
+def apply_agent_name_update(agent: Agent, new_name: str) -> None:
+    """Persist a user-edited display name on the agent row and i18n metadata."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    name = new_name.strip()
+    if not name:
+        return
+    agent.name = name
+    meta = dict(agent.metadata_ or {})
+    i18n = dict(meta["i18n"]) if isinstance(meta.get("i18n"), dict) else {}
+    i18n["name"] = {"zh": name, "en": name}
+    meta["i18n"] = i18n
+    agent.metadata_ = meta
+    flag_modified(agent, "metadata_")
+
+
 def agent_to_response_dict(agent: Agent, lang: str | None = None, *, localize: bool = True) -> dict[str, Any]:
     if localize:
         name, role, goal, backstory = localize_agent_text(agent, lang)
@@ -126,6 +142,12 @@ def agent_to_response_dict(agent: Agent, lang: str | None = None, *, localize: b
         "skills_config": agent.skills_config or [],
         "memory_config": agent.memory_config or {},
         "metadata": agent.metadata_ or {},
+        "owner_id": agent.owner_id,
+        "visibility": (
+            agent.visibility
+            if isinstance(agent.visibility, str)
+            else (agent.visibility.value if agent.visibility else "private")
+        ),
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }

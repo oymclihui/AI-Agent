@@ -5,12 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Plus, Bot, Trash2, Sparkles, PenLine, Loader2, RefreshCw,
-  Search, Layers,
+  Search, Layers, Share2, Copy,
 } from "lucide-react";
 import { agentsApi, modelsApi, skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { useAuthStore } from "@/lib/authStore";
-import { canDeleteAgentsOrSkills } from "@/lib/permissions";
+import { canDeleteAgent } from "@/lib/permissions";
 import { translations } from "@/lib/i18n";
 import toast from "react-hot-toast";
 import {
@@ -27,6 +27,10 @@ import CapsuleScrollRow from "@/components/CapsuleScrollRow";
 
 interface Agent {
   id: string; name: string; role: string; goal: string;
+  owner_id?: string | null;
+  visibility?: "private" | "shared" | "org" | "platform";
+  is_owner?: boolean;
+  can_manage?: boolean;
   status: string; llm_provider: string | null; llm_model: string | null;
   temperature: number; tools_config: Array<{ tool_name: string }> | null;
   skills_config?: Array<{ skill_id: string }> | null;
@@ -40,11 +44,16 @@ interface ModelOption { provider: string; model_id: string; is_default?: boolean
 
 const BUILTIN_TOOLS = ["web_search", "calculator", "http_request", "datetime", "desktop_list_demos", "desktop_replay", "desktop_capture"];
 
+type AgentListScope = "usable" | "mine" | "shared" | "org" | "platform";
+
+interface ShareTargetUser { id: string; display_name: string; employee_no?: string | null; }
+interface ShareTargetDepartment { id: string; name: string; path: string; }
+interface ShareGrant { grantee_type: "user" | "department"; grantee_id: string; permission: "use"; grantee_name?: string; }
+
 export default function AgentsPage() {
   const router = useRouter();
   const { lang } = useLangStore();
   const user = useAuthStore((s) => s.user);
-  const canDelete = canDeleteAgentsOrSkills(user);
   const a = translations.agents;
   const c = translations.common;
   const chatT = translations.chat;
@@ -61,6 +70,18 @@ export default function AgentsPage() {
   const [showSkillEdit, setShowSkillEdit] = useState<string | null>(null);
   const [skillEditIds, setSkillEditIds] = useState<string[]>([]);
   const [savingSkills, setSavingSkills] = useState(false);
+  const [listScope, setListScope] = useState<AgentListScope>("usable");
+  const [showShare, setShowShare] = useState<string | null>(null);
+  const [shareVisibility, setShareVisibility] = useState<"private" | "shared" | "org">("private");
+  const [shareUserIds, setShareUserIds] = useState<string[]>([]);
+  const [shareDeptIds, setShareDeptIds] = useState<string[]>([]);
+  const [shareUsers, setShareUsers] = useState<ShareTargetUser[]>([]);
+  const [shareDepts, setShareDepts] = useState<ShareTargetDepartment[]>([]);
+  const [shareSearch, setShareSearch] = useState("");
+  const [savingShare, setSavingShare] = useState(false);
+  const [showNameEdit, setShowNameEdit] = useState<string | null>(null);
+  const [nameEditValue, setNameEditValue] = useState("");
+  const [savingName, setSavingName] = useState(false);
   const [mode, setMode] = useState<"nl" | "manual">("nl");
   const [nlText, setNlText] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -75,7 +96,7 @@ export default function AgentsPage() {
 
   const load = async () => {
     try {
-      const { data } = await agentsApi.list(lang);
+      const { data } = await agentsApi.list(lang, listScope);
       setAgents(data);
     } catch {
       toast.error(lang === "zh" ? "加载失败" : "Failed to load agents");
@@ -100,7 +121,7 @@ export default function AgentsPage() {
     } catch { /* optional */ }
   };
 
-  useEffect(() => { load(); loadModels(); }, [lang]);
+  useEffect(() => { setLoading(true); load(); loadModels(); }, [lang, listScope]);
   useEffect(() => { loadSkills(); }, [lang]);
 
   const openCreate = () => {
@@ -141,20 +162,86 @@ export default function AgentsPage() {
     }
   };
 
-  const deleteAgent = async (id: string) => {
-    if (!canDelete) {
+  const deleteAgent = async (agent: Agent) => {
+    if (!canDeleteAgent(user, agent)) {
       toast.error(a.deleteForbidden[lang]);
       return;
     }
     if (!confirm(a.deleteConfirm[lang])) return;
     try {
-      await agentsApi.delete(id);
+      await agentsApi.delete(agent.id);
       toast.success(lang === "zh" ? "已删除" : "Deleted");
       load();
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (status === 403) toast.error(a.deleteForbidden[lang]);
       else toast.error(lang === "zh" ? "删除失败" : "Delete failed");
+    }
+  };
+
+  const copyAgent = async (agentId: string) => {
+    try {
+      await agentsApi.copy(agentId);
+      toast.success(a.copyOk[lang]);
+      setListScope("mine");
+      load();
+    } catch {
+      toast.error(lang === "zh" ? "复制失败" : "Copy failed");
+    }
+  };
+
+  const openShare = async (agentId: string) => {
+    setShowShare(agentId);
+    try {
+      const [{ data: sharing }, { data: targets }] = await Promise.all([
+        agentsApi.getSharing(agentId),
+        agentsApi.shareTargets(""),
+      ]);
+      setShareVisibility(sharing.visibility === "org" ? "org" : sharing.visibility === "shared" ? "shared" : "private");
+      setShareUserIds(
+        (sharing.grants as ShareGrant[]).filter((g) => g.grantee_type === "user").map((g) => g.grantee_id),
+      );
+      setShareDeptIds(
+        (sharing.grants as ShareGrant[]).filter((g) => g.grantee_type === "department").map((g) => g.grantee_id),
+      );
+      setShareDepts(targets.departments ?? []);
+      setShareUsers(targets.users ?? []);
+    } catch {
+      toast.error(lang === "zh" ? "加载共享设置失败" : "Failed to load sharing");
+      setShowShare(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!showShare) return;
+    const t = setTimeout(() => {
+      agentsApi.shareTargets(shareSearch).then(({ data }) => {
+        setShareUsers(data.users ?? []);
+        if (!shareSearch.trim()) setShareDepts(data.departments ?? []);
+      }).catch(() => {});
+    }, 300);
+    return () => clearTimeout(t);
+  }, [showShare, shareSearch]);
+
+  const saveShare = async () => {
+    if (!showShare) return;
+    setSavingShare(true);
+    try {
+      const grants = [
+        ...shareUserIds.map((id) => ({ grantee_type: "user" as const, grantee_id: id, permission: "use" as const })),
+        ...shareDeptIds.map((id) => ({ grantee_type: "department" as const, grantee_id: id, permission: "use" as const })),
+      ];
+      await agentsApi.updateSharing(showShare, {
+        visibility: shareVisibility,
+        grants: shareVisibility === "shared" ? grants : [],
+      });
+      toast.success(lang === "zh" ? "共享已保存" : "Sharing saved");
+      setShowShare(null);
+      load();
+    } catch {
+      toast.error(lang === "zh" ? "保存失败" : "Save failed");
+    } finally {
+      setSavingShare(false);
     }
   };
 
@@ -177,6 +264,50 @@ export default function AgentsPage() {
       toast.error(lang === "zh" ? "更新失败" : "Update failed");
     } finally {
       setSavingSkills(false);
+    }
+  };
+
+  const canEditAgent = (agent: Agent) => !!agent.is_owner || !!agent.can_manage;
+
+  const visibilityLabel = (v?: Agent["visibility"]) => {
+    if (v === "platform") return a.badgeOrg[lang];
+    if (v === "org") return a.badgeOrg[lang];
+    if (v === "shared") return a.badgeShared[lang];
+    return a.badgePrivate[lang];
+  };
+
+  const scopeTabs: { id: AgentListScope; label: string }[] = [
+    { id: "usable", label: a.scopeUsable[lang] },
+    { id: "mine", label: a.scopeMine[lang] },
+    { id: "shared", label: a.scopeShared[lang] },
+    { id: "org", label: a.scopeOrg[lang] },
+    { id: "platform", label: a.scopePlatform[lang] },
+  ];
+
+  const openNameEdit = (agent: Agent) => {
+    setShowNameEdit(agent.id);
+    setNameEditValue(agent.name);
+  };
+
+  const saveNameEdit = async () => {
+    if (!showNameEdit) return;
+    const trimmed = nameEditValue.trim();
+    if (!trimmed) {
+      toast.error(lang === "zh" ? "名称不能为空" : "Name is required");
+      return;
+    }
+    setSavingName(true);
+    try {
+      await agentsApi.update(showNameEdit, { name: trimmed });
+      toast.success(lang === "zh" ? "名称已更新" : "Name updated");
+      setShowNameEdit(null);
+      load();
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 403) toast.error(a.editForbidden[lang]);
+      else toast.error(lang === "zh" ? "更新失败" : "Update failed");
+    } finally {
+      setSavingName(false);
     }
   };
 
@@ -302,6 +433,27 @@ export default function AgentsPage() {
         </button>
       </div>
 
+      <div className="agents-filter-row mb-3">
+        <CapsuleScrollRow
+          centerWhenFit
+          className="flex-1 min-w-0"
+          scrollLeftLabel={chatT.scrollLeft[lang]}
+          scrollRightLabel={chatT.scrollRight[lang]}
+          innerClassName="agents-filter-scroll"
+        >
+          {scopeTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setListScope(tab.id)}
+              className={`agents-filter-pill${listScope === tab.id ? " agents-filter-pill-active" : ""}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </CapsuleScrollRow>
+      </div>
+
       {!loading && agents.length > 0 && (
         <section className="agents-featured">
           <h2 className="agents-featured-title">{a.featuredScenes[lang]}</h2>
@@ -402,7 +554,7 @@ export default function AgentsPage() {
                       ) : isSenior ? (
                         <span className="agents-badge agents-badge-master">{a.badgeMaster[lang]}</span>
                       ) : (
-                        <span className="agents-badge agents-badge-beta">{a.badgeBeta[lang]}</span>
+                        <span className="agents-badge agents-badge-beta">{visibilityLabel(agent.visibility)}</span>
                       )}
                     </div>
                     <p className="agents-card-role">{agent.role}</p>
@@ -422,18 +574,49 @@ export default function AgentsPage() {
                     {agent.llm_provider}/{agent.llm_model}
                   </span>
                   <div className="agents-card-actions">
+                    {agent.is_owner && (
+                      <button
+                        type="button"
+                        onClick={() => openShare(agent.id)}
+                        className="agents-icon-btn"
+                        title={a.share[lang]}
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {canEditAgent(agent) && (
+                      <button
+                        type="button"
+                        onClick={() => openNameEdit(agent)}
+                        className="agents-icon-btn"
+                        title={a.editName[lang]}
+                      >
+                        <PenLine className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => openSkillEdit(agent)}
                       className="agents-icon-btn"
                       title={a.editSkills[lang]}
+                      disabled={!canEditAgent(agent)}
                     >
                       <Layers className="h-3.5 w-3.5" />
                     </button>
-                    {canDelete && (
+                    {!agent.is_owner && agent.visibility !== "platform" && (
                       <button
                         type="button"
-                        onClick={() => deleteAgent(agent.id)}
+                        onClick={() => copyAgent(agent.id)}
+                        className="agents-icon-btn"
+                        title={a.copyAgent[lang]}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {canDeleteAgent(user, agent) && (
+                      <button
+                        type="button"
+                        onClick={() => deleteAgent(agent)}
                         className="agents-icon-btn agents-icon-btn-danger"
                         title={c.delete[lang]}
                       >
@@ -599,6 +782,120 @@ export default function AgentsPage() {
             >
               {c.cancel[lang]}
             </button>
+          </div>
+        </div>
+      )}
+
+      {showShare && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-2 text-lg font-semibold theme-text">{a.shareTitle[lang]}</h2>
+            <p className="mb-4 text-xs text-slate-500">{a.shareHint[lang]}</p>
+            <div className="mb-4 flex flex-col gap-2 text-sm">
+              {([
+                ["private", a.visibilityPrivate[lang]],
+                ["shared", a.visibilityShared[lang]],
+                ["org", a.visibilityOrg[lang]],
+              ] as const).map(([val, label]) => (
+                <label key={val} className="flex cursor-pointer items-center gap-2 rounded-lg border border-[#2d2d4e] px-3 py-2">
+                  <input
+                    type="radio"
+                    name="visibility"
+                    checked={shareVisibility === val}
+                    onChange={() => setShareVisibility(val)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            {shareVisibility === "shared" && (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1 block text-xs text-slate-400">{a.shareSearch[lang]}</label>
+                  <input
+                    type="search"
+                    className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                    value={shareSearch}
+                    onChange={(e) => setShareSearch(e.target.value)}
+                    placeholder={a.shareSearch[lang]}
+                  />
+                </div>
+                <div>
+                  <p className="mb-2 text-xs text-slate-400">{a.shareUsers[lang]}</p>
+                  <div className="max-h-32 space-y-1 overflow-y-auto">
+                    {shareUsers.map((u) => (
+                      <label key={u.id} className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={shareUserIds.includes(u.id)}
+                          onChange={(e) => setShareUserIds((ids) =>
+                            e.target.checked ? [...ids, u.id] : ids.filter((x) => x !== u.id)
+                          )}
+                        />
+                        {u.display_name}{u.employee_no ? ` (${u.employee_no})` : ""}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-xs text-slate-400">{a.shareDepts[lang]}</p>
+                  <div className="max-h-32 space-y-1 overflow-y-auto">
+                    {shareDepts.map((d) => (
+                      <label key={d.id} className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={shareDeptIds.includes(d.id)}
+                          onChange={(e) => setShareDeptIds((ids) =>
+                            e.target.checked ? [...ids, d.id] : ids.filter((x) => x !== d.id)
+                          )}
+                        />
+                        {d.name}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setShowShare(null)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white">{c.cancel[lang]}</button>
+              <button onClick={saveShare} disabled={savingShare} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-40">{c.save[lang]}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNameEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="theme-card w-full max-w-md p-6">
+            <h2 className="mb-2 text-lg font-semibold theme-text">{a.editName[lang]}</h2>
+            <p className="mb-4 text-xs text-slate-500">{a.editNameHint[lang]}</p>
+            <label className="mb-1 block text-xs text-slate-400">{c.name[lang]}</label>
+            <input
+              type="text"
+              className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+              value={nameEditValue}
+              maxLength={255}
+              onChange={(e) => setNameEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveNameEdit();
+              }}
+              autoFocus
+            />
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setShowNameEdit(null)}
+                className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white"
+              >
+                {c.cancel[lang]}
+              </button>
+              <button
+                onClick={saveNameEdit}
+                disabled={savingName || !nameEditValue.trim()}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {c.save[lang]}
+              </button>
+            </div>
           </div>
         </div>
       )}

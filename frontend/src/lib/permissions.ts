@@ -26,7 +26,17 @@ export function canReadEmployees(user: AuthUser | null | undefined): boolean {
   return hasPermission(user, "employees:read");
 }
 
-/** Delete agents / skills — platform admins only. */
+/** Delete agents — platform admins or the owner. */
+export function canDeleteAgent(
+  user: AuthUser | null | undefined,
+  agent: { owner_id?: string | null; visibility?: string },
+): boolean {
+  if (!user) return false;
+  if (user.is_admin) return true;
+  return !!agent.owner_id && agent.owner_id === user.id;
+}
+
+/** @deprecated use canDeleteAgent(agent) */
 export function canDeleteAgentsOrSkills(user: AuthUser | null | undefined): boolean {
   if (!user) return false;
   return !!user.is_admin;

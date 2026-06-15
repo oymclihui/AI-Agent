@@ -262,7 +262,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     chatApi.listConversations().then(({ data }) => setConversations(data)).catch(() => {});
-    agentsApi.list(lang).then(({ data }) => setAgents(data)).catch(() => {});
+    agentsApi.list(lang, "usable").then(({ data }) => setAgents(data)).catch(() => {});
     skillsApi.list(lang).then(({ data }) => {
       setSkills((data as SkillOption[]).filter((s) => s.status === "active"));
     }).catch(() => {});

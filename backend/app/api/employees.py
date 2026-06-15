@@ -22,6 +22,7 @@ from app.core.auth.permissions import (
     resolve_data_scope,
     scope_employees_query,
 )
+from app.core.auth.agent_access import require_agent_use
 from app.db.base import generate_uuid
 from app.schemas.employee import (
     EmployeeCreate,
@@ -203,8 +204,7 @@ async def create_employee(
     assert_permission(scope, "employees:write")
 
     agent = await db.get(AgentModel, payload.agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    await require_agent_use(db, agent, user)
 
     emp = DigitalEmployee(
         id=generate_uuid(),
@@ -252,8 +252,7 @@ async def update_employee(
     data = payload.model_dump(exclude_none=True)
     if "agent_id" in data:
         agent = await db.get(AgentModel, data["agent_id"])
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
+        await require_agent_use(db, agent, user)
     if "skills_config" in data:
         data["skills_config"] = [
             s.model_dump() if hasattr(s, "model_dump") else s for s in data["skills_config"]

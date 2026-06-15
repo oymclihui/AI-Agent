@@ -5,7 +5,18 @@ from sqlalchemy import select
 import json
 
 from app.db.session import get_db
-from app.db.models import Agent as AgentModel, AgentExecution, ExecutionStatus, User
+from app.db.models import (
+    Agent as AgentModel,
+    AgentExecution,
+    AgentShare,
+    AgentShareGranteeType,
+    AgentSharePermission,
+    AgentStatus,
+    AgentVisibility,
+    Department,
+    ExecutionStatus,
+    User,
+)
 from app.db.base import generate_uuid
 from pydantic import BaseModel, Field
 from app.schemas.agent import (
@@ -15,14 +26,42 @@ from app.schemas.agent import (
     AgentRunRequest,
     AgentLibraryImportRequest,
     AgentLibraryTemplate,
+    AgentSharingUpdate,
+    AgentSharingResponse,
+    AgentShareGrantOut,
+    AgentShareTargetsResponse,
+    ShareTargetUser,
+    ShareTargetDepartment,
+    AgentVisibility as SchemaAgentVisibility,
+    AgentShareGranteeType as SchemaGranteeType,
+    AgentSharePermission as SchemaSharePermission,
 )
 from app.config import settings
 from app.core.agents.base import AgentDefinition, Task
 from app.core.skills.factory import build_agent_executor
 from app.core.auth.deps import get_current_user
-from app.core.auth.scoping import scope_list_visible, can_read_record, assert_mutable_by_user, assert_admin_user
+from app.core.auth.scoping import assert_admin_user
+from app.core.auth.agent_access import (
+    AgentListScope,
+    assert_agent_owner,
+    can_manage_agent,
+    enrich_agent_response,
+    list_agents_filter,
+    require_agent_manage,
+    require_agent_use,
+    require_agent_view,
+    write_agent_share_audit,
+    is_platform_agent,
+)
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
+
+
+async def _agent_response(db: AsyncSession, agent: AgentModel, user: User, lang: str | None) -> dict:
+    from app.core.agents.i18n import agent_to_response_dict
+
+    base = agent_to_response_dict(agent, lang)
+    return await enrich_agent_response(db, agent, user, base)
 
 
 class AgentGenerateRequest(BaseModel):
@@ -78,11 +117,12 @@ async def generate_agent(
         tools_config=tools_config,
         skills_config=[],
         memory_config={},
+        visibility=AgentVisibility.private.value,
     )
     db.add(agent)
     await db.flush()
     await db.refresh(agent)
-    return agent
+    return await _agent_response(db, agent, user, None)
 
 
 @router.post("/seed-templates", status_code=status.HTTP_200_OK)
@@ -155,17 +195,68 @@ async def agent_library_import(payload: AgentLibraryImportRequest, db: AsyncSess
 @router.get("/", response_model=list[AgentResponse])
 async def list_agents(
     lang: str | None = Query(None, description="UI language: zh | en"),
+    scope: AgentListScope = Query("usable", description="mine|shared|org|platform|usable|all"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    from app.core.agents.i18n import agent_to_response_dict
-
+    filt = await list_agents_filter(db, user, scope)
     result = await db.execute(
-        select(AgentModel)
-        .where(scope_list_visible(AgentModel, user))
-        .order_by(AgentModel.created_at.desc())
+        select(AgentModel).where(filt).order_by(AgentModel.created_at.desc())
     )
-    return [agent_to_response_dict(a, lang) for a in result.scalars().all()]
+    agents = result.scalars().all()
+    out = []
+    for agent in agents:
+        out.append(await _agent_response(db, agent, user, lang))
+    return out
+
+
+@router.get("/share-targets", response_model=AgentShareTargetsResponse)
+async def agent_share_targets(
+    q: str = Query("", max_length=128),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from sqlalchemy import or_, func
+
+    users_out: list[ShareTargetUser] = []
+    term = q.strip()
+    if term:
+        pattern = f"%{term}%"
+        user_rows = await db.execute(
+            select(User)
+            .where(
+                User.is_active == True,
+                User.id != user.id,
+                or_(
+                    User.display_name.ilike(pattern),
+                    User.employee_no.ilike(pattern),
+                    func.lower(User.email).like(pattern.lower()),
+                ),
+            )
+            .order_by(User.display_name.asc())
+            .limit(30)
+        )
+        users_out = [
+            ShareTargetUser(
+                id=u.id,
+                display_name=u.display_name,
+                employee_no=u.employee_no,
+                primary_department_id=u.primary_department_id,
+            )
+            for u in user_rows.scalars().all()
+        ]
+
+    dept_rows = await db.execute(
+        select(Department)
+        .where(Department.is_active == True)
+        .order_by(Department.path.asc())
+        .limit(200)
+    )
+    departments = [
+        ShareTargetDepartment(id=d.id, name=d.name, path=d.path or "")
+        for d in dept_rows.scalars().all()
+    ]
+    return AgentShareTargetsResponse(users=users_out, departments=departments)
 
 
 @router.post("/", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
@@ -188,11 +279,12 @@ async def create_agent(
         tools_config=[t.model_dump() for t in payload.tools_config],
         skills_config=[s.model_dump() for s in payload.skills_config],
         memory_config=payload.memory_config.model_dump(),
+        visibility=AgentVisibility.private.value,
     )
     db.add(agent)
     await db.flush()
     await db.refresh(agent)
-    return agent
+    return await _agent_response(db, agent, user, None)
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
@@ -205,9 +297,165 @@ async def get_agent(
     from app.core.agents.i18n import agent_to_response_dict
 
     agent = await db.get(AgentModel, agent_id)
-    if not agent or not can_read_record(agent, user):
+    agent = await require_agent_view(db, agent, user)
+    return await _agent_response(db, agent, user, lang)
+
+
+@router.get("/{agent_id}/sharing", response_model=AgentSharingResponse)
+async def get_agent_sharing(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = await db.get(AgentModel, agent_id)
+    agent = await require_agent_view(db, agent, user)
+    is_owner = agent.owner_id == user.id
+    if not is_owner and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Only the owner can view sharing settings")
+
+    grants = await _serialize_grants(db, agent_id)
+    try:
+        vis = SchemaAgentVisibility(str(agent.visibility or AgentVisibility.private.value))
+    except ValueError:
+        vis = SchemaAgentVisibility.private
+    return AgentSharingResponse(
+        visibility=vis,
+        grants=grants,
+        is_owner=is_owner,
+    )
+
+
+async def _serialize_grants(db: AsyncSession, agent_id: str) -> list[AgentShareGrantOut]:
+    result = await db.execute(select(AgentShare).where(AgentShare.agent_id == agent_id))
+    rows = list(result.scalars().all())
+    user_ids = {r.grantee_id for r in rows if r.grantee_type == AgentShareGranteeType.user}
+    dept_ids = {r.grantee_id for r in rows if r.grantee_type == AgentShareGranteeType.department}
+    user_names: dict[str, str] = {}
+    dept_names: dict[str, str] = {}
+    if user_ids:
+        ur = await db.execute(select(User.id, User.display_name).where(User.id.in_(user_ids)))
+        user_names = {row[0]: row[1] for row in ur.all()}
+    if dept_ids:
+        dr = await db.execute(select(Department.id, Department.name).where(Department.id.in_(dept_ids)))
+        dept_names = {row[0]: row[1] for row in dr.all()}
+    out: list[AgentShareGrantOut] = []
+    for row in rows:
+        name = user_names.get(row.grantee_id, "") if row.grantee_type == AgentShareGranteeType.user else dept_names.get(row.grantee_id, "")
+        out.append(AgentShareGrantOut(
+            id=row.id,
+            grantee_type=SchemaGranteeType(
+                row.grantee_type.value if hasattr(row.grantee_type, "value") else row.grantee_type
+            ),
+            grantee_id=row.grantee_id,
+            grantee_name=name or row.grantee_id[:8],
+            permission=SchemaSharePermission(
+                row.permission.value if hasattr(row.permission, "value") else row.permission
+            ),
+        ))
+    return out
+
+
+@router.put("/{agent_id}/sharing", response_model=AgentSharingResponse)
+async def update_agent_sharing(
+    agent_id: str,
+    payload: AgentSharingUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = await db.get(AgentModel, agent_id)
+    if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agent_to_response_dict(agent, lang)
+    assert_agent_owner(agent, user)
+    if is_platform_agent(agent):
+        raise HTTPException(status_code=403, detail="Cannot change sharing on platform agents")
+
+    before = {"visibility": str(agent.visibility or AgentVisibility.private.value)}
+    vis_value = (
+        payload.visibility.value
+        if isinstance(payload.visibility, SchemaAgentVisibility)
+        else str(payload.visibility)
+    )
+    agent.visibility = vis_value
+
+    existing = await db.execute(select(AgentShare).where(AgentShare.agent_id == agent_id))
+    for row in existing.scalars().all():
+        await db.delete(row)
+
+    if vis_value == AgentVisibility.shared.value:
+        for grant in payload.grants:
+            db.add(AgentShare(
+                id=generate_uuid(),
+                agent_id=agent_id,
+                grantee_type=AgentShareGranteeType(
+                    grant.grantee_type.value if hasattr(grant.grantee_type, "value") else grant.grantee_type
+                ),
+                grantee_id=grant.grantee_id,
+                permission=AgentSharePermission(
+                    grant.permission.value if hasattr(grant.permission, "value") else grant.permission
+                ),
+                granted_by=user.id,
+            ))
+
+    await write_agent_share_audit(
+        db,
+        actor_id=user.id,
+        agent_id=agent_id,
+        action="sharing_update",
+        details={"before": before, "after": payload.model_dump(mode="json")},
+    )
+    await db.flush()
+    grants = await _serialize_grants(db, agent_id)
+    try:
+        vis = SchemaAgentVisibility(str(agent.visibility or AgentVisibility.private.value))
+    except ValueError:
+        vis = SchemaAgentVisibility.private
+    return AgentSharingResponse(
+        visibility=vis,
+        grants=grants,
+        is_owner=True,
+    )
+
+
+@router.post("/{agent_id}/copy", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
+async def copy_agent(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await db.get(AgentModel, agent_id)
+    source = await require_agent_use(db, source, user)
+    if source.owner_id == user.id:
+        raise HTTPException(status_code=400, detail="Already yours — edit directly instead of copying")
+
+    clone = AgentModel(
+        id=generate_uuid(),
+        owner_id=user.id,
+        name=f"{source.name} (副本)" if any("\u4e00" <= c <= "\u9fff" for c in source.name) else f"{source.name} (copy)",
+        role=source.role,
+        goal=source.goal,
+        backstory=source.backstory,
+        status=AgentStatus.active,
+        visibility=AgentVisibility.private.value,
+        llm_provider=source.llm_provider,
+        llm_model=source.llm_model,
+        temperature=source.temperature,
+        max_iterations=source.max_iterations,
+        tools_config=list(source.tools_config or []),
+        skills_config=list(source.skills_config or []),
+        memory_config=dict(source.memory_config or {}),
+        metadata_=dict(source.metadata_ or {}),
+    )
+    db.add(clone)
+    await db.flush()
+    await db.refresh(clone)
+    await write_agent_share_audit(
+        db,
+        actor_id=user.id,
+        agent_id=agent_id,
+        action="agent_copy",
+        details={"new_agent_id": clone.id},
+    )
+    return await _agent_response(db, clone, user, None)
 
 
 @router.patch("/{agent_id}", response_model=AgentResponse)
@@ -220,9 +468,23 @@ async def update_agent(
     agent = await db.get(AgentModel, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    assert_mutable_by_user(agent, user.id, "agent")
 
-    for field, value in payload.model_dump(exclude_none=True).items():
+    update_data = payload.model_dump(exclude_none=True)
+    admin_takedown = (
+        user.is_admin
+        and "status" in update_data
+        and update_data.get("status") == AgentStatus.inactive
+        and len(update_data) == 1
+    )
+    if not admin_takedown:
+        await require_agent_manage(db, agent, user)
+
+    if "name" in update_data:
+        from app.core.agents.i18n import apply_agent_name_update
+
+        apply_agent_name_update(agent, update_data.pop("name"))
+
+    for field, value in update_data.items():
         if field == "tools_config" and value is not None:
             agent.tools_config = [t if isinstance(t, dict) else t for t in value]
         elif field == "skills_config" and value is not None:
@@ -232,9 +494,18 @@ async def update_agent(
         else:
             setattr(agent, field, value)
 
+    if admin_takedown:
+        await write_agent_share_audit(
+            db,
+            actor_id=user.id,
+            agent_id=agent_id,
+            action="admin_takedown",
+            details={"status": "inactive"},
+        )
+
     await db.flush()
     await db.refresh(agent)
-    return agent
+    return await _agent_response(db, agent, user, None)
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -246,7 +517,12 @@ async def delete_agent(
     agent = await db.get(AgentModel, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    assert_admin_user(user, "delete agents")
+    from app.core.auth.agent_access import is_platform_agent
+
+    if is_platform_agent(agent):
+        assert_admin_user(user, "delete platform agents")
+    elif agent.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     await db.delete(agent)
 
 
@@ -258,8 +534,7 @@ async def run_agent(
     user: User = Depends(get_current_user),
 ):
     agent_model = await db.get(AgentModel, agent_id)
-    if not agent_model or not (agent_model.owner_id == user.id or agent_model.owner_id is None):
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent_model = await require_agent_use(db, agent_model, user)
 
     executor = await build_agent_executor(db, agent_model)
     task = Task(description=payload.task)
