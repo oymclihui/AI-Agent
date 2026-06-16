@@ -1,0 +1,18 @@
+{
+  "passed": 29,
+  "failed": 0,
+  "skipped": 3,
+  "duration_s": 174.5,
+  "chains": {
+    "A": "pass",
+    "B": "pass",
+    "C": "pass",
+    "D": "pass",
+    "E": "pass",
+    "F": "pass",
+    "G": "skip",
+    "H": "pass"
+  },
+  "failures": [],
+  "base": "http://127.0.0.1:8001"
+}
