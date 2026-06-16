@@ -66,8 +66,8 @@ prompt() {
 }
 
 write_env() {
-  local ip="$1" port="$2" db_host="$3" db_port="$4" db_user="$5" db_pass="$6" db_name="$7"
-  local setup_token="$8" public_url="$9"
+  local ip="$1" port="$2" db_driver="$3" db_host="$4" db_port="$5" db_user="$6" db_pass="$7" db_name="$8" db_schema="$9"
+  local setup_token="${10}" public_url="${11}"
   local origins="[\"http://${ip}:${port}\",\"http://localhost:${port}\",\"http://127.0.0.1:${port}\",\"http://${ip}\",\"http://localhost\",\"http://127.0.0.1\"]"
   cat > .env <<EOF
 HTTP_PORT=${port}
@@ -77,13 +77,14 @@ APP_PUBLIC_URL=${public_url}
 ALLOWED_ORIGINS=${origins}
 NEXT_PUBLIC_WS_URL=ws://${ip}:${port}/ws
 
-DB_DRIVER=postgresql
+DB_DRIVER=${db_driver}
 DB_HOST=${db_host}
 DB_PORT=${db_port}
 DB_USER=${db_user}
 DB_PASSWORD=${db_pass}
 DB_NAME=${db_name}
 DB_SSL=prefer
+DB_SCHEMA=${db_schema}
 
 SETUP_TOKEN=${setup_token}
 
@@ -145,20 +146,25 @@ main() {
   [ -f docker-compose.prod.yml ] || fail "Run this script inside the unpacked release folder"
   check_docker
 
-  local ip port db_host db_port db_user db_pass db_name setup_token public_url
+  local ip port db_driver db_host db_port db_user db_pass db_name db_schema setup_token public_url
   ip="$(detect_ip)"
   prompt port "HTTP port" "3000"
-  prompt db_host "Database host (PostgreSQL/VastBase IP)" "$ip"
+  prompt db_driver "Database driver (postgresql or vastbase)" "vastbase"
+  if [ "$db_driver" != "vastbase" ] && [ "$db_driver" != "postgresql" ]; then
+    db_driver="vastbase"
+  fi
+  prompt db_host "Database host (VastBase/PostgreSQL IP)" "$ip"
   prompt db_port "Database port" "5432"
   prompt db_user "Database user" "aiagnet"
   prompt db_pass "Database password" "aiagnet123"
   prompt db_name "Database name" "aiagnet"
+  prompt db_schema "Database schema" "public"
 
   setup_token="$(openssl rand -hex 16 2>/dev/null || uuidgen | tr -d '-')"
   public_url="http://${ip}:${port}"
 
   info "Writing .env and SETUP_TOKEN.admin.txt ..."
-  write_env "$ip" "$port" "$db_host" "$db_port" "$db_user" "$db_pass" "$db_name" "$setup_token" "$public_url"
+  write_env "$ip" "$port" "$db_driver" "$db_host" "$db_port" "$db_user" "$db_pass" "$db_name" "$db_schema" "$setup_token" "$public_url"
 
   info "Building Docker images (first run may take 10-20 min) ..."
   $COMPOSE -f docker-compose.prod.yml build
