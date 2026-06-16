@@ -135,3 +135,37 @@ class AuditLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PermissionImportRowResponse(BaseModel):
+    row_number: int
+    employee_no: str
+    display_name: str = ""
+    primary_department_code: str = ""
+    primary_department_name: str = ""
+    user_tier: str = "staff"
+    roles: list[str] = Field(default_factory=list)
+    scope_department_code: str = ""
+    is_active: bool = True
+    status: str
+    message: str = ""
+    user_id: Optional[str] = None
+    changes: dict = Field(default_factory=dict)
+
+
+class PermissionImportPreviewResponse(BaseModel):
+    total: int
+    ok: int
+    warning: int
+    error: int
+    rows: list[PermissionImportRowResponse]
+
+
+class PermissionImportApplyRequest(BaseModel):
+    rows: list[PermissionImportRowResponse]
+
+
+class PermissionImportApplyResponse(BaseModel):
+    applied: int
+    skipped: int
+    failed: int

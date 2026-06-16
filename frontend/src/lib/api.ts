@@ -31,6 +31,33 @@ export function formatApiError(err: unknown, fallback: string): string {
   return fallback;
 }
 
+async function downloadBlob(path: string, filename: string, params?: Record<string, string | boolean>) {
+  const token = getAuthToken();
+  const qs = params
+    ? "?" + new URLSearchParams(
+        Object.entries(params).map(([k, v]) => [k, String(v)]),
+      ).toString()
+    : "";
+  const res = await fetch(`/api/v1${path}${qs}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === "string" ? body.detail : detail;
+    } catch { /* ignore */ }
+    throw new Error(detail || "Download failed");
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Same-origin proxy via app/api/v1/[...path]/route.ts → BACKEND_URL (default 8000). */
 export const api = axios.create({
   baseURL: "/api/v1",
@@ -377,6 +404,32 @@ export const organizationApi = {
     api.patch(`/organization/delegation/executive-users/${userId}`, data),
   auditLogs: (limit = 50) => api.get("/organization/audit-logs", { params: { limit } }),
   createUser: (data: object) => api.post("/organization/users", data),
+  downloadPermissionTemplate: (includeCurrent = false) =>
+    downloadBlob(
+      "/organization/permissions/import/template",
+      includeCurrent ? "permission_export.xlsx" : "permission_import_template.xlsx",
+      { include_current: includeCurrent },
+    ),
+  downloadDelegationPermissionTemplate: () =>
+    downloadBlob("/organization/delegation/permissions/import/template", "dept_permission_import_template.xlsx"),
+  previewPermissionImport: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post("/organization/permissions/import/preview", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  applyPermissionImport: (rows: object[]) =>
+    api.post("/organization/permissions/import/apply", { rows }),
+  previewDelegationPermissionImport: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post("/organization/delegation/permissions/import/preview", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  applyDelegationPermissionImport: (rows: object[]) =>
+    api.post("/organization/delegation/permissions/import/apply", { rows }),
 };
 
 // ── IM Integrations ─────────────────────────────────
@@ -409,7 +462,7 @@ export const SETUP_TOKEN_STORAGE_KEY = "aiagnet_setup_token";
 
 // ── Digital Employees ───────────────────────────────
 export const employeesApi = {
-  list: () => api.get("/employees"),
+  list: () => api.get("/employees/"),
   orgTree: (sync = true) => api.get("/employees/org-tree", { params: { sync } }),
   syncOrgTree: () => api.post("/employees/org-tree/sync"),
   create: (data: object) => api.post("/employees/", data),

@@ -126,6 +126,137 @@ def _ensure_agent_spec(draft_body: dict[str, Any], conv: Conversation) -> dict[s
     }
 
 
+def _build_industry_domain_hints(transcript_lower: str) -> str:
+    """Append industry-specific guidance for deposit draft generation."""
+    hints: list[str] = []
+
+    if any(
+        k in transcript_lower
+        for k in (
+            "整车", "车企", "制造", "比亚迪", "oem", "总装", "车间", "产线",
+            "cfo", "财务vp", "司库", "fp&a", "管报", "单车成本", "双积分",
+        )
+    ):
+        hints.append("""
+【行业上下文：制造业】
+若对话涉及制造/车企/工厂，employee 草案应贴近真实岗位，例如：
+- 生产运营：生产计划员（日排程）、车间主任助理（OEE/产能日报）、设备工程师（停机根因）
+- 质量：IQC/PQC 工程师（来料/过程异常周报）、8D 跟踪员
+- 集团财务：CFO（月报董事会）、财务 VP（周例会）、成本会计（单台/BOM/降本）、司库（资金/汇兑）
+task_config.prompt 须含：多基地、班次、OEE、良率、BOM、出口汇兑等语境；
+cron 建议：日监控 工作日 7:00、周例会 周一 8–10:00、月报 每月 3–5 日。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in (
+            "零售", "门店", "导购", "促销", "会员", "复购", "坪效", "连带率",
+            "商超", "便利店", "连锁", "加盟", "巡店", "大促", "双11", "618",
+        )
+    ):
+        hints.append("""
+【行业上下文：零售业态】
+employee 岗位示例：
+- 门店：店长助理（日销售/客流复盘）、收银稽核（日结对账）
+- 区域：督导（巡店周报、整改跟踪）、品类经理（滞销/补货/陈列）
+- 会员运营：复购触达、券包 ROI 周报
+task_config.prompt 须含：坪效、客单价、连带率、库存周转、促销 ROI、会员复购、SKU 动销；
+cron 建议：日结 每日 22:00、巡店 每周五、品类 每周一 9:00。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in (
+            "物流", "仓配", "仓储", "配送", "在途", "wms", "tms", "供应链",
+            "采购", "供应商", "到货", "履约", "库存周转",
+        )
+    ):
+        hints.append("""
+【行业上下文：物流与供应链】
+employee 岗位示例：仓配调度员（日 KPI）、采购跟单（到货异常）、供应链计划（滚动补货）
+task_config.prompt 须含：准时率、破损率、在途时效、安全库存、供应商 OTIF；
+cron 建议：日 KPI 工作日 8:00、周报 周一 9:00。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in ("餐饮", "后厨", "食安", "消杀", "外卖", "翻台", "备餐")
+    ):
+        hints.append("""
+【行业上下文：餐饮服务】
+employee 岗位示例：门店值班经理（日营业复盘）、食安巡检员（消杀/台账）、外卖履约专员
+task_config.prompt 须含：营业额、客诉、食安台账、原料损耗、外卖准时率；
+cron 建议：日结 每日 23:00、食安巡检 每日 10:00 与 16:00。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in (
+            "银行", "保险", "信贷", "风控", "理财", "网点", "金融", "aum",
+            "不良", "贷后", "柜面", "反洗钱", "aml", "信用卡", "个贷",
+        )
+    ):
+        hints.append("""
+【行业上下文：银行与金融服务】
+employee 岗位示例：
+- 网点：网点运营助理（日业绩/客流/等候时长）、柜面合规抽检（双录/身份核验）
+- 风控：贷后预警专员（异常交易/逾期周报）、反洗钱可疑交易初筛
+- 财富：理财经理助理（客户分层触达、AUM 变动提醒、产品到期跟进）
+task_config.prompt 须含：存款/贷款/理财/AUM、不良率、合规检查项、VIP 客户触达；
+cron 建议：网点日结 工作日 18:00、风控周报 周一 9:00、贷后巡检 工作日 8:30。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in (
+            "医疗", "医院", "诊所", "随访", "患者", "门诊", "住院", "护理",
+            "处方", "医保", "drg", "病案", "慢病", "体检",
+        )
+    ):
+        hints.append("""
+【行业上下文：医疗健康】
+employee 岗位示例：
+- 临床运营：出院随访专员（7天/30天随访清单）、门诊预约提醒
+- 质控：病案质控助理（编码/DRG 完整性抽检周报）
+- 健康管理：慢病管理助手（血压/血糖异常患者触达）
+task_config.prompt 须含：科室、患者分层、随访节点、未接通重试、医保/自费口径；
+cron 建议：随访提醒 工作日 9:00、质控周报 周五 17:00、预约提醒 每日 8:00。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in (
+            "教育", "学校", "培训", "教务", "学情", "续费", "到课", "退课",
+            "k12", "高校", "招生", "排课", "教师", "学员", "教培",
+        )
+    ):
+        hints.append("""
+【行业上下文：教育与教培】
+employee 岗位示例：
+- 教务：学情周报助手（到课/完课/作业提交）、排课冲突检查
+- 运营：续费预警专员（到期前 30/14/7 天触达）、退课原因汇总
+- 招生：线索跟进助理（试听转化、渠道 ROI 周报）
+task_config.prompt 须含：校区/班级/科目、到课率、续费率、退费率、教师课时、渠道转化；
+cron 建议：学情周报 周日 20:00、续费提醒 工作日 10:00、招生日报 工作日 18:00。
+""")
+
+    if any(
+        k in transcript_lower
+        for k in ("sidecar", "桌面", "录制", "回放", "sap gui", "openadapt", "desktop", "gui")
+    ):
+        hints.append("""
+【桌面自动化上下文】
+若对话涉及桌面 GUI 录制/回放/SAP/Excel 桌面操作：
+- 推荐 skill（GUI 操作 SOP）+ knowledge（演示步骤文档）
+- agent 工具应含 desktop_list_demos, desktop_replay, desktop_capture
+- employee 任务可用 task_type: "desktop_automation"，task_config 示例：
+  {"demo_name": "演示名称", "instructions": "可选补充说明", "timeout_s": 120}
+- 需提醒用户在本机运行 scripts/desktop_sidecar.py
+""")
+
+    return "\n".join(hints)
+
+
 async def analyze_conversation_deposit(
     db: AsyncSession,
     conv: Conversation,
@@ -146,38 +277,8 @@ async def analyze_conversation_deposit(
         "你是企业 AI 上岗顾问。根据对话判断用户是否完成了可复用的工作（SOP、知识、岗位、定时任务）。"
         "只输出 JSON，不要 Markdown。"
     )
-    domain_hint = ""
     transcript_lower = transcript.lower()
-    if any(
-        k in transcript_lower
-        for k in (
-            "整车", "车企", "制造", "比亚迪", "oem",
-            "cfo", "财务vp", "司库", "fp&a", "管报", "单车成本", "双积分",
-        )
-    ):
-        domain_hint = """
-【行业上下文：制造企业集团财务】
-若对话涉及该领域，employee 草案应贴近真实岗位层级，例如：
-- 上层：CFO（月度董事会材料）、财务 VP（周例会）
-- 中层：财务控制/制造 controller（日/周监控）、司库（资金/汇兑周报）
-- 业务财务：FP&A 滚动预测、成本会计（单台/BOM/降本）、税务与政策
-task_config.prompt 须包含：多业务板块、多基地、出口汇兑、政策补贴等语境；
-cron 建议：日监控 工作日 7:00、周例会 周一 8–10:00、月报 每月 3–5 日。
-agent.role/goal 用中英混合或中文，体现制造业财务专业度。
-"""
-    if any(
-        k in transcript_lower
-        for k in ("sidecar", "桌面", "录制", "回放", "sap gui", "openadapt", "desktop", "gui")
-    ):
-        domain_hint += """
-【桌面自动化上下文】
-若对话涉及桌面 GUI 录制/回放/SAP/Excel 桌面操作：
-- 推荐 skill（GUI 操作 SOP）+ knowledge（演示步骤文档）
-- agent 工具应含 desktop_list_demos, desktop_replay, desktop_capture
-- employee 任务可用 task_type: "desktop_automation"，task_config 示例：
-  {"demo_name": "演示名称", "instructions": "可选补充说明", "timeout_s": 120}
-- 需提醒用户在本机运行 scripts/desktop_sidecar.py
-"""
+    domain_hint = _build_industry_domain_hints(transcript_lower)
     user_prompt = f"""分析以下对话，判断值得沉淀的内容。输出语言：{lang_hint}。
 {domain_hint}
 对话记录：

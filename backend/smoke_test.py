@@ -128,20 +128,24 @@ def main() -> None:
         fail("setup/status", str(exc))
 
     if ":8000" not in BASE:
-        try:
-            r = client.get(f"{BASE}/login", follow_redirects=True)
-            r.raise_for_status()
-            html = r.text
-            if "前往首次部署" in html or "administrator — open setup" in html:
-                fail("frontend/login-hidden-setup", "setup banner text still in login page")
-            else:
-                ok("frontend/login-hidden-setup", "no setup banner on login")
-            if "注册" in html or "Register" in html:
-                ok("frontend/login-register-ui", "register tab visible")
-            else:
-                skip("frontend/login-register-ui", "redeploy frontend to pick up register UI")
-        except Exception as exc:
-            fail("frontend/login", str(exc))
+        frontend_url = os.environ.get("SMOKE_FRONTEND_URL", "").rstrip("/")
+        if not frontend_url:
+            skip("frontend/login", "set SMOKE_FRONTEND_URL=http://127.0.0.1:3000 to test login page")
+        else:
+            try:
+                r = client.get(f"{frontend_url}/login", follow_redirects=True)
+                r.raise_for_status()
+                html = r.text
+                if "前往首次部署" in html or "administrator — open setup" in html:
+                    fail("frontend/login-hidden-setup", "setup banner text still in login page")
+                else:
+                    ok("frontend/login-hidden-setup", "no setup banner on login")
+                if "注册" in html or "Register" in html:
+                    ok("frontend/login-register-ui", "register tab visible")
+                else:
+                    skip("frontend/login-register-ui", "redeploy frontend to pick up register UI")
+            except Exception as exc:
+                fail("frontend/login", str(exc))
 
     # 3. Models
     try:

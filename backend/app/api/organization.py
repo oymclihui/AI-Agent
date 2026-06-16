@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,12 @@ from app.db.base import generate_uuid
 from app.db.models import Department, PermissionAuditLog, User, UserDepartment, UserRole
 from app.db.session import get_db
 from app.schemas.auth import UserResponse
+from app.core.auth.permission_import import (
+    ImportRowResult,
+    apply_import,
+    build_import_template,
+    preview_import,
+)
 from app.schemas.organization import (
     AuditLogResponse,
     DelegationContextResponse,
@@ -41,6 +48,10 @@ from app.schemas.organization import (
     OrgUserCreate,
     OrgUserResponse,
     OrgUserUpdate,
+    PermissionImportApplyRequest,
+    PermissionImportApplyResponse,
+    PermissionImportPreviewResponse,
+    PermissionImportRowResponse,
     PermissionPreviewResponse,
     RoleDefinitionResponse,
     UserRoleAssign,
@@ -768,6 +779,155 @@ async def preview_permissions(
         can_manage_org=scope.has_permission("org:manage"),
         department_paths=scope.department_paths,
     )
+
+
+def _import_preview_response(rows: list[ImportRowResult]) -> PermissionImportPreviewResponse:
+    payload = [PermissionImportRowResponse(**r.to_dict()) for r in rows]
+    return PermissionImportPreviewResponse(
+        total=len(payload),
+        ok=sum(1 for r in payload if r.status == "ok"),
+        warning=sum(1 for r in payload if r.status == "warning"),
+        error=sum(1 for r in payload if r.status == "error"),
+        rows=payload,
+    )
+
+
+@router.get("/permissions/import/template")
+async def download_permission_import_template(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    include_current: bool = Query(False, description="Fill sheet with current users"),
+):
+    await _require_org_manage(db, user)
+    content = await build_import_template(db, lane="full", include_current=include_current)
+    filename = "permission_import_template.xlsx" if not include_current else "permission_export.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/delegation/permissions/import/template")
+async def download_delegation_import_template(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await _require_any_delegation(db, user)
+    ctx = await resolve_delegation_context(db, user, scope.permissions)
+    if ctx.lane not in ("full", "dept", "executive"):
+        raise HTTPException(status_code=403, detail="No import permission")
+    lane = "dept" if ctx.lane == "dept" else ("executive" if ctx.lane == "executive" else "full")
+    content = await build_import_template(db, lane=lane, include_current=False)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="dept_permission_import_template.xlsx"'},
+    )
+
+
+@router.post("/permissions/import/preview", response_model=PermissionImportPreviewResponse)
+async def preview_permission_import(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    file: UploadFile = File(...),
+):
+    await _require_org_manage(db, user)
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+    try:
+        rows = await preview_import(db, raw, lane="full")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _import_preview_response(rows)
+
+
+@router.post("/delegation/permissions/import/preview", response_model=PermissionImportPreviewResponse)
+async def preview_delegation_permission_import(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    file: UploadFile = File(...),
+):
+    scope = await _actor_scope(db, user)
+    if not await actor_can_delegate_dept(db, user, scope.permissions) and not scope.has_permission("users:delegate:exec"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    ctx = await resolve_delegation_context(db, user, scope.permissions)
+    if ctx.lane not in ("full", "dept", "executive"):
+        raise HTTPException(status_code=403, detail="No import permission")
+    lane = "dept" if ctx.lane == "dept" else ("executive" if ctx.lane == "executive" else "full")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+    try:
+        rows = await preview_import(db, raw, ctx=ctx, lane=lane)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _import_preview_response(rows)
+
+
+@router.post("/permissions/import/apply", response_model=PermissionImportApplyResponse)
+async def apply_permission_import(
+    payload: PermissionImportApplyRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_org_manage(db, user)
+    import_rows = [
+        ImportRowResult(
+            row_number=r.row_number,
+            employee_no=r.employee_no,
+            display_name=r.display_name,
+            primary_department_code=r.primary_department_code,
+            primary_department_name=r.primary_department_name,
+            user_tier=r.user_tier,
+            roles=r.roles,
+            scope_department_code=r.scope_department_code,
+            is_active=r.is_active,
+            status=r.status,
+            message=r.message,
+            user_id=r.user_id,
+            changes=r.changes,
+        )
+        for r in payload.rows
+    ]
+    stats = await apply_import(db, import_rows, actor_id=user.id, lane="full")
+    return PermissionImportApplyResponse(**stats)
+
+
+@router.post("/delegation/permissions/import/apply", response_model=PermissionImportApplyResponse)
+async def apply_delegation_permission_import(
+    payload: PermissionImportApplyRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await _actor_scope(db, user)
+    if not await actor_can_delegate_dept(db, user, scope.permissions) and not scope.has_permission("users:delegate:exec"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    ctx = await resolve_delegation_context(db, user, scope.permissions)
+    if ctx.lane not in ("full", "dept", "executive"):
+        raise HTTPException(status_code=403, detail="No import permission")
+    lane = "dept" if ctx.lane == "dept" else ("executive" if ctx.lane == "executive" else "full")
+    import_rows = [
+        ImportRowResult(
+            row_number=r.row_number,
+            employee_no=r.employee_no,
+            display_name=r.display_name,
+            primary_department_code=r.primary_department_code,
+            primary_department_name=r.primary_department_name,
+            user_tier=r.user_tier,
+            roles=r.roles,
+            scope_department_code=r.scope_department_code,
+            is_active=r.is_active,
+            status=r.status,
+            message=r.message,
+            user_id=r.user_id,
+            changes=r.changes,
+        )
+        for r in payload.rows
+    ]
+    stats = await apply_import(db, import_rows, actor_id=user.id, ctx=ctx, lane=lane)
+    return PermissionImportApplyResponse(**stats)
 
 
 @router.get("/me/profile", response_model=UserResponse)

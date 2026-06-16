@@ -98,6 +98,17 @@ def main():
     except Exception as e:
         fail("openapi/docs", str(e))
 
+    login_id = os.environ.get("SMOKE_ADMIN_LOGIN", "admin")
+    login_pw = os.environ.get("SMOKE_ADMIN_PASSWORD", "admin123")
+    try:
+        r = client.post("/api/v1/auth/login", json={"login": login_id, "password": login_pw})
+        if assert_status(r, 200, "auth/login"):
+            token = r.json().get("access_token")
+            client.headers["Authorization"] = f"Bearer {token}"
+    except Exception as e:
+        fail("auth/login", str(e))
+        return
+
     # ── 1. Models ────────────────────────────────────────────
     section("1. Model Hub")
     default_provider = default_model = None

@@ -25,7 +25,7 @@
 | **Chat** | 多轮对话、流式输出、**SessionContext**、**语音对话**（STT 自动发送 + TTS 朗读）、智能沉淀、附件与推荐问题 |
 | **Knowledge** | 文档上传、向量检索（RAG，对话多库联合检索）；平台路线图自动种子与 **content_sha256 再索引** |
 | **Model Hub** | 模型配置 **增删改查**、设默认、**推理参数**（temperature / top_p / max_tokens 等）、OpenAI 兼容 Base URL |
-| **用户与权限** | 工号 / 邮箱登录、JWT、**组织 RBAC + 分层赋权**、个人模型 API Key |
+| **用户与权限** | 工号 / 邮箱登录、JWT、**组织 RBAC + 分层赋权**、**Excel 批量导入权限**、个人模型 API Key |
 | **Tools** | 内置计算器、HTTP 请求、网页搜索、日期时间等工具 |
 | **Orchestrator** | 多智能体协同编排（CrewAI 风格 sequential 流程） |
 
@@ -34,6 +34,45 @@
 ---
 
 ## 更新日志
+
+### 2026-06 — 组织权限 Excel 批量导入与界面优化
+
+**一句话：** 组织管理员和部门接口人可用 Excel 批量调整用户角色；权限页改为表格 + 搜索 + 快捷角色模板。
+
+| 能力 | 说明 |
+|------|------|
+| **Excel 模板** | 4 个 Sheet：权限导入、填写说明、角色对照、部门对照 |
+| **下载** | 空白模板 / **导出当前权限**（改完再上传） |
+| **导入流程** | 上传 → **预览**（绿=将更新 / 黄=无变更 / 红=错误）→ 确认应用 |
+| **组织管理员** | `设置 → 组织与权限 → 批量导入`；API：`/organization/permissions/import/*` |
+| **部门接口人** | `设置 → 本部门权限` 内同样支持导入（仅子树用户，角色受限） |
+| **高管秘书** | `设置 → 高管权限`：表格 + 搜索 + Excel 导入（高管名单池） |
+| **用户与角色页** | 搜索 / 部门筛选 / 角色筛选；点行编辑；**快捷模板**（一线员工、负责人、接口人、审计、高管） |
+
+**新增 API：**
+
+- `GET /organization/permissions/import/template` — 下载模板（`?include_current=true` 导出当前）
+- `POST /organization/permissions/import/preview` — 上传预览
+- `POST /organization/permissions/import/apply` — 确认应用
+- `GET/POST /organization/delegation/permissions/import/*` — 接口人 / 秘书 scoped 版本
+
+**涉及模块：** `backend/app/core/auth/permission_import.py`、`backend/app/api/organization.py`、`frontend/src/app/settings/organization/page.tsx`、`frontend/src/components/organization/PermissionImportPanel.tsx`
+
+**冒烟测试：**
+
+```bash
+cd backend
+python scripts/smoke_test_permission_import.py          # 权限 Excel 导入（7 项）
+python scripts/run_launch_preflight.py                  # 上线前全量预检（多套件）
+```
+
+> 赋权操作写入 `permission_audit_logs`（action=`permission_import`）。详见 [组织权限与赋权说明](docs/组织权限与赋权说明.md)。
+
+### 2026-06 — 数字员工与前端稳定性
+
+- **`/employees` 加载修复**：API 代理默认端口、集合路径尾斜杠、Nginx 重写，避免 307/401 误报
+- **对话沉淀**：`deposit.py` 扩展制造 / 零售 / 银行 / 医疗 / 教育等行业提示
+- **测试脚本**：`integration_test.py` / `deep_test.py` 支持 `SMOKE_ADMIN_PASSWORD` 登录；`scripts/test_deposit_employee_industries.py`（12 行业 seed 模式）
 
 ### 2026-06 — Windows 自包含交付包
 
@@ -202,9 +241,11 @@ python smoke_test.py                             # 全量冒烟
 
 ### 用户登录、组织权限与数据隔离
 
-- **登录**：工号或邮箱 + 密码；首次启动自动创建默认管理员（工号 `admin`，密码 `admin123`，可在 `.env` 覆盖）
+- **登录**：工号或邮箱 + 密码；首次启动自动创建默认管理员（工号 `admin`，密码可在 `.env` 用 `DEFAULT_ADMIN_PASSWORD` 覆盖）
 - **JWT 鉴权**：除 `/login`、`/register`、`/health` 外，API 与前端页面需登录后访问
 - **组织 RBAC**：部门树 + 8 角色；**部门接口人**（本部门权限）、**高管秘书**（高管权限）分层赋权
+- **Excel 批量导入**：组织管理员 / 接口人 / 秘书可按模板批量调整角色（预览后确认，写入审计日志）
+- **组织与权限 UI**：用户表格、搜索筛选、快捷角色模板、独立「批量导入」Tab
 - **数字员工 / 大屏**：普通 `operator` 仅见自己的员工且无大屏；部门负责人见子树；高管见全公司
 - **赋权审计**：`GET /organization/audit-logs`
 - **个人模型 Key**：在 **设置** 页配置各 provider 的 API Key / Base URL
@@ -238,7 +279,7 @@ AI-Agent/
 │   ├── app/
 │   │   ├── api/          # REST API 路由
 │   │   ├── core/         # 智能体、工作流、对话、工具、技能、数字员工调度
-│   │   │   ├── auth/         # JWT、密码、用户数据范围、智能体 ACL
+│   │   │   ├── auth/         # JWT、密码、用户数据范围、智能体 ACL、权限 Excel 导入
 │   │   │   ├── chat/         # 推荐问题、会话清理、导出技能/知识库、对话沉淀（deposit）
 │   │   │   ├── skills/       # 技能注入、在线技能库
 │   │   │   ├── employees/    # 定时任务调度与执行
@@ -330,19 +371,25 @@ npm run dev
 
 ```bash
 cd backend
+set SMOKE_BASE_URL=http://127.0.0.1:8001
+set SMOKE_ADMIN_PASSWORD=your-admin-password
 python smoke_test.py
+python scripts/smoke_test_permission_import.py
+python scripts/run_launch_preflight.py   # 上线前全量预检
 ```
 
 全面集成测试（L0 基础设施 + L1 模块 API + L2 协作链路）：
 
 ```bash
 cd backend
+set AIAGNET_TEST_BASE=http://127.0.0.1:8001
+set SMOKE_ADMIN_PASSWORD=your-admin-password
 python integration_test.py
 # 仅协作链路: python integration_test.py --level L2
 # 跳过 LLM 重调用: set AIAGNET_SKIP_LLM=1 && python integration_test.py
 ```
 
-预期：`smoke_test` 约 14 项；`integration_test` 覆盖 Skills、数字员工、知识库 content、工作流 NL 等模块协作链。
+预期：`smoke_test` 约 22 项；`smoke_test_permission_import` 7 项；`integration_test` 覆盖 Skills、数字员工、知识库、工作流等协作链。
 
 ---
 
@@ -794,7 +841,7 @@ sequenceDiagram
 - [x] SessionContext 整合 P0（对话技能/RAG/沉淀互绑）
 - [x] 从对话「智能沉淀」与「保存为技能 / 知识库」
 - [x] 用户登录与按用户数据隔离（个人 API Key、30 天会话清理）
-- [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户 — `/settings/organization`）
+- [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户、**Excel 批量导入** — `/settings/organization`）
 - [x] Windows 自包含交付包（`package_win_release.ps1`：内置 Python/Node/依赖 + `AI-AGENT.bat`）
 - [~] Docker Compose 一键部署（compose 文件已有，待完善）
 

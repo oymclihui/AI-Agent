@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -40,7 +41,8 @@ async def main() -> int:
         record("route PATCH .../context", ctx_patch, "registered" if ctx_patch else "missing")
 
         # 2. Auth
-        login = await client.post("/auth/login", json={"login": "admin", "password": "admin123"})
+        admin_pw = os.environ.get("SMOKE_ADMIN_PASSWORD", "admin123")
+        login = await client.post("/auth/login", json={"login": "admin", "password": admin_pw})
         record("auth login (admin)", login.status_code == 200, str(login.status_code))
         if login.status_code != 200:
             return 1

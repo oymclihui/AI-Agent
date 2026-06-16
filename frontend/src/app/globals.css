@@ -133,6 +133,18 @@ body {
 [data-theme="light"] .theme-btn-primary {
   box-shadow: 0 1px 3px rgba(59, 130, 246, 0.22);
 }
+.theme-btn-secondary {
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  color: var(--text);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+.theme-btn-secondary:hover {
+  background-color: var(--surface-hover, rgba(148, 163, 184, 0.12));
+}
 [data-theme="light"] .theme-input:focus {
   border-color: #93c5fd;
   box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.35);

@@ -175,6 +175,26 @@ def agent_payload(**overrides) -> dict[str, Any]:
 # ── L0 Infrastructure ─────────────────────────────────────────────
 
 
+def login_client(client: httpx.Client) -> bool:
+    login = os.environ.get("SMOKE_ADMIN_LOGIN", "admin")
+    password = os.environ.get("SMOKE_ADMIN_PASSWORD", "admin123")
+    try:
+        r = client.post("/api/v1/auth/login", json={"login": login, "password": password})
+        if r.status_code != 200:
+            fail("auth/login", f"HTTP {r.status_code}: {r.text[:200]}")
+            return False
+        token = r.json().get("access_token")
+        if not token:
+            fail("auth/login", "missing access_token")
+            return False
+        client.headers["Authorization"] = f"Bearer {token}"
+        ok("auth/login", login)
+        return True
+    except Exception as exc:
+        fail("auth/login", str(exc))
+        return False
+
+
 def run_l0(client: httpx.Client) -> bool:
     global default_provider, default_model
     section("L0 · Infrastructure")
@@ -985,6 +1005,10 @@ def main():
     t_start = time.time()
 
     try:
+        if not login_client(client):
+            print_summary(time.time() - t_start, args.report or None)
+            sys.exit(1)
+
         if run_l0_flag:
             if not run_l0(client):
                 print_summary(time.time() - t_start, args.report or None)

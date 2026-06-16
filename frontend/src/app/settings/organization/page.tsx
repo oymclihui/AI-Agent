@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Building2, Shield, Users } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  FileSpreadsheet,
+  Search,
+  Shield,
+  Users,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { useLangStore } from "@/lib/langStore";
 import { useAuthStore } from "@/lib/authStore";
@@ -11,8 +18,10 @@ import { organizationApi } from "@/lib/api";
 import { canManageOrg } from "@/lib/permissions";
 import { useClientAuth } from "@/hooks/useClientAuth";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import PermissionImportPanel from "@/components/organization/PermissionImportPanel";
+import { clsx } from "clsx";
 
-type Tab = "depts" | "users" | "preview";
+type Tab = "depts" | "users" | "import" | "preview";
 
 interface Department {
   id: string;
@@ -74,6 +83,18 @@ const ALL_ROLE_CODES = [
   "executive_assistant",
 ];
 
+const SCOPED_ROLES = new Set(["dept_leader", "executive", "auditor", "dept_liaison"]);
+
+type RolePresetId = "operator" | "dept_leader" | "dept_liaison" | "auditor" | "executive";
+
+const ROLE_PRESETS: Record<RolePresetId, { roles: string[]; user_tier?: string }> = {
+  operator: { roles: ["operator"], user_tier: "staff" },
+  dept_leader: { roles: ["dept_leader"], user_tier: "staff" },
+  dept_liaison: { roles: ["dept_liaison"], user_tier: "staff" },
+  auditor: { roles: ["auditor"], user_tier: "staff" },
+  executive: { roles: ["executive"], user_tier: "executive" },
+};
+
 export default function OrganizationPage() {
   const { lang } = useLangStore();
   const user = useAuthStore((s) => s.user);
@@ -81,7 +102,7 @@ export default function OrganizationPage() {
   const o = translations.organization;
   const c = translations.common;
 
-  const [tab, setTab] = useState<Tab>("depts");
+  const [tab, setTab] = useState<Tab>("users");
   const [departments, setDepartments] = useState<Department[]>([]);
   const [orgUsers, setOrgUsers] = useState<OrgUser[]>([]);
   const [roleDefs, setRoleDefs] = useState<RoleDef[]>([]);
@@ -92,6 +113,10 @@ export default function OrganizationPage() {
   const [newDeptCode, setNewDeptCode] = useState("");
   const [newDeptParent, setNewDeptParent] = useState("");
   const [newDeptTier, setNewDeptTier] = useState("business");
+
+  const [search, setSearch] = useState("");
+  const [filterDeptId, setFilterDeptId] = useState("");
+  const [filterRole, setFilterRole] = useState("");
 
   const [selectedUserId, setSelectedUserId] = useState("");
   const [editPrimaryDept, setEditPrimaryDept] = useState("");
@@ -178,6 +203,54 @@ export default function OrganizationPage() {
       .finally(() => setPreviewLoading(false));
   }, [tab, selectedUserId, allowed]);
 
+  const roleLabel = useCallback(
+    (code: string) => {
+      const def = roleDefs.find((r) => r.role_code === code);
+      if (!def) return code;
+      return lang === "zh" ? def.label_zh : def.label_en;
+    },
+    [roleDefs, lang],
+  );
+
+  const filteredUsers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return orgUsers.filter((u) => {
+      if (filterDeptId && u.primary_department_id !== filterDeptId) return false;
+      if (filterRole && !u.roles.some((r) => r.role_code === filterRole)) return false;
+      if (!q) return true;
+      const hay = [u.display_name, u.employee_no, u.email, u.primary_department_name]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [orgUsers, search, filterDeptId, filterRole]);
+
+  const applyRolePreset = (presetId: RolePresetId) => {
+    const preset = ROLE_PRESETS[presetId];
+    const roles: Record<string, boolean> = {};
+    const scopes: Record<string, string> = {};
+    for (const code of ALL_ROLE_CODES) roles[code] = false;
+    for (const code of preset.roles) {
+      roles[code] = true;
+      if (SCOPED_ROLES.has(code) && editPrimaryDept) {
+        scopes[code] = editPrimaryDept;
+      }
+    }
+    setEditRoles(roles);
+    setEditScopeDept(scopes);
+    if (preset.user_tier) setEditUserTier(preset.user_tier);
+  };
+
+  const clearRoles = () => {
+    const roles: Record<string, boolean> = {};
+    for (const code of ALL_ROLE_CODES) roles[code] = false;
+    roles.operator = true;
+    setEditRoles(roles);
+    setEditScopeDept({});
+    setEditUserTier("staff");
+  };
+
   const createDepartment = async () => {
     if (!newDeptName.trim()) return;
     try {
@@ -244,12 +317,6 @@ export default function OrganizationPage() {
     }
   };
 
-  const roleLabel = (code: string) => {
-    const def = roleDefs.find((r) => r.role_code === code);
-    if (!def) return code;
-    return lang === "zh" ? def.label_zh : def.label_en;
-  };
-
   if (!authReady) {
     return (
       <div className="p-8">
@@ -285,8 +352,9 @@ export default function OrganizationPage() {
           value={tab}
           onChange={(v) => setTab(v as Tab)}
           options={[
-            { value: "depts", label: o.tabDepts[lang] },
             { value: "users", label: o.tabUsers[lang] },
+            { value: "import", label: o.tabImport[lang] },
+            { value: "depts", label: o.tabDepts[lang] },
             { value: "preview", label: o.tabPreview[lang] },
           ]}
         />
@@ -296,6 +364,10 @@ export default function OrganizationPage() {
         <p className="mt-8 theme-muted">{c.loading?.[lang] ?? "Loading…"}</p>
       ) : forbidden ? (
         <p className="mt-8 theme-muted">{o.forbidden[lang]}</p>
+      ) : tab === "import" ? (
+        <div className="mt-6">
+          <PermissionImportPanel mode="org" roleLabel={roleLabel} onApplied={() => void loadAll()} />
+        </div>
       ) : tab === "depts" ? (
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <div className="theme-card p-6">
@@ -375,8 +447,8 @@ export default function OrganizationPage() {
           </div>
         </div>
       ) : tab === "users" ? (
-        <div className="mt-6 space-y-6">
-          <div className="theme-card p-6">
+        <div className="mt-6 space-y-4">
+          <div className="theme-card p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="font-semibold theme-text">{o.createUser[lang]}</h2>
               <button
@@ -389,46 +461,17 @@ export default function OrganizationPage() {
             </div>
             {showCreateUser && (
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <input
-                  className="theme-input rounded-lg border px-3 py-2 text-sm"
-                  placeholder={o.employeeNo[lang]}
-                  value={newEmployeeNo}
-                  onChange={(e) => setNewEmployeeNo(e.target.value)}
-                />
-                <input
-                  className="theme-input rounded-lg border px-3 py-2 text-sm"
-                  placeholder={o.displayName[lang]}
-                  value={newDisplayName}
-                  onChange={(e) => setNewDisplayName(e.target.value)}
-                />
-                <input
-                  className="theme-input rounded-lg border px-3 py-2 text-sm"
-                  placeholder={o.email[lang]}
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                />
-                <input
-                  type="password"
-                  className="theme-input rounded-lg border px-3 py-2 text-sm"
-                  placeholder={o.password[lang]}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                />
-                <select
-                  className="theme-input rounded-lg border px-3 py-2 text-sm"
-                  value={newPrimaryDept}
-                  onChange={(e) => setNewPrimaryDept(e.target.value)}
-                >
+                <input className="theme-input rounded-lg border px-3 py-2 text-sm" placeholder={o.employeeNo[lang]} value={newEmployeeNo} onChange={(e) => setNewEmployeeNo(e.target.value)} />
+                <input className="theme-input rounded-lg border px-3 py-2 text-sm" placeholder={o.displayName[lang]} value={newDisplayName} onChange={(e) => setNewDisplayName(e.target.value)} />
+                <input className="theme-input rounded-lg border px-3 py-2 text-sm" placeholder={o.email[lang]} value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
+                <input type="password" className="theme-input rounded-lg border px-3 py-2 text-sm" placeholder={o.password[lang]} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                <select className="theme-input rounded-lg border px-3 py-2 text-sm" value={newPrimaryDept} onChange={(e) => setNewPrimaryDept(e.target.value)}>
                   <option value="">{o.primaryDept[lang]} —</option>
                   {departments.map((d) => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
                 </select>
-                <select
-                  className="theme-input rounded-lg border px-3 py-2 text-sm"
-                  value={newUserTier}
-                  onChange={(e) => setNewUserTier(e.target.value)}
-                >
+                <select className="theme-input rounded-lg border px-3 py-2 text-sm" value={newUserTier} onChange={(e) => setNewUserTier(e.target.value)}>
                   <option value="staff">{o.tierStaff[lang]}</option>
                   <option value="director">{o.tierDirector[lang]}</option>
                   <option value="executive">{o.tierExecUser[lang]}</option>
@@ -443,100 +486,186 @@ export default function OrganizationPage() {
               </div>
             )}
           </div>
-          <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-          <div className="theme-card p-4">
-            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold theme-text">
-              <Users className="h-4 w-4" /> {o.selectUser[lang]}
-            </h2>
-            <ul className="max-h-[480px] space-y-1 overflow-y-auto">
-              {orgUsers.map((u) => (
-                <li key={u.id}>
+
+          <div className="flex flex-wrap gap-3">
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 theme-muted" />
+              <input
+                className="theme-input w-full rounded-lg border py-2 pl-9 pr-3 text-sm"
+                placeholder={o.searchUser[lang]}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <select className="theme-input rounded-lg border px-3 py-2 text-sm" value={filterDeptId} onChange={(e) => setFilterDeptId(e.target.value)}>
+              <option value="">{o.filterDept[lang]}</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+            <select className="theme-input rounded-lg border px-3 py-2 text-sm" value={filterRole} onChange={(e) => setFilterRole(e.target.value)}>
+              <option value="">{o.filterRole[lang]}</option>
+              {ALL_ROLE_CODES.map((code) => (
+                <option key={code} value={code}>{roleLabel(code)}</option>
+              ))}
+            </select>
+            <button type="button" className="theme-btn-secondary text-sm" onClick={() => setTab("import")}>
+              <FileSpreadsheet className="mr-1 inline h-4 w-4" />
+              {o.tabImport[lang]}
+            </button>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
+            <div className="theme-card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b theme-border bg-slate-50/50 text-xs theme-muted dark:bg-slate-900/30">
+                      <th className="px-4 py-3">{o.colName[lang]}</th>
+                      <th className="px-4 py-3">{o.colEmpNo[lang]}</th>
+                      <th className="px-4 py-3">{o.colDept[lang]}</th>
+                      <th className="px-4 py-3">{o.colRoles[lang]}</th>
+                      <th className="px-4 py-3">{o.colStatus[lang]}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center theme-muted">{o.noUsersMatch[lang]}</td>
+                      </tr>
+                    ) : (
+                      filteredUsers.map((u) => (
+                        <tr
+                          key={u.id}
+                          onClick={() => setSelectedUserId(u.id)}
+                          className={clsx(
+                            "cursor-pointer border-b theme-border/60 transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-900/20",
+                            selectedUserId === u.id && "bg-blue-50/80 dark:bg-blue-950/20",
+                          )}
+                        >
+                          <td className="px-4 py-3 font-medium">{u.display_name}</td>
+                          <td className="px-4 py-3 font-mono text-xs theme-muted">{u.employee_no || "—"}</td>
+                          <td className="px-4 py-3 theme-muted">{u.primary_department_name || "—"}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              {u.roles.map((r) => (
+                                <span key={r.role_code} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">
+                                  {roleLabel(r.role_code)}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={clsx("text-xs", u.is_active ? "text-emerald-600" : "text-red-500")}>
+                              {u.is_active ? o.active[lang] : o.inactive[lang]}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {selectedUser ? (
+              <div className="theme-card p-5 xl:sticky xl:top-4 xl:self-start">
+                <h2 className="mb-1 font-semibold theme-text">{selectedUser.display_name}</h2>
+                <p className="mb-4 text-xs theme-muted">{o.clickRowHint[lang]}</p>
+
+                <p className="mb-2 text-xs font-medium theme-muted">{o.rolePreset[lang]}</p>
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["operator", o.presetOperator[lang]],
+                      ["dept_leader", o.presetLeader[lang]],
+                      ["dept_liaison", o.presetLiaison[lang]],
+                      ["auditor", o.presetAuditor[lang]],
+                      ["executive", o.presetExecutive[lang]],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className="rounded-full border theme-border px-2.5 py-1 text-xs hover:bg-slate-50 dark:hover:bg-slate-800"
+                      onClick={() => applyRolePreset(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button type="button" className="rounded-full border theme-border px-2.5 py-1 text-xs theme-muted" onClick={clearRoles}>
+                    {o.presetClear[lang]}
+                  </button>
+                </div>
+
+                <label className="mb-1 block text-xs theme-muted">{o.primaryDept[lang]}</label>
+                <select className="theme-input mb-3 w-full rounded-lg border px-3 py-2 text-sm" value={editPrimaryDept} onChange={(e) => setEditPrimaryDept(e.target.value)}>
+                  <option value="">—</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+                <label className="mb-1 block text-xs theme-muted">{o.userTier[lang]}</label>
+                <select className="theme-input mb-3 w-full rounded-lg border px-3 py-2 text-sm" value={editUserTier} onChange={(e) => setEditUserTier(e.target.value)}>
+                  <option value="staff">{o.tierStaff[lang]}</option>
+                  <option value="director">{o.tierDirector[lang]}</option>
+                  <option value="executive">{o.tierExecUser[lang]}</option>
+                </select>
+                <label className="mb-3 flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} />
+                  <span>{o.userActive[lang]}</span>
+                </label>
+                <p className="mb-2 text-xs theme-muted">{o.roles[lang]}</p>
+                <div className="max-h-52 space-y-2 overflow-y-auto">
+                  {ALL_ROLE_CODES.map((code) => (
+                    <div key={code} className="rounded-lg border theme-border p-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={!!editRoles[code]}
+                          onChange={(e) => setEditRoles((prev) => ({ ...prev, [code]: e.target.checked }))}
+                        />
+                        <span>{roleLabel(code)}</span>
+                      </label>
+                      {editRoles[code] && SCOPED_ROLES.has(code) && (
+                        <select
+                          className="theme-input mt-1 w-full rounded border px-2 py-1 text-xs"
+                          value={editScopeDept[code] ?? ""}
+                          onChange={(e) => setEditScopeDept((prev) => ({ ...prev, [code]: e.target.value }))}
+                        >
+                          <option value="">{lang === "zh" ? "全公司 / 默认" : "All / default"}</option>
+                          {departments.map((d) => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button onClick={saveUserRoles} className="theme-btn-primary flex-1">{o.saveUser[lang]}</button>
                   <button
                     type="button"
-                    onClick={() => setSelectedUserId(u.id)}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm ${selectedUserId === u.id ? "nav-item-active" : "nav-item-idle"}`}
+                    className="theme-btn-secondary text-sm"
+                    onClick={() => { setTab("preview"); }}
                   >
-                    <div className="font-medium">{u.display_name}</div>
-                    <div className="text-xs theme-muted">{u.employee_no || u.email}</div>
+                    {o.tabPreview[lang]}
                   </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-          {selectedUser && (
-            <div className="theme-card p-6">
-              <h2 className="mb-4 font-semibold theme-text">{selectedUser.display_name}</h2>
-              <label className="mb-1 block text-xs theme-muted">{o.primaryDept[lang]}</label>
-              <select
-                className="theme-input mb-4 w-full rounded-lg border px-3 py-2 text-sm"
-                value={editPrimaryDept}
-                onChange={(e) => setEditPrimaryDept(e.target.value)}
-              >
-                <option value="">—</option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
-              <label className="mb-1 block text-xs theme-muted">{o.userTier[lang]}</label>
-              <select
-                className="theme-input mb-4 w-full rounded-lg border px-3 py-2 text-sm"
-                value={editUserTier}
-                onChange={(e) => setEditUserTier(e.target.value)}
-              >
-                <option value="staff">{o.tierStaff[lang]}</option>
-                <option value="director">{o.tierDirector[lang]}</option>
-                <option value="executive">{o.tierExecUser[lang]}</option>
-              </select>
-              <label className="mb-4 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={editIsActive}
-                  onChange={(e) => setEditIsActive(e.target.checked)}
-                />
-                <span>{o.userActive[lang]}</span>
-              </label>
-              <p className="mb-2 text-xs theme-muted">{o.roles[lang]}</p>
-              <div className="space-y-3">
-                {ALL_ROLE_CODES.map((code) => (
-                  <div key={code} className="rounded-lg border theme-border p-3">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={!!editRoles[code]}
-                        onChange={(e) => setEditRoles((prev) => ({ ...prev, [code]: e.target.checked }))}
-                      />
-                      <span>{roleLabel(code)}</span>
-                      <span className="text-xs theme-muted">({code})</span>
-                    </label>
-                    {editRoles[code] && ["dept_leader", "executive", "auditor", "dept_liaison"].includes(code) && (
-                      <select
-                        className="theme-input mt-2 w-full rounded-lg border px-2 py-1 text-xs"
-                        value={editScopeDept[code] ?? ""}
-                        onChange={(e) => setEditScopeDept((prev) => ({ ...prev, [code]: e.target.value }))}
-                      >
-                        <option value="">{lang === "zh" ? "全公司 / 默认" : "All / default"}</option>
-                        {departments.map((d) => (
-                          <option key={d.id} value={d.id}>{d.name}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                ))}
+                </div>
               </div>
-              <button onClick={saveUserRoles} className="theme-btn-primary mt-4">{o.saveUser[lang]}</button>
-            </div>
-          )}
+            ) : (
+              <div className="theme-card flex items-center justify-center p-8 theme-muted">
+                <Users className="mr-2 h-5 w-5" />
+                {o.selectUser[lang]}
+              </div>
+            )}
           </div>
         </div>
       ) : (
         <div className="mt-6 theme-card p-6">
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <label className="text-sm theme-muted">{o.selectUser[lang]}</label>
-            <select
-              className="theme-input rounded-lg border px-3 py-2 text-sm"
-              value={selectedUserId}
-              onChange={(e) => setSelectedUserId(e.target.value)}
-            >
+            <select className="theme-input rounded-lg border px-3 py-2 text-sm" value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)}>
               {orgUsers.map((u) => (
                 <option key={u.id} value={u.id}>{u.display_name}</option>
               ))}
@@ -570,6 +699,12 @@ export default function OrganizationPage() {
               </div>
               <div className="rounded-lg border theme-border p-4 sm:col-span-2">
                 <p className="text-xs theme-muted">{o.roles[lang]}</p>
+                <p className="mt-1 text-sm theme-text">
+                  {preview.roles.map((r) => roleLabel(r.role_code)).join("、") || "—"}
+                </p>
+              </div>
+              <div className="rounded-lg border theme-border p-4 sm:col-span-2">
+                <p className="text-xs theme-muted">{lang === "zh" ? "有效权限" : "Effective permissions"}</p>
                 <p className="mt-1 text-sm theme-text">{preview.permissions.join(", ") || "—"}</p>
               </div>
             </div>

@@ -71,6 +71,24 @@ cd backend
 python scripts/smoke_test_agent_permissions.py   # 21 checks
 ```
 
+### 2026-06 — Organization permission Excel import
+
+**Summary:** Org admins and delegation roles can bulk-update user roles via Excel (template download, preview, apply).
+
+| Capability | Details |
+|------------|---------|
+| **Template** | 4 sheets: import data, instructions, role reference, department reference |
+| **Flow** | Download → upload → **preview** (green/yellow/red) → confirm apply |
+| **UI** | `/settings/organization` — table, search, role presets, **Bulk import** tab |
+| **Delegation** | Dept liaison & executive secretary pages include scoped import |
+| **API** | `GET/POST /organization/permissions/import/*` and `/organization/delegation/permissions/import/*` |
+
+```bash
+cd backend
+python scripts/smoke_test_permission_import.py   # 7 checks
+python scripts/run_launch_preflight.py           # pre-launch suite
+```
+
 ### 2026-06 — SessionContext integration (P0 shipped)
 
 **Summary:** What you pick in chat (skills / knowledge bases) is what runs at inference time and what gets linked after deposit.
@@ -392,7 +410,7 @@ Future plans are stored in the seeded knowledge base **「AI-AGENT 平台文档�
 - [x] Chat chart / KPI structured rendering
 - [x] Scheduled tasks for workflows & crew orchestration
 - [x] Save as skill / knowledge from chat; smart deposit (SessionContext P0)
-- [x] User authentication & organization RBAC UI
+- [x] User authentication & organization RBAC UI (**Excel bulk permission import**)
 - [~] Docker Compose one-click deployment (compose file exists, WIP)
 
 ---

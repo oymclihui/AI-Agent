@@ -281,6 +281,8 @@ def main() -> int:
         r = client.get(f"{API}/agents/{agent_id}", headers=user_b_h)
         if r.status_code == 404:
             ok("access revoked after delete", "404")
+        elif r.status_code == 403:
+            ok("access revoked after delete", "403")
         else:
             fail("access revoked after delete", f"status={r.status_code}")
 

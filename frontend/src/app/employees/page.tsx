@@ -7,7 +7,7 @@ import {
   Plus, Briefcase, Trash2, ChevronRight, Loader2, LayoutTemplate, Search, X, Clock,
   Network, LayoutGrid,
 } from "lucide-react";
-import { agentsApi, employeesApi } from "@/lib/api";
+import { agentsApi, employeesApi, formatApiError } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { useAuthStore } from "@/lib/authStore";
@@ -102,17 +102,25 @@ export default function EmployeesPage() {
   const [viewMode, setViewMode] = useState<"org" | "cards">("org");
   const [orgTree, setOrgTree] = useState<OrgTreeData | null>(null);
   const [orgLoading, setOrgLoading] = useState(false);
+  const [orgError, setOrgError] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [syncingOrg, setSyncingOrg] = useState(false);
   const [form, setForm] = useState({
     name: "", title: "", description: "", agent_id: "", timezone: "Asia/Shanghai",
   });
 
   const load = async () => {
+    setLoadError(false);
     try {
       const { data } = await employeesApi.list();
       setItems(data);
-    } catch {
-      toast.error(lang === "zh" ? "加载失败" : "Failed to load");
+    } catch (err) {
+      setLoadError(true);
+      const msg = formatApiError(
+        err,
+        lang === "zh" ? "数字员工列表加载失败" : "Failed to load employees",
+      );
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -120,10 +128,13 @@ export default function EmployeesPage() {
 
   const loadOrgTree = async () => {
     setOrgLoading(true);
+    setOrgError(false);
     try {
       const { data } = await employeesApi.orgTree(true);
       setOrgTree(data as OrgTreeData);
     } catch {
+      setOrgError(true);
+      setOrgTree(null);
       toast.error(lang === "zh" ? "组织架构加载失败" : "Failed to load org chart");
     } finally {
       setOrgLoading(false);
@@ -312,6 +323,13 @@ export default function EmployeesPage() {
 
       {loading ? (
         <div className="theme-muted text-sm">{c.loading[lang]}</div>
+      ) : loadError ? (
+        <div className="agents-empty">
+          <p className="mb-4">{lang === "zh" ? "无法连接后端，请确认 API 服务已启动（默认 8000 或 .env.local 中的 BACKEND_URL）" : "Cannot reach backend. Start the API server or check BACKEND_URL in .env.local"}</p>
+          <button type="button" onClick={() => { setLoading(true); void load(); }} className="agents-btn-primary">
+            {lang === "zh" ? "重试" : "Retry"}
+          </button>
+        </div>
       ) : items.length === 0 ? (
         <div className="agents-empty">
           <Briefcase className="mb-4 h-12 w-12 opacity-40" />
@@ -321,9 +339,21 @@ export default function EmployeesPage() {
           </button>
         </div>
       ) : viewMode === "org" ? (
-        orgLoading || !orgTree ? (
+        orgLoading ? (
           <div className="theme-muted flex items-center gap-2 text-sm">
             <Loader2 className="h-4 w-4 animate-spin" /> {c.loading[lang]}
+          </div>
+        ) : orgError || !orgTree ? (
+          <div className="agents-empty">
+            <p className="mb-4">{lang === "zh" ? "组织架构加载失败，可切换到卡片视图查看员工列表" : "Org chart failed to load. Switch to card view to see employees."}</p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              <button type="button" onClick={() => void loadOrgTree()} className="agents-btn-secondary">
+                {lang === "zh" ? "重试" : "Retry"}
+              </button>
+              <button type="button" onClick={() => setViewMode("cards")} className="agents-btn-primary">
+                {lang === "zh" ? "卡片视图" : "Card view"}
+              </button>
+            </div>
           </div>
         ) : (
           <EmployeeOrgChart

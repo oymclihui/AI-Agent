@@ -5,8 +5,29 @@ const BACKEND =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://127.0.0.1:8000";
 
-async function proxyRequest(req: NextRequest, pathSegments: string[]) {
+/** FastAPI list routes use trailing slash; Next.js strips it from incoming URLs. */
+const COLLECTION_ROOTS = new Set([
+  "agents",
+  "employees",
+  "skills",
+  "workflows",
+  "knowledge",
+  "tools",
+  "models",
+  "orchestrator",
+  "chat",
+]);
+
+function buildUpstreamPath(pathSegments: string[]): string {
   const subPath = pathSegments.map(encodeURIComponent).join("/");
+  if (pathSegments.length === 1 && COLLECTION_ROOTS.has(pathSegments[0])) {
+    return `${subPath}/`;
+  }
+  return subPath;
+}
+
+async function proxyRequest(req: NextRequest, pathSegments: string[]) {
+  const subPath = buildUpstreamPath(pathSegments);
   const url = `${BACKEND}/api/v1/${subPath}${req.nextUrl.search}`;
 
   const headers = new Headers();
@@ -21,6 +42,7 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
     method: req.method,
     headers,
     cache: "no-store",
+    signal: AbortSignal.timeout(120_000),
   };
 
   if (req.method !== "GET" && req.method !== "HEAD") {

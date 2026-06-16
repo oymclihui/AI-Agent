@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -38,7 +39,8 @@ async def main() -> int:
         deposit_ok = any("suggest-deposit" in p for p in paths) and any("deposit/confirm" in p for p in paths)
         record("app routes (deposit)", deposit_ok, str([p for p in paths if "deposit" in p]))
 
-        login = await client.post("/auth/login", json={"login": "admin", "password": "admin123"})
+        admin_pw = os.environ.get("SMOKE_ADMIN_PASSWORD", "admin123")
+        login = await client.post("/auth/login", json={"login": "admin", "password": admin_pw})
         record("auth login", login.status_code == 200, str(login.status_code))
         if login.status_code != 200:
             return 1
