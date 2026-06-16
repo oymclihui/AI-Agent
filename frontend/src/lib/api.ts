@@ -214,6 +214,21 @@ export const chatApi = {
     api.post(`/chat/conversations/${id}/suggest-deposit`, { lang }, { timeout: 180000, signal }),
   confirmDeposit: (id: string, data: object) =>
     api.post(`/chat/conversations/${id}/deposit/confirm`, data, { timeout: 180000 }),
+  listGroupTemplates: (lang: string) => api.get(`/chat/group/templates?lang=${lang}`),
+  exportGroupChat: async (id: string, lang: string) => {
+    const token = getAuthToken();
+    const res = await fetch(`/api/v1/chat/group/conversations/${id}/export?lang=${lang}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `group-chat-${id.slice(0, 8)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
   sendMessage: (id: string, data: object) => api.post(`/chat/conversations/${id}/messages`, data),
   sendMessageWithFiles: (
     id: string,
@@ -480,7 +495,8 @@ export const employeesApi = {
   runTask: (id: string, taskId: string) => api.post(`/employees/${id}/tasks/${taskId}/run`),
   listRuns: (id: string) => api.get(`/employees/${id}/runs`),
   getRun: (id: string, runId: string) => api.get(`/employees/${id}/runs/${runId}`),
-  downloadRunUrl: (id: string, runId: string) => `${API_BASE}/employees/${id}/runs/${runId}/download`,
+  downloadRunUrl: (id: string, runId: string, format = "md") =>
+    `${API_BASE}/employees/${id}/runs/${runId}/download?format=${format}`,
   saveRunToKnowledge: (id: string, runId: string, data: { kb_id?: string; kb_name?: string }) =>
     api.post(`/employees/${id}/runs/${runId}/save-to-knowledge`, data),
   schedulerStatus: () => api.get("/employees/scheduler/status"),
@@ -491,16 +507,28 @@ export interface ChatStreamEvent {
   token?: string;
   thinking?: string;
   error?: string;
+  event?: string;
+  agent_id?: string;
+  agent_name?: string;
+  agent_role?: string;
+  round?: number;
+  is_synthesis?: boolean;
+  message_id?: string;
+  content?: string;
+  label?: string;
+  mode?: string;
 }
 
 export async function* streamChatResponse(
   url: string,
   body: object,
+  signal?: AbortSignal,
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}${url}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!response.ok) {
@@ -514,11 +542,13 @@ export async function* streamChatResponse(
 export async function* streamChatResponseForm(
   url: string,
   form: FormData,
+  signal?: AbortSignal,
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}${url}`, {
     method: "POST",
     headers: authHeaders(),
     body: form,
+    signal,
   });
 
   if (!response.ok) {
@@ -569,8 +599,11 @@ async function* readChatSseStream(response: Response): AsyncGenerator<ChatStream
         if (parsed.token) event.token = parsed.token;
         if (parsed.thinking) event.thinking = parsed.thinking;
         if (parsed.error) event.error = parsed.error;
+        if (parsed.event) {
+          Object.assign(event, parsed);
+        }
         if (event.error) throw new Error(event.error);
-        if (event.token || event.thinking) yield event;
+        if (event.token || event.thinking || event.event) yield event;
       } catch (e) {
         if (e instanceof SyntaxError) continue;
         throw e;

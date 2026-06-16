@@ -12,7 +12,7 @@ from app.db.models import User
 from app.db.session import get_db
 from app.integrations.dingtalk import parse_dingtalk_event, send_dingtalk_session_reply
 from app.integrations.feishu import parse_feishu_event, send_feishu_text
-from app.integrations.im_bridge import generate_im_reply
+from app.integrations.im_bridge import generate_im_group_reply
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
@@ -73,7 +73,7 @@ async def feishu_events(request: Request, db: AsyncSession = Depends(get_db)):
     text = parsed.get("text") or ""
     chat_id = parsed.get("chat_id")
     sender = parsed.get("sender_id") or "feishu"
-    reply = await generate_im_reply(
+    reply = await generate_im_group_reply(
         db,
         text,
         bot_user_id=settings.IM_BOT_USER_ID or None,
@@ -103,7 +103,7 @@ async def dingtalk_events(request: Request, db: AsyncSession = Depends(get_db)):
 
     text = parsed.get("text") or ""
     session_key = parsed.get("session_key") or "dingtalk"
-    reply = await generate_im_reply(
+    reply = await generate_im_group_reply(
         db,
         text,
         bot_user_id=settings.IM_BOT_USER_ID or None,

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -40,6 +40,7 @@ from app.schemas.employee import (
     SaveRunToKnowledgeRequest,
 )
 from app.core.employees.export import _run_markdown, export_run_to_knowledge
+from app.core.doc_export import FORMAT_MEDIA, convert_markdown, normalize_format, replace_extension
 from app.core.employees.schedule import compute_next_run, validate_schedule
 from app.core.employees.runner import run_scheduled_task
 from app.core.employees.scheduler import EmployeeScheduler
@@ -421,16 +422,33 @@ async def get_employee_run(
 async def download_employee_run(
     employee_id: str,
     run_id: str,
+    format: str = Query("md", alias="format", description="md | docx | xlsx | pptx"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     emp = await require_employee_read(db, user, employee_id)
     run, task = await _get_run_with_task(db, employee_id, run_id)
+    try:
+        fmt = normalize_format(format)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     markdown = _run_markdown(run, task, emp.name)
-    filename = (run.output_data or {}).get("report_filename") or f"run_{run.id[:8]}.md"
-    return PlainTextResponse(
-        content=markdown,
-        media_type="text/markdown; charset=utf-8",
+    base_name = (run.output_data or {}).get("report_filename") or f"run_{run.id[:8]}.md"
+    filename = replace_extension(base_name, fmt)
+
+    if fmt == "md":
+        return PlainTextResponse(
+            content=markdown,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    title = f"{emp.name} · {task.name if task else 'Task'}"
+    body = convert_markdown(markdown, fmt, title=title)
+    return Response(
+        content=body,
+        media_type=FORMAT_MEDIA[fmt],
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

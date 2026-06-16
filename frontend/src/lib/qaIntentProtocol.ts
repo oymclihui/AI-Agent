@@ -30,6 +30,8 @@ export interface QaChartPayload {
   data: Record<string, unknown>[];
   xKey?: string;
   yKeys?: QaChartYKey[];
+  /** Show numeric labels on data points (default: on for ≤12 points, single series). */
+  showLabels?: boolean;
 }
 
 export type QaSegment =

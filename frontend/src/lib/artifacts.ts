@@ -4,6 +4,27 @@ export interface RunArtifact {
   mime_type?: string;
 }
 
+export type DownloadFormat = "md" | "docx" | "xlsx" | "pptx";
+
+export function formatsForFilename(filename: string): DownloadFormat[] {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  if (ext === "pptx") return ["pptx"];
+  if (ext === "xlsx") return ["xlsx"];
+  if (ext === "docx") return ["docx"];
+  return ["md", "docx", "xlsx", "pptx"];
+}
+
+export function artifactDownloadUrl(baseUrl: string, format?: DownloadFormat): string {
+  if (!format) return baseUrl;
+  const sep = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}${sep}format=${format}`;
+}
+
+export function runReportFilename(base: string, format: DownloadFormat): string {
+  const stem = base.replace(/\.[^.]+$/, "") || "report";
+  return `${stem}.${format}`;
+}
+
 const ARTIFACT_URL_RE = /\/api\/v1\/artifacts\/([A-Za-z0-9._-]+)/g;
 
 /** Merge structured artifacts with URLs parsed from agent output text. */
@@ -27,12 +48,18 @@ export function resolveRunArtifacts(
   return merged;
 }
 
-export async function downloadArtifact(url: string, filename: string): Promise<void> {
-  const res = await fetch(url, { credentials: "same-origin" });
+export async function downloadArtifact(
+  url: string,
+  filename: string,
+  format?: DownloadFormat,
+): Promise<void> {
+  const targetUrl = artifactDownloadUrl(url, format);
+  const res = await fetch(targetUrl, { credentials: "same-origin" });
   if (!res.ok) {
     throw new Error(`Download failed (${res.status})`);
   }
-  await saveBlobResponse(res, filename);
+  const outName = format ? runReportFilename(filename, format) : filename;
+  await saveBlobResponse(res, outName);
 }
 
 export async function downloadAuthed(url: string, filename: string, token?: string | null): Promise<void> {

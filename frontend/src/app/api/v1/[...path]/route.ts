@@ -49,7 +49,15 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
     init.body = await req.arrayBuffer();
   }
 
-  const upstream = await fetch(url, init);
+  const upstream = await fetch(url, init).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : "upstream fetch failed";
+    return new Response(
+      JSON.stringify({
+        detail: `Backend unreachable at ${BACKEND}: ${message}`,
+      }),
+      { status: 502, headers: { "content-type": "application/json" } },
+    );
+  });
   const responseHeaders = new Headers();
   const upstreamType = upstream.headers.get("content-type");
   if (upstreamType) responseHeaders.set("content-type", upstreamType);

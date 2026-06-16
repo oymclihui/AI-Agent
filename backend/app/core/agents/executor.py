@@ -17,6 +17,7 @@ from app.core.agents.base import AgentDefinition, Task
 from app.core.harness.context import get_harness_context
 from app.core.harness.gate import execute_tool
 from app.core.memory.manager import MemoryManager
+from app.core.platform_identity import platform_identity_messages
 
 logger = structlog.get_logger(__name__)
 
@@ -65,7 +66,10 @@ class AgentExecutor:
 
         session_id = memory_session_id or self.definition.id
         llm = await self._get_llm()
-        messages: list[BaseMessage] = [SystemMessage(content=self.definition.system_prompt())]
+        messages: list[BaseMessage] = [
+            *platform_identity_messages(),
+            SystemMessage(content=self.definition.system_prompt()),
+        ]
         messages.extend(self.skill_messages)
 
         if self.memory_manager:
@@ -155,7 +159,10 @@ class AgentExecutor:
     async def stream(self, task: Task, context: Optional[dict[str, Any]] = None) -> AsyncIterator[str]:
         """Stream the agent's response token by token (no tool loop)."""
         llm = await self._get_llm()
-        messages: list[BaseMessage] = [SystemMessage(content=self.definition.system_prompt())]
+        messages: list[BaseMessage] = [
+            *platform_identity_messages(),
+            SystemMessage(content=self.definition.system_prompt()),
+        ]
         messages.extend(self.skill_messages)
         messages.append(HumanMessage(content=task.description))
 

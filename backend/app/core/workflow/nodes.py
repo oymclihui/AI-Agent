@@ -680,6 +680,50 @@ class DesktopCaptureNode(BaseNode):
         return state
 
 
+class GroupDiscussNode(BaseNode):
+    """Multi-agent group discussion node — runs crew-style collaboration."""
+    node_type = "group_discuss"
+
+    async def __call__(self, state: WorkflowState) -> WorkflowState:
+        from app.db.session import AsyncSessionLocal
+        from app.core.orchestrator.runner import execute_crew_from_config
+
+        state.current_node = self.node_id
+        cfg = resolve_config(self.config, state)
+        agent_ids = cfg.get("agent_ids") or []
+        if isinstance(agent_ids, str):
+            agent_ids = [a.strip() for a in agent_ids.split(",") if a.strip()]
+        goal = str(state.input or cfg.get("prompt") or cfg.get("goal") or "").strip()
+        if not goal:
+            state.errors.append(f"GroupDiscussNode {self.node_id}: input or prompt required")
+            return state
+        if len(agent_ids) < 2:
+            state.errors.append(f"GroupDiscussNode {self.node_id}: at least 2 agent_ids required")
+            return state
+
+        task_config = {
+            "goal": goal,
+            "agent_ids": agent_ids,
+            "process": str(cfg.get("process") or "sequential"),
+            "manager_agent_id": cfg.get("moderator_agent_id") or cfg.get("manager_agent_id"),
+        }
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await execute_crew_from_config(session, task_config)
+        except Exception as exc:
+            state.errors.append(f"GroupDiscussNode {self.node_id}: {exc}")
+            return state
+
+        output = str(result.get("output") or "").strip()
+        state.output = output
+        state.context["group_discuss"] = {
+            "task_outputs": result.get("task_outputs"),
+            "process": result.get("process"),
+        }
+        state.add_message("assistant", output, self.node_id)
+        return state
+
+
 class DesktopReplayNode(BaseNode):
     """Replay a recorded desktop demo via local sidecar."""
     node_type = "desktop_replay"

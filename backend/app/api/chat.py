@@ -35,6 +35,7 @@ from app.core.speech.transcriber import transcribe_audio
 from app.core.chat.connectors import build_connector_messages
 from app.core.chat.web_context import build_web_search_messages
 from app.core.chat.deposit import analyze_conversation_deposit, confirm_conversation_deposit as execute_deposit_confirm
+from app.core.group_chat.orchestrator import GroupChatOrchestrator, get_group_config_from_conversation
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 logger = structlog.get_logger(__name__)
@@ -163,6 +164,26 @@ def _merge_conversation_preferences(
             meta["web_search_enabled"] = True
         else:
             meta.pop("web_search_enabled", None)
+    conv.metadata_ = meta
+
+
+def _apply_chat_mode(
+    conv: Conversation,
+    *,
+    chat_mode: str | None = None,
+    group_config: dict | None = None,
+) -> None:
+    meta = dict(conv.metadata_ or {})
+    if chat_mode is not None:
+        if chat_mode == "group":
+            meta["chat_mode"] = "group"
+            if group_config:
+                meta["group"] = group_config
+        else:
+            meta["chat_mode"] = "single"
+            meta.pop("group", None)
+    elif group_config is not None:
+        meta["group"] = group_config
     conv.metadata_ = meta
 
 
@@ -353,6 +374,13 @@ async def create_conversation(
         if not wf:
             raise HTTPException(status_code=404, detail=f"Workflow not found: {payload.workflow_id}")
 
+    if payload.chat_mode == "group":
+        if not payload.group_config:
+            raise HTTPException(status_code=400, detail="group_config required for group chat")
+        for aid in payload.group_config.agent_ids:
+            agent = await db.get(AgentModel, aid)
+            await require_agent_use(db, agent, user)
+
     conv = Conversation(
         id=generate_uuid(),
         owner_id=user.id,
@@ -370,6 +398,14 @@ async def create_conversation(
         connector_id=payload.connector_id,
         web_search_enabled=payload.web_search_enabled,
     )
+    if payload.chat_mode == "group" and payload.group_config:
+        _apply_chat_mode(
+            conv,
+            chat_mode="group",
+            group_config=payload.group_config.model_dump(),
+        )
+    else:
+        _apply_chat_mode(conv, chat_mode="single")
     db.add(conv)
     await db.flush()
     await db.refresh(conv)
@@ -434,6 +470,20 @@ async def update_conversation_context(
             web_search_enabled=unset.get("web_search_enabled") if "web_search_enabled" in unset else None,
         )
 
+    if "chat_mode" in unset or "group_config" in unset:
+        gc = unset.get("group_config")
+        if gc is not None and hasattr(gc, "model_dump"):
+            gc = gc.model_dump()
+        if gc is not None:
+            for aid in gc.get("agent_ids") or []:
+                agent = await db.get(AgentModel, aid)
+                await require_agent_use(db, agent, user)
+        _apply_chat_mode(
+            conv,
+            chat_mode=unset.get("chat_mode") if "chat_mode" in unset else None,
+            group_config=gc if "group_config" in unset else None,
+        )
+
     await db.flush()
     await db.refresh(conv)
     return ConversationResponse.from_conversation(conv)
@@ -480,6 +530,24 @@ async def delete_all_conversations(
     for conv in convs:
         await _remove_conversation(db, conv)
     return DeleteOkResponse(ok=True, deleted=len(convs))
+
+
+async def _save_streamed_assistant_message(conv_id: str, content: str, thinking: str) -> None:
+    if not content and not thinking:
+        return
+    from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        meta = {"thinking": thinking} if thinking else {}
+        assistant_msg = Message(
+            id=generate_uuid(),
+            conversation_id=conv_id,
+            role=MessageRole.assistant,
+            content=content,
+            metadata_=meta,
+        )
+        session.add(assistant_msg)
+        await session.commit()
 
 
 @router.post("/conversations/{conv_id}/messages")
@@ -550,6 +618,33 @@ async def send_message(
     db.add(user_msg)
     await db.flush()
 
+    group_cfg = get_group_config_from_conversation(conv)
+    if group_cfg:
+        if file_items and attachment_context:
+            message = f"{message}\n\n{attachment_context}"
+        if not stream:
+            raise HTTPException(status_code=400, detail="Group chat requires stream=true")
+
+        async def sse_group_stream():
+            orchestrator = GroupChatOrchestrator(
+                db, conv, user, group_cfg, extra_skill_messages=skill_messages,
+            )
+            try:
+                async for ev in orchestrator.stream(
+                    message,
+                    disconnected=request.is_disconnected,
+                ):
+                    if await request.is_disconnected():
+                        break
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                detail = _friendly_llm_error(exc)
+                logger.exception("group_chat_stream_failed", conversation_id=conv_id)
+                yield f"data: {json.dumps({'event': 'error', 'error': detail}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(sse_group_stream(), media_type="text/event-stream")
+
     use_agent_tools = _agent_has_tools(agent_model)
 
     if use_agent_tools and agent_model:
@@ -615,6 +710,7 @@ async def send_message(
         async def sse_stream():
             full = ""
             thinking = ""
+            client_gone = False
             try:
                 async for event in dialogue.stream(
                     session_id=conv_id,
@@ -625,6 +721,9 @@ async def send_message(
                     db=db,
                     user_id=user.id,
                 ):
+                    if await request.is_disconnected():
+                        client_gone = True
+                        break
                     if event.get("thinking"):
                         thinking += event["thinking"]
                         yield f"data: {json.dumps({'thinking': event['thinking']})}\n\n"
@@ -637,21 +736,18 @@ async def send_message(
                 yield f"data: {json.dumps({'error': detail})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
+            finally:
+                try:
+                    await _save_streamed_assistant_message(conv_id, full, thinking)
+                except Exception as exc:
+                    logger.warning(
+                        "chat_stream_persist_failed",
+                        conversation_id=conv_id,
+                        error=str(exc),
+                    )
 
-            from app.db.session import AsyncSessionLocal
-            async with AsyncSessionLocal() as session:
-                meta = {"thinking": thinking} if thinking else {}
-                assistant_msg = Message(
-                    id=generate_uuid(),
-                    conversation_id=conv_id,
-                    role=MessageRole.assistant,
-                    content=full,
-                    metadata_=meta,
-                )
-                session.add(assistant_msg)
-                await session.commit()
-
-            yield "data: [DONE]\n\n"
+            if not client_gone:
+                yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_stream(), media_type="text/event-stream")
 

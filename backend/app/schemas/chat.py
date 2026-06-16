@@ -1,9 +1,18 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from datetime import datetime
 from enum import Enum
 
 from app.schemas.agent import SkillBinding
+
+
+class GroupChatConfig(BaseModel):
+    agent_ids: list[str] = Field(..., min_length=2, max_length=6)
+    moderator_agent_id: Optional[str] = None
+    orchestration: Literal["round_robin", "hierarchical", "parallel", "debate"] = "round_robin"
+    max_rounds: int = Field(default=2, ge=1, le=5)
+    auto_synthesize: bool = True
+    lang: str = "zh"
 
 
 class MessageRole(str, Enum):
@@ -29,6 +38,8 @@ class ConversationCreate(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: bool = False
+    chat_mode: Literal["single", "group"] = "single"
+    group_config: Optional[GroupChatConfig] = None
 
 
 class ConversationContextUpdate(BaseModel):
@@ -38,6 +49,8 @@ class ConversationContextUpdate(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: Optional[bool] = None
+    chat_mode: Optional[Literal["single", "group"]] = None
+    group_config: Optional[GroupChatConfig] = None
 
 
 class ConversationResponse(BaseModel):
@@ -52,6 +65,8 @@ class ConversationResponse(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: bool = False
+    chat_mode: str = "single"
+    group_config: Optional[dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -80,6 +95,8 @@ class ConversationResponse(BaseModel):
             model_config_id=meta.get("model_config_id"),
             connector_id=meta.get("connector_id"),
             web_search_enabled=bool(meta.get("web_search_enabled")),
+            chat_mode=str(meta.get("chat_mode") or "single"),
+            group_config=meta.get("group"),
             created_at=conv.created_at,
             updated_at=conv.updated_at,
         )

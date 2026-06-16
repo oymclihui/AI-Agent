@@ -4,12 +4,13 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
-  ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History, Eye, Download, BookOpen,
+  ArrowLeft, Plus, Play, Trash2, Loader2, Clock, History, Eye, BookOpen,
 } from "lucide-react";
 import { employeesApi, knowledgeApi, desktopAutomationApi, agentsApi, workflowsApi } from "@/lib/api";
-import { resolveRunArtifacts, downloadAuthed, type RunArtifact } from "@/lib/artifacts";
+import { resolveRunArtifacts, downloadAuthed, runReportFilename, type RunArtifact } from "@/lib/artifacts";
 import { getAuthToken } from "@/lib/authStore";
 import { ArtifactDownloadButton } from "@/components/ArtifactDownloadButton";
+import { DownloadFormatMenu, type DownloadFormat } from "@/components/DownloadFormatMenu";
 import MarkdownView from "@/components/MarkdownView";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
@@ -75,7 +76,6 @@ export default function EmployeeDetailPage() {
   const [saveKbId, setSaveKbId] = useState("");
   const [saveKbName, setSaveKbName] = useState("");
   const [savingKbRunId, setSavingKbRunId] = useState<string | null>(null);
-  const [downloadingRunId, setDownloadingRunId] = useState<string | null>(null);
   const [taskForm, setTaskForm] = useState({
     name: "",
     description: "",
@@ -185,27 +185,17 @@ export default function EmployeeDetailPage() {
     }
   };
 
-  const artifactLabel = (a: RunArtifact) => {
-    const lower = a.filename.toLowerCase();
-    if (lower.endsWith(".pptx")) return e.downloadPptx[lang];
-    if (lower.endsWith(".md")) return e.downloadMd[lang];
-    return e.downloadFile[lang];
-  };
-
-  const downloadRunReport = async (run: Run) => {
-    setDownloadingRunId(run.id);
+  const downloadRunReport = async (run: Run, format: DownloadFormat) => {
     try {
-      const filename = run.output_data?.report_filename
+      const base = run.output_data?.report_filename
         ?? `employee_report_${run.id.slice(0, 8)}.md`;
       await downloadAuthed(
-        employeesApi.downloadRunUrl(id, run.id),
-        filename,
+        employeesApi.downloadRunUrl(id, run.id, format),
+        runReportFilename(base, format),
         getAuthToken(),
       );
     } catch {
       toast.error(lang === "zh" ? "下载失败" : "Download failed");
-    } finally {
-      setDownloadingRunId(null);
     }
   };
 
@@ -382,7 +372,6 @@ export default function EmployeeDetailPage() {
                   <ArtifactDownloadButton
                     key={a.download_url}
                     artifact={a}
-                    label={`${artifactLabel(a)} · ${a.filename}`}
                   />
                 ))}
               </div>
@@ -450,17 +439,12 @@ export default function EmployeeDetailPage() {
                       >
                         <Eye className="h-3.5 w-3.5" /> {e.viewReport[lang]}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => downloadRunReport(run)}
-                        disabled={downloadingRunId === run.id}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-600/20 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-600/30 disabled:opacity-50"
-                      >
-                        {downloadingRunId === run.id
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Download className="h-3.5 w-3.5" />}
-                        {e.downloadReport[lang]}
-                      </button>
+                      <DownloadFormatMenu
+                        lang={lang}
+                        formats={["md", "docx", "xlsx", "pptx"]}
+                        label={e.downloadReport[lang]}
+                        onDownload={(format) => downloadRunReport(run, format)}
+                      />
                       <button
                         type="button"
                         onClick={() => saveRunToKb(run)}
@@ -478,7 +462,6 @@ export default function EmployeeDetailPage() {
                         <ArtifactDownloadButton
                           key={a.download_url}
                           artifact={a}
-                          label={`${artifactLabel(a)} · ${a.filename}`}
                           variant="compact"
                         />
                       ))}
@@ -517,12 +500,13 @@ export default function EmployeeDetailPage() {
               )}
             </div>
             <div className="flex justify-end gap-2 border-t border-[#2d2d4e] px-6 py-4">
-              <button
-                onClick={() => downloadRunReport(viewRun)}
-                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-600"
-              >
-                {e.downloadReport[lang]}
-              </button>
+              <DownloadFormatMenu
+                lang={lang}
+                formats={["md", "docx", "xlsx", "pptx"]}
+                label={e.downloadReport[lang]}
+                variant="secondary"
+                onDownload={(format) => downloadRunReport(viewRun, format)}
+              />
               <button
                 onClick={() => { saveRunToKb(viewRun); setViewRun(null); }}
                 className="rounded-lg bg-purple-600 px-4 py-2 text-sm text-white hover:bg-purple-500"

@@ -1,0 +1,111 @@
+# AI-AGENT desktop delivery — pre-loaded images only (no source build on target PC)
+# Used by scripts/docker_setup_launcher.py after `docker load`
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiagnet_postgres
+    restart: unless-stopped
+    profiles: ["bundled-db"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aiagnet}
+      POSTGRES_USER: ${POSTGRES_USER:-aiagnet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiagnet123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiagnet}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chromadb:
+    image: docker.m.daocloud.io/chromadb/chroma:latest
+    container_name: aiagnet_chromadb
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  backend:
+    image: aiagnet-backend:latest
+    container_name: aiagnet_backend
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      APP_NAME: AI-AGENT
+      DEBUG: "false"
+      SECRET_KEY: ${SECRET_KEY:-changeme-in-production-32chars!!}
+      DATABASE_URL: ${DATABASE_URL:-}
+      DB_DRIVER: ${DB_DRIVER:-postgresql}
+      DB_HOST: ${DB_HOST:-10.9.240.114}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DB_NAME: ${DB_NAME:-fian}
+      DB_SCHEMA: ${DB_SCHEMA:-aiagent}
+      DB_SSL: ${DB_SSL:-prefer}
+      VECTOR_STORE_TYPE: ${VECTOR_STORE_TYPE:-chroma}
+      CHROMA_MODE: server
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-ollama}
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-qwen3.6:35b}
+      DEFAULT_EMBEDDING_MODEL: ${DEFAULT_EMBEDDING_MODEL:-nomic-embed-text}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000"]}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://127.0.0.1:3000}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      BYD_DEEPSEEK_V4_FLASH_API_KEY: ${BYD_DEEPSEEK_V4_FLASH_API_KEY:-}
+      BYD_DEEPSEEK_V4_FLASH_BASE_URL: ${BYD_DEEPSEEK_V4_FLASH_BASE_URL:-https://eisapi.byd.com/open-api/1.0/llm/v1/deepseek-v4-flash}
+      BYD_QWEN35_35B_API_KEY: ${BYD_QWEN35_35B_API_KEY:-}
+      BYD_QWEN35_35B_BASE_URL: ${BYD_QWEN35_35B_BASE_URL:-https://eisapi.byd.com/open-api/1.0/llm/v1/qwen35-35b-a3b-fp8}
+      WEB_SEARCH_PROVIDERS: ${WEB_SEARCH_PROVIDERS:-bing_cn,baidu}
+      WEB_SEARCH_TIMEOUT: ${WEB_SEARCH_TIMEOUT:-10}
+      LOCAL_UPLOADS_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      chromadb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 90s
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  frontend:
+    image: aiagnet-frontend:latest
+    container_name: aiagnet_frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3000/ws}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: docker.m.daocloud.io/library/nginx:alpine
+    container_name: aiagnet_nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-3000}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  chroma_data:
+  backend_uploads:

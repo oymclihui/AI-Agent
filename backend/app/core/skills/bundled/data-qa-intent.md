@@ -50,10 +50,12 @@ Adapted from smart-qa-v2.0 intent engine. Use when the user asks about metrics, 
 
 When answering in chat, embed blocks the UI can parse (optional but recommended):
 
+**Do not** output Python / Matplotlib / Pyecharts / ECharts code for charts — the chat UI renders charts directly from `[chart:{...}]`. Put the narrative in Markdown and the data in the chart block.
+
 ```
 [kpi:{"label":"销售额","value":1250000,"prefix":"¥","trend":{"value":12.5,"direction":"up","label":"环比"}}]
 
-[chart:{"type":"line","title":"近3个月销售趋势","data":[{"date":"2024-01","value":320}],"xKey":"date","yKeys":[{"key":"value","name":"销售额"}]}]
+[chart:{"type":"line","title":"2024年度销量趋势","showLabels":true,"data":[{"月份":"1月","销量":120},{"月份":"2月","销量":135}],"xKey":"月份","yKeys":[{"key":"销量","name":"销量(万元)"}]}]
 
 [choices:查看详情|下钻分析|导出报告]
 
@@ -63,6 +65,8 @@ When answering in chat, embed blocks the UI can parse (optional but recommended)
 
 [switch:归因哥]
 ```
+
+For line/area/bar charts, set `"showLabels":true` when the user should see values on each point (default UI behavior for ≤12 points). Use `"showLabels":false` only when there are many dense points.
 
 Use Markdown tables when `[table:...]` is not needed. Keep JSON valid inside `[chart:{...}]` and `[kpi:{...}]`.
 

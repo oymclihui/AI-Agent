@@ -1,23 +1,26 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { useState } from "react";
 import { ArrowDownRight, ArrowUpRight, Minus, Sparkles } from "lucide-react";
 import { clsx } from "clsx";
 import type { Lang } from "@/lib/i18n";
 import { translations } from "@/lib/i18n";
-import type { QaChartPayload, QaChartYKey, QaKpiPayload } from "@/lib/qaIntentProtocol";
+import type { QaChartPayload, QaKpiPayload } from "@/lib/qaIntentProtocol";
 
-const CHART_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#a855f7", "#ec4899", "#06b6d4"];
+const QaRechartsView = dynamic(
+  () => import("@/components/chat/QaRechartsView").then((m) => m.QaRechartsView),
+  {
+    ssr: false,
+    loading: () => <div className="qa-chart qa-chart-loading">图表加载中…</div>,
+  },
+);
+
 
 function formatNum(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (Math.abs(n) >= 10_000) return `${(n / 1_000).toFixed(1)}K`;
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
-}
-
-function toNumber(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 function Sparkline({ values }: { values: number[] }) {
@@ -72,119 +75,8 @@ export function QaKpiCard({ data }: { data: QaKpiPayload }) {
   );
 }
 
-function resolveYKeys(chart: QaChartPayload): QaChartYKey[] {
-  if (chart.yKeys?.length) return chart.yKeys;
-  const sample = chart.data[0] ?? {};
-  const xKey = chart.xKey ?? "date";
-  return Object.keys(sample)
-    .filter((k) => k !== xKey && typeof sample[k] === "number")
-    .map((key) => ({ key, name: key }));
-}
-
 export function QaChartBlock({ chart }: { chart: QaChartPayload }) {
-  const xKey = chart.xKey ?? "date";
-  const yKeys = useMemo(() => resolveYKeys(chart), [chart]);
-  const primaryKey = yKeys[0]?.key ?? "value";
-
-  if (chart.type === "pie") {
-    const slices = chart.data.map((row, i) => ({
-      label: String(row[xKey] ?? row.name ?? `#${i + 1}`),
-      value: toNumber(row[primaryKey] ?? row.value),
-      color: CHART_COLORS[i % CHART_COLORS.length],
-    }));
-    const total = slices.reduce((s, x) => s + x.value, 0) || 1;
-    let acc = 0;
-    const gradient = slices
-      .map((s) => {
-        const start = (acc / total) * 100;
-        acc += s.value;
-        return `${s.color} ${start}% ${(acc / total) * 100}%`;
-      })
-      .join(", ");
-
-    return (
-      <div className="qa-chart">
-        {chart.title && <p className="qa-chart-title">{chart.title}</p>}
-        <div className="qa-chart-pie-row">
-          <div className="qa-chart-pie" style={{ background: `conic-gradient(${gradient})` }} />
-          <ul className="qa-chart-legend">
-            {slices.map((s) => (
-              <li key={s.label}>
-                <span className="qa-chart-legend-dot" style={{ background: s.color }} />
-                <span>{s.label}</span>
-                <span className="qa-chart-legend-val">{formatNum(s.value)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    );
-  }
-
-  const series = chart.data.map((row) => ({
-    label: String(row[xKey] ?? ""),
-    values: yKeys.map((yk) => toNumber(row[yk.key])),
-  }));
-  const max = Math.max(1, ...series.flatMap((s) => s.values));
-
-  return (
-    <div className="qa-chart">
-      {chart.title && <p className="qa-chart-title">{chart.title}</p>}
-      {yKeys.length > 1 && (
-        <div className="qa-chart-legend-inline">
-          {yKeys.map((yk, i) => (
-            <span key={yk.key}>
-              <span
-                className="qa-chart-legend-dot"
-                style={{ background: yk.color ?? CHART_COLORS[i % CHART_COLORS.length] }}
-              />
-              {yk.name ?? yk.key}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className={clsx("qa-chart-bars", chart.type === "line" || chart.type === "area" ? "qa-chart-line-mode" : "")}>
-        {series.map((s) => (
-          <div key={s.label} className="qa-chart-col" title={s.label}>
-            <div className="qa-chart-col-inner">
-              {chart.type === "line" || chart.type === "area" ? (
-                yKeys.map((yk, yi) => {
-                  const v = s.values[yi];
-                  return (
-                    <div
-                      key={yk.key}
-                      className={clsx("qa-chart-line-dot", chart.type === "area" && "qa-chart-area-dot")}
-                      style={{
-                        bottom: `${(v / max) * 100}%`,
-                        background: yk.color ?? CHART_COLORS[yi % CHART_COLORS.length],
-                      }}
-                    />
-                  );
-                })
-              ) : (
-                yKeys.map((yk, yi) => {
-                  const v = s.values[yi];
-                  const color = yk.color ?? CHART_COLORS[yi % CHART_COLORS.length];
-                  return (
-                    <div
-                      key={yk.key}
-                      className={clsx("qa-chart-bar", chart.type === "stacked_bar" && "qa-chart-bar-stacked")}
-                      style={{
-                        height: `${(v / max) * 100}%`,
-                        background: color,
-                        opacity: chart.type === "stacked_bar" ? 1 - yi * 0.08 : 1,
-                      }}
-                    />
-                  );
-                })
-              )}
-            </div>
-            <span className="qa-chart-x">{s.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <QaRechartsView chart={chart} />;
 }
 
 interface QaChoicesProps {

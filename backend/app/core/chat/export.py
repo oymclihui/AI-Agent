@@ -24,6 +24,21 @@ def _format_transcript(messages: list[Message]) -> str:
     lines = []
     for msg in messages:
         role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        meta = msg.metadata_ or {}
+        kind = meta.get("kind")
+        if kind == "round_divider":
+            lines.append(f"---\n*{meta.get('label', 'Round')}*\n")
+            continue
+        if role == "assistant" and kind == "synthesis":
+            name = meta.get("agent_name") or "主持人"
+            lines.append(f"### 【共识】{name}\n{msg.content.strip()}\n")
+            continue
+        if role == "assistant" and kind == "agent_turn":
+            name = meta.get("agent_name") or "Agent"
+            rnd = meta.get("round")
+            suffix = f" R{rnd}" if rnd else ""
+            lines.append(f"### {name}{suffix}\n{msg.content.strip()}\n")
+            continue
         label = {"user": "用户", "assistant": "助手"}.get(role, role)
         lines.append(f"### {label}\n{msg.content.strip()}\n")
     return "\n".join(lines)

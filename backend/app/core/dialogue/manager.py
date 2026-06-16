@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.memory.manager import MemoryManager
+from app.core.platform_identity import platform_identity_messages
 
 logger = structlog.get_logger(__name__)
 
@@ -88,7 +89,7 @@ class DialogueManager:
             user_id=user_id,
         )
 
-        messages = []
+        messages = platform_identity_messages()
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         if extra_system_messages:
@@ -174,7 +175,7 @@ class DialogueManager:
             user_id=user_id,
         )
 
-        messages = []
+        messages = platform_identity_messages()
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         if extra_system_messages:

@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Send, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe } from "lucide-react";
+import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
+import { MessageCopyButton } from "@/components/MessageCopyButton";
+import { GroupChatPanel, getGroupConfigFromState } from "@/components/chat/GroupChatPanel";
+import { GroupChatMessageRow } from "@/components/chat/GroupChatMessageRow";
+import type { GroupChatTemplate, GroupOrchestration, GroupMessageMeta } from "@/lib/groupChat";
+import { buildGroupConfig } from "@/lib/groupChat";
 import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi } from "@/lib/api";
 import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
@@ -45,7 +50,7 @@ interface Message {
   role: string;
   content: string;
   created_at: string;
-  metadata?: { attachments?: AttachmentMeta[]; thinking?: string };
+  metadata?: { attachments?: AttachmentMeta[]; thinking?: string } & GroupMessageMeta;
 }
 
 interface Conversation {
@@ -57,6 +62,8 @@ interface Conversation {
   model_config_id?: string | null;
   connector_id?: string | null;
   web_search_enabled?: boolean;
+  chat_mode?: string;
+  group_config?: { agent_ids?: string[]; orchestration?: string; max_rounds?: number };
   created_at: string;
 }
 interface ModelConfigOption {
@@ -167,10 +174,24 @@ export default function ChatPage() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const suggestAbortRef = useRef<AbortController | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const userStoppedRef = useRef(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
+  const [chatMode, setChatMode] = useState<"single" | "group">("single");
+  const [groupAgentIds, setGroupAgentIds] = useState<string[]>([]);
+  const [groupOrchestration, setGroupOrchestration] = useState<GroupOrchestration>("round_robin");
+  const [groupMaxRounds, setGroupMaxRounds] = useState(2);
+  const [consensusOnly, setConsensusOnly] = useState(false);
+  const [groupTemplates, setGroupTemplates] = useState<GroupChatTemplate[]>([]);
+  const [groupStreamAgent, setGroupStreamAgent] = useState<{
+    id: string;
+    name: string;
+    role?: string;
+    synthesis?: boolean;
+  } | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<string>("");
   const [selectedKbId, setSelectedKbId] = useState<string>("");
   const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>("");
@@ -275,6 +296,9 @@ export default function ChatPage() {
     authApi.getMailbox().then(({ data }) => {
       if (data) setMailboxSaved(data);
     }).catch(() => {});
+    chatApi.listGroupTemplates(lang).then(({ data }) => {
+      setGroupTemplates((data as GroupChatTemplate[]) || []);
+    }).catch(() => {});
   }, [lang]);
 
   const loadPendingDesktop = useCallback(async () => {
@@ -363,7 +387,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent, streamingThinking]);
+  }, [messages, streamingContent, streamingThinking, groupStreamAgent]);
 
   const fetchSuggestions = useCallback(async (files: File[]) => {
     suggestAbortRef.current?.abort();
@@ -632,6 +656,74 @@ export default function ChatPage() {
     setSelectedKbId(kbIds[0] || "");
     const skillIds = (conv.skills_config || []).map((s) => s.skill_id);
     setSelectedSkill(skillIds[0] || "");
+    if (conv.chat_mode === "group" && conv.group_config?.agent_ids?.length) {
+      setChatMode("group");
+      setGroupAgentIds(conv.group_config.agent_ids);
+      setGroupOrchestration((conv.group_config.orchestration as GroupOrchestration) || "round_robin");
+      setGroupMaxRounds(conv.group_config.max_rounds ?? 2);
+    } else {
+      setChatMode("single");
+    }
+  };
+
+  const syncGroupContext = async (overrides?: {
+    chatMode?: "single" | "group";
+    groupAgentIds?: string[];
+    orchestration?: GroupOrchestration;
+    maxRounds?: number;
+  }) => {
+    if (!activeConv) return;
+    const mode = overrides?.chatMode ?? chatMode;
+    const ids = overrides?.groupAgentIds ?? groupAgentIds;
+    const orch = overrides?.orchestration ?? groupOrchestration;
+    const rounds = overrides?.maxRounds ?? groupMaxRounds;
+    const payload: Record<string, unknown> = { chat_mode: mode };
+    if (mode === "group" && ids.length >= 2) {
+      payload.group_config = buildGroupConfig(ids, { orchestration: orch, max_rounds: rounds, lang });
+    } else if (mode === "single") {
+      payload.group_config = null;
+    }
+    try {
+      const { data } = await chatApi.updateContext(activeConv, payload);
+      setConversations((list) => list.map((c) => (c.id === data.id ? data : c)));
+    } catch {
+      /* non-blocking */
+    }
+  };
+
+  const onChatModeChange = (mode: "single" | "group") => {
+    setChatMode(mode);
+    if (mode === "group" && groupAgentIds.length < 2 && agents.length >= 2) {
+      const defaults = agents.slice(0, Math.min(3, agents.length)).map((a) => a.id);
+      setGroupAgentIds(defaults);
+      void syncGroupContext({ chatMode: "group", groupAgentIds: defaults });
+    } else {
+      void syncGroupContext({ chatMode: mode });
+    }
+  };
+
+  const applyGroupTemplate = (tpl: GroupChatTemplate, agentIds: string[]) => {
+    setChatMode("group");
+    setGroupAgentIds(agentIds);
+    setGroupOrchestration(tpl.orchestration);
+    setGroupMaxRounds(tpl.max_rounds);
+    setInput(tpl.sample_prompt);
+    void syncGroupContext({
+      chatMode: "group",
+      groupAgentIds: agentIds,
+      orchestration: tpl.orchestration,
+      maxRounds: tpl.max_rounds,
+    });
+  };
+
+  const exportGroupDiscussion = async () => {
+    if (!activeConv) return;
+    try {
+      await chatApi.exportGroupChat(activeConv, lang);
+      toast.success(t.groupExport[lang]);
+    } catch {
+      toast.error(translations.common.actionFailed[lang]);
+    }
   };
 
   const syncContextToServer = async (overrides?: {
@@ -641,11 +733,22 @@ export default function ChatPage() {
     model_config_id?: string | null;
     connector_id?: string | null;
     web_search_enabled?: boolean;
+    chat_mode?: "single" | "group";
+    group_config?: ReturnType<typeof buildGroupConfig> | null;
   }) => {
     if (!activeConv) return;
     const skillId = overrides?.skills_config?.[0]?.skill_id ?? selectedSkill;
     const kbIds = overrides?.knowledge_base_ids ?? (selectedKbId ? [selectedKbId] : []);
-    const payload = {
+    const payload: {
+      agent_id: string | null;
+      knowledge_base_ids: string[];
+      skills_config: { skill_id: string; always_load: boolean; priority: number }[];
+      model_config_id: string | null;
+      connector_id: string | null;
+      web_search_enabled: boolean;
+      chat_mode: "single" | "group";
+      group_config?: ReturnType<typeof buildGroupConfig> | null;
+    } = {
       agent_id: overrides?.agent_id !== undefined ? overrides.agent_id : (selectedAgent || null),
       knowledge_base_ids: kbIds,
       skills_config: overrides?.skills_config ?? (
@@ -660,7 +763,18 @@ export default function ChatPage() {
       web_search_enabled: overrides?.web_search_enabled !== undefined
         ? overrides.web_search_enabled
         : webSearchEnabled,
+      chat_mode: "single",
     };
+    const gc = getGroupConfigFromState(chatMode, groupAgentIds, groupOrchestration, groupMaxRounds, lang);
+    if (overrides?.chat_mode !== undefined) {
+      payload.chat_mode = overrides.chat_mode;
+      payload.group_config = overrides.group_config ?? null;
+    } else if (gc) {
+      payload.chat_mode = "group";
+      payload.group_config = overrides?.group_config ?? gc;
+    } else {
+      payload.chat_mode = "single";
+    }
     try {
       const { data } = await chatApi.updateContext(activeConv, payload);
       setConversations((list) => list.map((c) => (c.id === data.id ? data : c)));
@@ -673,7 +787,7 @@ export default function ChatPage() {
     const skills_config = selectedSkill
       ? [{ skill_id: selectedSkill, always_load: true, priority: 0 }]
       : [];
-    return {
+    const base = {
       agent_id: selectedAgent || null,
       knowledge_base_ids: selectedKbId ? [selectedKbId] : [],
       skills_config,
@@ -681,6 +795,11 @@ export default function ChatPage() {
       connector_id: selectedConnector || null,
       web_search_enabled: webSearchEnabled,
     };
+    const gc = getGroupConfigFromState(chatMode, groupAgentIds, groupOrchestration, groupMaxRounds, lang);
+    if (gc) {
+      return { ...base, chat_mode: "group" as const, group_config: gc };
+    }
+    return { ...base, chat_mode: "single" as const };
   };
 
   const messageExtras = () => ({
@@ -693,8 +812,12 @@ export default function ChatPage() {
     const parts: string[] = [];
     const modelCfg = modelConfigs.find((m) => m.id === selectedModelConfigId);
     if (modelCfg) parts.push(modelCfg.name);
-    const agent = agents.find((a) => a.id === selectedAgent);
-    if (agent) parts.push(agent.name);
+    if (chatMode === "group" && groupAgentIds.length >= 2) {
+      parts.push(`${t.groupChat[lang]} (${groupAgentIds.length})`);
+    } else {
+      const agent = agents.find((a) => a.id === selectedAgent);
+      if (agent) parts.push(agent.name);
+    }
     const skill = skills.find((s) => s.id === selectedSkill);
     if (skill) parts.push(skill.display_name);
     const kb = knowledgeBases.find((k) => k.id === selectedKbId);
@@ -789,6 +912,13 @@ export default function ChatPage() {
     ]);
   };
 
+  const stopGeneration = useCallback(() => {
+    if (!streaming) return;
+    userStoppedRef.current = true;
+    chatAbortRef.current?.abort();
+    stopSpeaking();
+  }, [streaming, stopSpeaking]);
+
   const onFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files || []);
     if (!picked.length) return;
@@ -841,6 +971,12 @@ export default function ChatPage() {
     const hasFiles = pendingFiles.length > 0;
     if ((!hasText && !hasFiles) || streaming) return null;
 
+    const isGroupChat = chatMode === "group" && groupAgentIds.length >= 2;
+    if (chatMode === "group" && groupAgentIds.length < 2) {
+      toast.error(t.groupNeedAgents[lang]);
+      return null;
+    }
+
     let convId = activeConv;
     if (!convId) {
       try {
@@ -856,6 +992,17 @@ export default function ChatPage() {
         const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
         toast.error(detail ? `${t.createFailed[lang]}: ${detail}` : t.createFailed[lang]);
         return null;
+      }
+    }
+
+    if (isGroupChat && convId) {
+      const gc = getGroupConfigFromState(chatMode, groupAgentIds, groupOrchestration, groupMaxRounds, lang);
+      if (gc) {
+        try {
+          await chatApi.updateContext(convId, { chat_mode: "group", group_config: gc });
+        } catch {
+          /* proceed; backend may already have group config */
+        }
       }
     }
 
@@ -883,6 +1030,11 @@ export default function ChatPage() {
     setStreamingContent("");
     setStreamingThinking("");
 
+    chatAbortRef.current?.abort();
+    const streamController = new AbortController();
+    chatAbortRef.current = streamController;
+    userStoppedRef.current = false;
+
     if (webSearchEnabled) {
       toast.loading(t.webSearchSearching[lang], { id: "web-search", duration: 8000 });
     }
@@ -890,39 +1042,201 @@ export default function ChatPage() {
     let full = "";
     let thinking = "";
     let streamError = "";
+    let userStopped = false;
+    let lastSynthesis = "";
+    let currentStreamAgent: {
+      id: string;
+      name: string;
+      role?: string;
+      synthesis?: boolean;
+    } | null = null;
+
+    const processGroupEvent = (event: {
+      event?: string;
+      token?: string;
+      thinking?: string;
+      error?: string;
+      agent_id?: string;
+      agent_name?: string;
+      agent_role?: string;
+      round?: number;
+      is_synthesis?: boolean;
+      message_id?: string;
+      content?: string;
+      label?: string;
+    }) => {
+      const ev = event.event;
+      if (ev === "error") {
+        throw new Error(event.error || "Group chat failed");
+      }
+      if (ev === "agent_start" || ev === "synthesis_start") {
+        const agent = agents.find((a) => a.id === event.agent_id);
+        currentStreamAgent = {
+          id: event.agent_id || "",
+          name: event.agent_name || agent?.name || "",
+          role: event.agent_role || agent?.role,
+          synthesis: Boolean(event.is_synthesis || ev === "synthesis_start"),
+        };
+        setGroupStreamAgent(currentStreamAgent);
+        full = "";
+        thinking = "";
+        setStreamingContent("");
+        setStreamingThinking("");
+        return;
+      }
+      if (event.token) {
+        full += event.token;
+        setStreamingContent(full);
+        return;
+      }
+      if (event.thinking) {
+        thinking += event.thinking;
+        setStreamingThinking(thinking);
+        return;
+      }
+      if (ev === "agent_done") {
+        const isSynth = Boolean(event.is_synthesis);
+        const content = event.content || full;
+        if (isSynth) lastSynthesis = content;
+        setMessages((m) => [
+          ...m,
+          {
+            id: event.message_id || `${Date.now()}-${event.agent_id}`,
+            role: "assistant",
+            content,
+            created_at: new Date().toISOString(),
+            metadata: {
+              kind: isSynth ? "synthesis" : "agent_turn",
+              agent_id: event.agent_id,
+              agent_name: currentStreamAgent?.name || event.agent_name,
+              agent_role: currentStreamAgent?.role || event.agent_role,
+              round: event.round,
+              thinking: thinking || undefined,
+            },
+          },
+        ]);
+        full = "";
+        thinking = "";
+        setStreamingContent("");
+        setStreamingThinking("");
+        setGroupStreamAgent(null);
+        currentStreamAgent = null;
+        return;
+      }
+      if (ev === "round_divider") {
+        setMessages((m) => [
+          ...m,
+          {
+            id: event.message_id || `divider-${event.round}-${Date.now()}`,
+            role: "assistant",
+            content: "",
+            created_at: new Date().toISOString(),
+            metadata: {
+              kind: "round_divider",
+              round: event.round,
+              label: event.label,
+            },
+          },
+        ]);
+      }
+    };
+
     try {
       if (filesToSend.length > 0) {
         const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true, messageExtras());
-        for await (const event of streamChatResponseForm(`/chat/conversations/${convId}/messages`, form)) {
-          if (event.thinking) {
-            thinking += event.thinking;
-            setStreamingThinking(thinking);
-          }
-          if (event.token) {
-            full += event.token;
-            setStreamingContent(full);
+        for await (const event of streamChatResponseForm(
+          `/chat/conversations/${convId}/messages`,
+          form,
+          streamController.signal,
+        )) {
+          if (isGroupChat) {
+            processGroupEvent(event);
+          } else {
+            if (event.thinking) {
+              thinking += event.thinking;
+              setStreamingThinking(thinking);
+            }
+            if (event.token) {
+              full += event.token;
+              setStreamingContent(full);
+            }
           }
         }
       } else {
-        for await (const event of streamChatResponse(`/chat/conversations/${convId}/messages`, {
-          message: msg,
-          stream: true,
-          ...messageExtras(),
-        })) {
-          if (event.thinking) {
-            thinking += event.thinking;
-            setStreamingThinking(thinking);
-          }
-          if (event.token) {
-            full += event.token;
-            setStreamingContent(full);
+        for await (const event of streamChatResponse(
+          `/chat/conversations/${convId}/messages`,
+          {
+            message: msg,
+            stream: true,
+            ...messageExtras(),
+          },
+          streamController.signal,
+        )) {
+          if (isGroupChat) {
+            processGroupEvent(event);
+          } else {
+            if (event.thinking) {
+              thinking += event.thinking;
+              setStreamingThinking(thinking);
+            }
+            if (event.token) {
+              full += event.token;
+              setStreamingContent(full);
+            }
           }
         }
       }
     } catch (err: unknown) {
-      streamError = err instanceof Error ? err.message : "";
+      if (err instanceof DOMException && err.name === "AbortError") {
+        userStopped = true;
+      } else {
+        streamError = err instanceof Error ? err.message : "";
+      }
     } finally {
       toast.dismiss("web-search");
+      chatAbortRef.current = null;
+    }
+
+    if (userStopped || userStoppedRef.current) {
+      if (isGroupChat && convId) {
+        try {
+          const { data } = await chatApi.getMessages(convId);
+          setMessages(data);
+        } catch {
+          /* ignore */
+        }
+        toast(t.generationStopped[lang], { icon: "⏹" });
+      } else if (full || thinking) {
+        appendAssistant(full, thinking || undefined);
+      } else {
+        toast(t.generationStopped[lang], { icon: "⏹" });
+      }
+      setGroupStreamAgent(null);
+      setStreamingContent("");
+      setStreamingThinking("");
+      setStreaming(false);
+      userStoppedRef.current = false;
+      return lastSynthesis || full || null;
+    }
+
+    if (isGroupChat) {
+      setGroupStreamAgent(null);
+      setStreamingContent("");
+      setStreamingThinking("");
+      setStreaming(false);
+      void loadPendingActions();
+      const depositText = lastSynthesis || full;
+      if (convId && depositText.trim()) {
+        const hasOpenDeposit =
+          depositOfferRef.current?.draft_id && activeConv === convId;
+        if (!hasOpenDeposit) {
+          void fetchDepositSuggestion(convId);
+        }
+      }
+      if (opts?.fromVoice && voiceDialog && depositText.trim()) {
+        void speak(depositText);
+      }
+      return depositText.trim() ? depositText : null;
     }
 
     if (!full) {
@@ -1026,6 +1340,16 @@ export default function ChatPage() {
 
   const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming;
 
+  const visibleMessages =
+    chatMode === "group" && consensusOnly
+      ? messages.filter(
+          (m) =>
+            m.role === "user" ||
+            m.metadata?.kind === "synthesis" ||
+            !m.metadata?.kind,
+        )
+      : messages;
+
   const activeConvTitle =
     conversations.find((c) => c.id === activeConv)?.title?.trim() || t.untitled[lang];
 
@@ -1119,6 +1443,33 @@ export default function ChatPage() {
             <LayoutGrid className="h-5 w-5" />
           </Link>
         </div>
+        <GroupChatPanel
+          lang={lang}
+          agents={agents}
+          templates={groupTemplates}
+          chatMode={chatMode}
+          groupAgentIds={groupAgentIds}
+          orchestration={groupOrchestration}
+          maxRounds={groupMaxRounds}
+          consensusOnly={consensusOnly}
+          disabled={streaming}
+          onChatModeChange={onChatModeChange}
+          onGroupAgentIdsChange={(ids) => {
+            setGroupAgentIds(ids);
+            void syncGroupContext({ groupAgentIds: ids });
+          }}
+          onOrchestrationChange={(v) => {
+            setGroupOrchestration(v);
+            void syncGroupContext({ orchestration: v });
+          }}
+          onMaxRoundsChange={(n) => {
+            setGroupMaxRounds(n);
+            void syncGroupContext({ maxRounds: n });
+          }}
+          onConsensusOnlyChange={setConsensusOnly}
+          onApplyTemplate={applyGroupTemplate}
+          onExport={activeConv && chatMode === "group" ? exportGroupDiscussion : undefined}
+        />
         {activeConv && messages.length > 0 && (
           <div className="chat-export-bar">
             <button
@@ -1183,11 +1534,28 @@ export default function ChatPage() {
               </CapsuleScrollRow>
             </div>
           )}
-          {messages.map((msg) => (
-            <div key={msg.id} className={clsx("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+          {visibleMessages.map((msg) => {
+            if (msg.role === "assistant" && msg.metadata?.kind) {
+              return (
+                <GroupChatMessageRow
+                  key={msg.id}
+                  content={msg.content}
+                  metadata={msg.metadata}
+                  lang={lang}
+                  groupAgentIds={groupAgentIds}
+                  onChoiceSelect={handleQaChoice}
+                  choicesDisabled={streaming}
+                />
+              );
+            }
+            return (
+            <div key={msg.id} className={clsx("group flex gap-1.5", msg.role === "user" ? "justify-end" : "justify-start")}>
+              {msg.role === "assistant" && (
+                <MessageCopyButton text={msg.content} lang={lang} variant="assistant" className="mt-2 self-start" />
+              )}
               <div
                 className={clsx(
-                  "max-w-2xl rounded-2xl px-4 py-3 text-sm",
+                  "relative max-w-2xl rounded-2xl px-4 py-3 text-sm",
                   msg.role === "user"
                     ? "rounded-br-sm bg-blue-600 text-white"
                     : "rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] text-slate-200"
@@ -1224,16 +1592,62 @@ export default function ChatPage() {
                   </ChatRichContent>
                 ) : msg.content}
               </div>
+              {msg.role === "user" && (
+                <MessageCopyButton text={msg.content} lang={lang} variant="user" className="mt-2 self-start" />
+              )}
             </div>
-          ))}
-          {streaming && streamingThinking && (
+            );
+          })}
+          {streaming && groupStreamAgent && (
+            <div className="flex justify-start">
+              <div className="max-w-2xl flex-1 min-w-0">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-slate-200">
+                    {groupStreamAgent.name || t.groupAgent[lang]}
+                  </span>
+                  {groupStreamAgent.role && (
+                    <span className="text-[10px] text-slate-500">{groupStreamAgent.role}</span>
+                  )}
+                  {groupStreamAgent.synthesis && (
+                    <span className="rounded bg-blue-600/25 px-1.5 py-0.5 text-[10px] text-blue-300">
+                      {t.groupConsensus[lang]}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-slate-500">{t.groupTyping[lang]}</span>
+                </div>
+                {streamingThinking && (
+                  <div className="mb-2">
+                    <ThinkingBlock content={streamingThinking} lang={lang} streaming />
+                  </div>
+                )}
+                {streamingContent ? (
+                  <div className="rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-200">
+                    <ChatRichContent size="sm" lang={lang} streaming highlight={false}>
+                      {streamingContent}
+                    </ChatRichContent>
+                    <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-blue-400" />
+                  </div>
+                ) : !streamingThinking && (
+                  <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-400">
+                    <span className="flex gap-1">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:0ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:150ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:300ms]" />
+                    </span>
+                    <span className="text-xs text-slate-500">{t.thinking[lang]}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {streaming && !groupStreamAgent && streamingThinking && (
             <div className="flex justify-start">
               <div className="max-w-2xl">
                 <ThinkingBlock content={streamingThinking} lang={lang} streaming />
               </div>
             </div>
           )}
-          {streaming && !streamingContent && !streamingThinking && (
+          {streaming && !groupStreamAgent && !streamingContent && !streamingThinking && (
             <div className="flex justify-start">
               <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-400">
                 <span className="flex gap-1">
@@ -1245,8 +1659,9 @@ export default function ChatPage() {
               </div>
             </div>
           )}
-          {streaming && streamingContent && (
-            <div className="flex justify-start">
+          {streaming && !groupStreamAgent && streamingContent && (
+            <div className="group flex justify-start gap-1.5">
+              <MessageCopyButton text={streamingContent} lang={lang} variant="assistant" className="mt-2 self-start" />
               <div className="max-w-2xl rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-200">
                 <ChatRichContent
                   size="sm"
@@ -1493,6 +1908,7 @@ export default function ChatPage() {
                 ))}
               </select>
               <Bot className="h-3.5 w-3.5 text-slate-500" />
+              {chatMode !== "group" && (
               <select
                 value={selectedAgent}
                 onChange={(e) => onAgentChange(e.target.value)}
@@ -1504,6 +1920,7 @@ export default function ChatPage() {
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))}
               </select>
+              )}
               <Sparkles className="h-3.5 w-3.5 text-slate-500" />
               <select
                 value={selectedSkill}
@@ -1644,11 +2061,16 @@ export default function ChatPage() {
               }}
             />
             <button
-              onClick={() => void send()}
-              disabled={!canSend || isRecording || isProcessing || isSpeaking}
-              className="rounded-lg bg-blue-600 p-2 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors"
+              type="button"
+              onClick={streaming ? stopGeneration : () => void send()}
+              disabled={streaming ? false : !canSend || isRecording || isProcessing || isSpeaking}
+              title={streaming ? t.stopGeneration[lang] : undefined}
+              className={clsx(
+                "rounded-lg p-2 text-white transition-colors disabled:opacity-40",
+                streaming ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700",
+              )}
             >
-              <Send className="h-4 w-4" />
+              {streaming ? <Square className="h-4 w-4 fill-current" /> : <Send className="h-4 w-4" />}
             </button>
             </div>
           </div>

@@ -85,18 +85,18 @@ $deployDoc = Join-Path $Root "docs\单位部署与首次登录.md"
 if (Test-Path $deployDoc) { Copy-Item $deployDoc (Join-Path $OutDir "docs\单位部署与首次登录.md") }
 
 $quickStart = @"
-AI-AGENT Windows delivery (self-contained, per-PC server)
-=========================================================
+AI-AGENT Windows 交付包（含完整源码，可改配置）
+================================================
 
-Each PC runs frontend + backend locally. Shared database:
-  10.9.240.114:5432 / fian / schema aiagent
+本包包含 backend/、frontend/ 完整源码，以及内置 Python + Node，单位电脑无需单独安装。
 
-1. Unzip to any folder, e.g. D:\AIAGNET
-2. Double-click AI-AGENT.bat
-3. Browser: http://localhost:3000
-4. Admin first-time: SETUP_TOKEN.admin.txt (if DB has no users yet)
+1. 解压到短路径，例如 D:\AIAGNET
+2. 编辑 backend\.env — 数据库、Ollama/模型、SECRET_KEY 等（模板见 .env.example）
+3. 双击 AI-AGENT.bat 启动
+4. 浏览器打开 http://localhost:3000
+5. 首次建库：管理员用 SETUP_TOKEN.admin.txt 访问 /setup（令牌勿发给普通用户）
 
-No Python/Node install needed. Chroma vector data stays on each PC.
+详细说明见 README.md、docs\单位部署与首次登录.md
 "@
 $quickStart | Set-Content -Path (Join-Path $OutDir "单位部署.txt") -Encoding UTF8
 

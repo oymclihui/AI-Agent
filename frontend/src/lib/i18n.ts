@@ -1,6 +1,14 @@
 export type Lang = "zh" | "en";
 
 export const translations = {
+  downloadAs: { zh: "下载为", en: "Download as" },
+  downloadFormats: {
+    md:   { zh: "Markdown (.md)", en: "Markdown (.md)" },
+    docx: { zh: "Word (.docx)", en: "Word (.docx)" },
+    xlsx: { zh: "Excel (.xlsx)", en: "Excel (.xlsx)" },
+    pptx: { zh: "PowerPoint (.pptx)", en: "PowerPoint (.pptx)" },
+  },
+
   // ── Navigation ──────────────────────────────────
     nav: {
     dashboard:  { zh: "仪表盘",  en: "Dashboard" },
@@ -290,7 +298,7 @@ export const translations = {
     instructions:   { zh: "回放说明（可选）", en: "Replay instructions (optional)" },
     demoNameRequired: { zh: "请选择桌面演示", en: "Please select a desktop demo" },
     saveToKbFail:   { zh: "写入知识库失败", en: "Failed to save to knowledge base" },
-    runsHint:       { zh: "任务执行结果在「执行记录」标签：可查看全文、下载 Markdown 报告，或一键沉淀到知识库。", en: "Task outputs appear under Run History: view full text, download Markdown, or save to a knowledge base." },
+    runsHint:       { zh: "任务执行结果在「执行记录」标签：可查看全文、按格式下载报告（Word/Excel/PPT），或一键沉淀到知识库。", en: "Task outputs appear under Run History: view full text, download as Word/Excel/PPT, or save to a knowledge base." },
     selectKb:       { zh: "选择知识库", en: "Select knowledge base" },
     newKbName:      { zh: "或新建知识库名称", en: "Or new knowledge base name" },
     reportTitle:    { zh: "任务报告", en: "Task report" },
@@ -458,6 +466,23 @@ export const translations = {
     closeDrawer:  { zh: "关闭", en: "Close" },
     moreModules:  { zh: "更多功能", en: "More modules" },
     thinking:     { zh: "思考中…",    en: "Thinking..." },
+    stopGeneration: { zh: "停止生成", en: "Stop generating" },
+    generationStopped: { zh: "已停止生成", en: "Generation stopped" },
+    groupChat: { zh: "群聊", en: "Group" },
+    groupSingle: { zh: "单聊", en: "Single" },
+    groupConsensus: { zh: "共识结论", en: "Consensus" },
+    groupAgent: { zh: "智能体", en: "Agent" },
+    groupRoundEnd: { zh: "本轮讨论结束", en: "Round complete" },
+    groupModeRoundRobin: { zh: "轮流讨论", en: "Round robin" },
+    groupModeHierarchical: { zh: "主持汇总", en: "Moderated" },
+    groupModeParallel: { zh: "并行初稿", en: "Parallel" },
+    groupModeDebate: { zh: "辩论", en: "Debate" },
+    groupMaxRounds: { zh: "轮次", en: "Rounds" },
+    groupConsensusOnly: { zh: "只看结论", en: "Consensus only" },
+    groupMentionHint: { zh: "输入 @名称 可指定发言", en: "Use @name to mention" },
+    groupNeedAgents: { zh: "群聊请至少选择 2 个智能体", en: "Select at least 2 agents for group chat" },
+    groupExport: { zh: "导出讨论", en: "Export" },
+    groupTyping: { zh: "正在输入…", en: "typing…" },
     thinkingProcess: { zh: "思考过程", en: "Reasoning" },
     showThinking: { zh: "展开思考过程", en: "Show reasoning" },
     hideThinking: { zh: "收起思考过程", en: "Hide reasoning" },
@@ -465,6 +490,9 @@ export const translations = {
     loadFailed:   { zh: "加载消息失败", en: "Failed to load messages" },
     replyFailed:  { zh: "回复失败",    en: "Reply failed" },
     emptyResponse:{ zh: "(空回复)",   en: "(empty response)" },
+    copyMessage:  { zh: "复制", en: "Copy" },
+    copyOk:       { zh: "已复制到剪贴板", en: "Copied to clipboard" },
+    copyFailed:   { zh: "复制失败", en: "Copy failed" },
     voiceInput:     { zh: "语音输入", en: "Voice input" },
     voiceDialog:    { zh: "语音对话", en: "Voice chat" },
     voiceDialogOn:  { zh: "语音对话已开启：说完自动发送，回复自动朗读", en: "Voice chat on: auto-send & read replies aloud" },
