@@ -483,6 +483,8 @@ export const translations = {
     groupMentionHint: { zh: "输入 @名称 可指定发言", en: "Use @name to mention" },
     groupNeedAgents: { zh: "群聊请至少选择 2 个智能体", en: "Select at least 2 agents for group chat" },
     groupExport: { zh: "导出讨论", en: "Export" },
+    groupPanelCollapse: { zh: "收起群聊设置", en: "Collapse group settings" },
+    groupPanelExpand: { zh: "展开群聊设置", en: "Expand group settings" },
     groupTyping: { zh: "正在输入…", en: "typing…" },
     thinkingProcess: { zh: "思考过程", en: "Reasoning" },
     showThinking: { zh: "展开思考过程", en: "Show reasoning" },

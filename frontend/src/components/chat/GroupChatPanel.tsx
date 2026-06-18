@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { clsx } from "clsx";
 import type { Lang } from "@/lib/i18n";
 import { translations } from "@/lib/i18n";
 import type { GroupChatConfig, GroupChatTemplate, GroupOrchestration } from "@/lib/groupChat";
 import { buildGroupConfig, resolveTemplateAgents } from "@/lib/groupChat";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 interface AgentOption {
   id: string;
@@ -32,6 +34,79 @@ interface Props {
   onExport?: () => void;
 }
 
+function GroupControls({
+  lang,
+  orchestration,
+  maxRounds,
+  consensusOnly,
+  disabled,
+  onOrchestrationChange,
+  onMaxRoundsChange,
+  onConsensusOnlyChange,
+  onExport,
+  compact,
+}: {
+  lang: Lang;
+  orchestration: GroupOrchestration;
+  maxRounds: number;
+  consensusOnly: boolean;
+  disabled?: boolean;
+  onOrchestrationChange: (v: GroupOrchestration) => void;
+  onMaxRoundsChange: (n: number) => void;
+  onConsensusOnlyChange: (v: boolean) => void;
+  onExport?: () => void;
+  compact?: boolean;
+}) {
+  const t = translations.chat;
+  return (
+    <>
+      <select
+        disabled={disabled}
+        value={orchestration}
+        onChange={(e) => onOrchestrationChange(e.target.value as GroupOrchestration)}
+        className="rounded-md border border-[#2d2d4e] bg-[#1a1a2e] px-2 py-1 text-xs text-slate-200"
+      >
+        <option value="round_robin">{t.groupModeRoundRobin[lang]}</option>
+        <option value="hierarchical">{t.groupModeHierarchical[lang]}</option>
+        <option value="parallel">{t.groupModeParallel[lang]}</option>
+        <option value="debate">{t.groupModeDebate[lang]}</option>
+      </select>
+      <label className="flex items-center gap-1 text-xs text-slate-400">
+        {t.groupMaxRounds[lang]}
+        <select
+          disabled={disabled}
+          value={maxRounds}
+          onChange={(e) => onMaxRoundsChange(Number(e.target.value))}
+          className="rounded border border-[#2d2d4e] bg-[#1a1a2e] px-1 py-0.5 text-slate-200"
+        >
+          {[1, 2, 3].map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-1 text-xs text-slate-400">
+        <input
+          type="checkbox"
+          checked={consensusOnly}
+          onChange={(e) => onConsensusOnlyChange(e.target.checked)}
+          disabled={disabled}
+        />
+        {t.groupConsensusOnly[lang]}
+      </label>
+      {onExport && !compact && (
+        <button
+          type="button"
+          onClick={onExport}
+          disabled={disabled}
+          className="text-xs text-blue-400 hover:text-blue-300"
+        >
+          {t.groupExport[lang]}
+        </button>
+      )}
+    </>
+  );
+}
+
 export function GroupChatPanel({
   lang,
   agents,
@@ -51,6 +126,35 @@ export function GroupChatPanel({
   onExport,
 }: Props) {
   const t = translations.chat;
+  const isMobile = useIsMobile();
+  const [expanded, setExpanded] = useState(false);
+  const prevAgentCount = useRef(groupAgentIds.length);
+
+  const needsAgentSelection = chatMode === "group" && groupAgentIds.length < 2;
+  const canCollapse = chatMode === "group" && groupAgentIds.length >= 2;
+  const showDetails = chatMode === "group" && (!isMobile || expanded || needsAgentSelection);
+
+  useEffect(() => {
+    if (!isMobile) setExpanded(true);
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (
+      isMobile
+      && chatMode === "group"
+      && prevAgentCount.current < 2
+      && groupAgentIds.length >= 2
+    ) {
+      setExpanded(false);
+    }
+    prevAgentCount.current = groupAgentIds.length;
+  }, [groupAgentIds.length, isMobile, chatMode]);
+
+  useEffect(() => {
+    if (isMobile && chatMode === "group" && needsAgentSelection) {
+      setExpanded(true);
+    }
+  }, [isMobile, chatMode, needsAgentSelection]);
 
   const toggleAgent = (id: string) => {
     if (groupAgentIds.includes(id)) {
@@ -60,10 +164,21 @@ export function GroupChatPanel({
     }
   };
 
+  const selectedNames = groupAgentIds
+    .map((id) => agents.find((a) => a.id === id)?.name)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join("、");
+
   return (
-    <div className="border-b border-[#2d2d4e] bg-[#12121f] px-3 py-2 space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg border border-[#2d2d4e] p-0.5">
+    <div
+      className={clsx(
+        "group-chat-panel shrink-0 border-b border-[#2d2d4e] bg-[#12121f]",
+        isMobile ? "px-2 py-1.5" : "px-3 py-2 space-y-2",
+      )}
+    >
+      <div className={clsx("flex items-center gap-2", isMobile ? "min-h-9" : "flex-wrap")}>
+        <div className="inline-flex shrink-0 rounded-lg border border-[#2d2d4e] p-0.5">
           <button
             type="button"
             disabled={disabled}
@@ -88,58 +203,85 @@ export function GroupChatPanel({
           </button>
         </div>
 
-        {chatMode === "group" && (
+        {chatMode === "group" && isMobile && (
           <>
-            <select
-              disabled={disabled}
-              value={orchestration}
-              onChange={(e) => onOrchestrationChange(e.target.value as GroupOrchestration)}
-              className="rounded-md border border-[#2d2d4e] bg-[#1a1a2e] px-2 py-1 text-xs text-slate-200"
-            >
-              <option value="round_robin">{t.groupModeRoundRobin[lang]}</option>
-              <option value="hierarchical">{t.groupModeHierarchical[lang]}</option>
-              <option value="parallel">{t.groupModeParallel[lang]}</option>
-              <option value="debate">{t.groupModeDebate[lang]}</option>
-            </select>
-            <label className="flex items-center gap-1 text-xs text-slate-400">
-              {t.groupMaxRounds[lang]}
-              <select
-                disabled={disabled}
-                value={maxRounds}
-                onChange={(e) => onMaxRoundsChange(Number(e.target.value))}
-                className="rounded border border-[#2d2d4e] bg-[#1a1a2e] px-1 py-0.5 text-slate-200"
-              >
-                {[1, 2, 3].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-1 text-xs text-slate-400">
-              <input
-                type="checkbox"
-                checked={consensusOnly}
-                onChange={(e) => onConsensusOnlyChange(e.target.checked)}
-                disabled={disabled}
-              />
-              {t.groupConsensusOnly[lang]}
-            </label>
-            {onExport && (
+            <div className="min-w-0 flex-1 text-[11px] leading-tight text-slate-400">
+              {groupAgentIds.length > 0 ? (
+                <>
+                  <span className="text-slate-300">
+                    {lang === "zh"
+                      ? `已选 ${groupAgentIds.length} 个`
+                      : `${groupAgentIds.length} selected`}
+                  </span>
+                  {selectedNames && (
+                    <span className="ml-1 truncate text-slate-500">{selectedNames}</span>
+                  )}
+                </>
+              ) : (
+                <span>{t.groupNeedAgents[lang]}</span>
+              )}
+            </div>
+            {canCollapse && (
               <button
                 type="button"
-                onClick={onExport}
+                onClick={() => setExpanded((v) => !v)}
                 disabled={disabled}
-                className="text-xs text-blue-400 hover:text-blue-300"
+                className="group-chat-panel-toggle shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-[#1a1a2e] hover:text-slate-200"
+                aria-expanded={expanded}
+                aria-label={expanded ? t.groupPanelCollapse[lang] : t.groupPanelExpand[lang]}
+                title={expanded ? t.groupPanelCollapse[lang] : t.groupPanelExpand[lang]}
               >
-                {t.groupExport[lang]}
+                {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </button>
             )}
           </>
         )}
+
+        {chatMode === "group" && !isMobile && (
+          <GroupControls
+            lang={lang}
+            orchestration={orchestration}
+            maxRounds={maxRounds}
+            consensusOnly={consensusOnly}
+            disabled={disabled}
+            onOrchestrationChange={onOrchestrationChange}
+            onMaxRoundsChange={onMaxRoundsChange}
+            onConsensusOnlyChange={onConsensusOnlyChange}
+            onExport={onExport}
+          />
+        )}
       </div>
 
-      {chatMode === "group" && (
-        <>
-          <div className="flex flex-wrap gap-1.5">
+      {showDetails && (
+        <div className={clsx(isMobile ? "mt-2 space-y-2 pb-0.5" : "space-y-2")}>
+          {isMobile && (
+            <div className="flex flex-wrap items-center gap-2">
+              <GroupControls
+                lang={lang}
+                orchestration={orchestration}
+                maxRounds={maxRounds}
+                consensusOnly={consensusOnly}
+                disabled={disabled}
+                onOrchestrationChange={onOrchestrationChange}
+                onMaxRoundsChange={onMaxRoundsChange}
+                onConsensusOnlyChange={onConsensusOnlyChange}
+                onExport={onExport}
+                compact
+              />
+              {onExport && (
+                <button
+                  type="button"
+                  onClick={onExport}
+                  disabled={disabled}
+                  className="text-xs text-blue-400 hover:text-blue-300"
+                >
+                  {t.groupExport[lang]}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto md:max-h-none">
             {agents.slice(0, 20).map((a) => {
               const active = groupAgentIds.includes(a.id);
               return (
@@ -163,8 +305,9 @@ export function GroupChatPanel({
               {groupAgentIds.length}/6 · {t.groupMentionHint[lang]}
             </span>
           </div>
+
           {templates.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex max-h-16 flex-wrap gap-1.5 overflow-y-auto md:max-h-none">
               {templates.map((tpl) => (
                 <button
                   key={tpl.id}
@@ -179,7 +322,7 @@ export function GroupChatPanel({
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

@@ -30,23 +30,23 @@ export default function Sidebar() {
     { href: "/skills",    icon: BookOpen,       labelKey: "skills" as const, show: true },
     { href: "/workflows", icon: Workflow,       labelKey: "workflows" as const, show: true },
     { href: "/knowledge",   icon: Library,        labelKey: "knowledge" as const, show: true },
-    { href: "/desktop-automation", icon: MousePointer2, labelKey: "desktopAutomation" as const, show: true },
     { href: "/inspiration", icon: Lightbulb,      labelKey: "inspiration" as const, show: true },
     { href: "/models",      icon: Cpu,            labelKey: "models" as const, show: true },
     { href: "/tools",       icon: Zap,            labelKey: "tools" as const, show: true },
     { href: "/data-sources", icon: Database, labelKey: "dataSources" as const, show: true },
+    { href: "/desktop-automation", icon: MousePointer2, labelKey: "desktopAutomation" as const, show: true },
   ].filter((item) => item.show);
 
   return (
-    <aside className="theme-surface flex h-screen w-16 flex-col items-center border-r theme-border py-4 lg:w-56 lg:items-start lg:px-3">
-      <div className="mb-8 flex items-center gap-2 px-1">
+    <aside className="theme-surface flex h-screen min-h-0 w-16 shrink-0 flex-col items-center overflow-hidden border-r theme-border py-4 lg:w-56 lg:items-start lg:px-3">
+      <div className="mb-4 flex shrink-0 items-center gap-2 px-1 lg:mb-6">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 text-on-primary font-bold text-sm shrink-0 shadow-sm">
           AI
         </div>
         <span className="hidden font-semibold theme-text lg:block">AI-AGENT</span>
       </div>
 
-      <nav className="flex w-full flex-col gap-1">
+      <nav className="sidebar-nav-scroll flex min-h-0 w-full flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden pr-0.5">
         {navItems.map(({ href, icon: Icon, labelKey }) => {
           const active = pathname === href || (href !== "/" && pathname.startsWith(href));
           return (
@@ -65,7 +65,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="mt-auto w-full space-y-1">
+      <div className="mt-auto w-full shrink-0 space-y-1 pt-2">
         <div className="hidden lg:flex items-center gap-2 rounded-lg px-2 py-2">
           <Languages className="h-4 w-4 shrink-0 theme-muted" />
           <SegmentedControl

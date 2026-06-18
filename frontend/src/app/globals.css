@@ -332,6 +332,12 @@ body {
     width: 100%;
     justify-content: center;
   }
+  .group-chat-panel {
+    flex-shrink: 0;
+  }
+  .group-chat-panel-toggle {
+    touch-action: manipulation;
+  }
   .chat-input-toolbar {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -2092,6 +2098,41 @@ body {
 }
 [data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   background: #93c5fd;
+}
+
+/* Sidebar nav — always show vertical scroll on small / short screens */
+.sidebar-nav-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #4a5568 var(--surface);
+  -webkit-overflow-scrolling: touch;
+}
+.sidebar-nav-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.sidebar-nav-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+.sidebar-nav-scroll::-webkit-scrollbar-thumb {
+  background: #4a5568;
+  border-radius: 4px;
+  min-height: 32px;
+}
+.sidebar-nav-scroll::-webkit-scrollbar-thumb:hover {
+  background: #718096;
+}
+[data-theme="light"] .sidebar-nav-scroll {
+  scrollbar-color: #93c5fd #eef6ff;
+}
+[data-theme="light"] .sidebar-nav-scroll::-webkit-scrollbar-thumb {
+  background: #93c5fd;
+}
+[data-theme="light"] .sidebar-nav-scroll::-webkit-scrollbar-thumb:hover {
+  background: #60a5fa;
 }
 
 @keyframes scroll {
