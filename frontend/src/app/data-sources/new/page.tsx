@@ -293,7 +293,7 @@ export default function NewDataSourcePage() {
       toast.success(t("上传成功", "Uploaded"));
       await fetchRelations("", undefined, { silent: true });
     } catch (e: unknown) {
-      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("Upload failed")));
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("上传失败", "Upload failed")));
     } finally {
       setUploading(false);
       if (uploadRef.current) uploadRef.current.value = "";

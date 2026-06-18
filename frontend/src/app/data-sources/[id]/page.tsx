@@ -498,7 +498,7 @@ function ExcelFilesTab({
   files: { name: string; size_bytes: number }[];
   selected: string[];
   uploading: boolean;
-  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  fileInputRef: React.RefObject<HTMLInputElement>;
   onUpload: (files: FileList | null) => void;
   onSaveSelection: (names: string[]) => void;
   onRefresh: () => void;

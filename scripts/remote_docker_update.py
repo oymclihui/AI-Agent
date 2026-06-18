@@ -127,7 +127,9 @@ def main() -> None:
         check=False,
     )
     if code != 0:
-        print(f"WARNING: docker build exited {code}, continuing with up ...", flush=True)
+        print(f"ERROR: docker build exited {code}. Aborting deploy; old containers may still be running.", flush=True)
+        ssh.close()
+        sys.exit(code)
     _run(ssh, f"{compose} up -d --force-recreate", check=False)
     _run(ssh, "sleep 45", check=False)
     _, _, _ = _run(ssh, f"{compose} ps", check=False)
