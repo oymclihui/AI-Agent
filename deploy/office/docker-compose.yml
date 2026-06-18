@@ -1,0 +1,67 @@
+# AI-AGENT 单位 Ubuntu 离线部署（预加载镜像，外连 VastBase + Redis）
+# 用法: docker compose --env-file .env up -d
+
+services:
+  chromadb:
+    image: aiagnet-chromadb:latest
+    container_name: aiagnet_chromadb
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  backend:
+    image: aiagnet-backend:latest
+    container_name: aiagnet_backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_NAME: AI-AGENT
+      DEBUG: "false"
+      CHROMA_MODE: server
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      LOCAL_UPLOADS_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      chromadb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 90s
+
+  frontend:
+    image: aiagnet-frontend:latest
+    container_name: aiagnet_frontend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: aiagnet-nginx:latest
+    container_name: aiagnet_nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-3000}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+volumes:
+  chroma_data:
+  backend_uploads:

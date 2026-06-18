@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     # Local file uploads directory (used when MinIO is not configured)
     LOCAL_UPLOADS_DIR: str = "./uploads"
 
+    # Excel folder (ephemeral analysis) limits
+    DATA_ASK_EXCEL_MAX_FILE_MB: int = 50
+    DATA_ASK_EXCEL_MAX_FOLDER_MB: int = 200
+
     # LLM Providers
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None

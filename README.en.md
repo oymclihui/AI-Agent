@@ -26,6 +26,7 @@
 | **Model Hub** | Model config **CRUD**, set default, **inference params**, OpenAI-compatible Base URL |
 | **Users & auth** | Employee no / email login, JWT, **per-user data isolation**, **personal model API keys** |
 | **Tools** | Built-in calculator, HTTP, web search, datetime tools |
+| **DataAsk** | **SQL Q&A** on PostgreSQL/VastBase/MySQL/Doris/Hive/HANA + **ephemeral Excel** analysis (Python/pandas/ML); row-level permissions, audit |
 | **Orchestrator** | Multi-agent collaboration (CrewAI-style sequential flows) |
 
 The frontend supports **Chinese / English** UI.
@@ -33,6 +34,16 @@ The frontend supports **Chinese / English** UI.
 ---
 
 ## Changelog
+
+### 2026-06 — DataAsk (NL→SQL + ephemeral Excel analysis)
+
+- **Database Q&A:** wizard connect → pick tables + permission table → semantic model → Chat / quick ask
+- **Drivers:** postgresql, vastbase, mysql, doris, hive, hana
+- **Excel ephemeral mode (Plan B):** upload `.xlsx/.xls/.csv`, select files, generate **Python**, run; **files auto-deleted after successful execution** (50MB/file, 200MB/folder quotas)
+- **API:** `/data-sources/*`, `/data-ask/query`
+- **Tests:** `backend/scripts/smoke_test_data_ask.py`, `test_excel_ephemeral.py`
+
+See [README.md (中文)](README.md) for full details.
 
 ### 2026-06 — Self-contained Windows release zip
 

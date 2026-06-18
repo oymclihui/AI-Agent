@@ -645,3 +645,103 @@ class ToolDefinition(Base, TimestampMixin):
     implementation_type = Column(String(32), default="builtin")  # builtin | http | python
     config = Column(JSON, default=dict)
     is_active = Column(Boolean, default=True)
+
+
+# ──────────────────────────────────────────────
+# Data Ask (问数数据源)
+# ──────────────────────────────────────────────
+
+class DataSourceDriver(str, enum.Enum):
+    postgresql = "postgresql"
+    vastbase = "vastbase"
+    mysql = "mysql"
+    hive = "hive"
+    doris = "doris"
+    hana = "hana"
+    excel_folder = "excel_folder"
+
+
+class DataSourceTableRole(str, enum.Enum):
+    data = "data"
+    permission = "permission"
+
+
+class DataSourceObjectType(str, enum.Enum):
+    table = "table"
+    view = "view"
+
+
+class DataSourceStatus(str, enum.Enum):
+    active = "active"
+    inactive = "inactive"
+
+
+class DataSource(Base, TimestampMixin):
+    __tablename__ = "data_sources"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    name = Column(String(255), nullable=False)
+    driver = Column(String(32), nullable=False, default=DataSourceDriver.postgresql.value)
+    host = Column(String(255), nullable=False)
+    port = Column(Integer, nullable=False, default=5432)
+    username = Column(String(255), nullable=False)
+    password_enc = Column(Text, nullable=False, default="")
+    database = Column(String(255), nullable=False)
+    db_schema = Column(String(128), default="public", nullable=False)
+    ssl = Column(String(16), default="prefer", nullable=False)
+    permission_rules = Column(JSON, default=dict)
+    permission_source_id = Column(String(36), ForeignKey("data_sources.id"), nullable=True)
+    semantic_model = Column(JSON, default=dict)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=True, index=True)
+    employee_id = Column(String(36), ForeignKey("digital_employees.id"), nullable=True)
+    chat_enabled = Column(Boolean, default=True, nullable=False)
+    report_enabled = Column(Boolean, default=True, nullable=False)
+    status = Column(SAEnum(DataSourceStatus), default=DataSourceStatus.active, nullable=False)
+    metadata_ = Column("metadata", JSON, default=dict)
+
+    tables = relationship(
+        "DataSourceTable",
+        back_populates="data_source",
+        cascade="all, delete-orphan",
+        foreign_keys="DataSourceTable.data_source_id",
+    )
+
+
+class DataSourceTable(Base, TimestampMixin):
+    __tablename__ = "data_source_tables"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(36), ForeignKey("data_sources.id"), nullable=False, index=True)
+    table_name = Column(String(255), nullable=False)
+    role = Column(SAEnum(DataSourceTableRole), nullable=False, default=DataSourceTableRole.data)
+    object_type = Column(SAEnum(DataSourceObjectType), nullable=False, default=DataSourceObjectType.table)
+    column_meta = Column(JSON, default=dict)
+    join_keys = Column(JSON, default=dict)
+    sample_rows = Column(JSON, default=list)
+
+    data_source = relationship("DataSource", back_populates="tables", foreign_keys=[data_source_id])
+
+
+class DataAskAuditLog(Base, TimestampMixin):
+    __tablename__ = "data_ask_audit_logs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    data_source_id = Column(String(36), ForeignKey("data_sources.id"), nullable=False, index=True)
+    question = Column(Text, nullable=True)
+    sql_text = Column(Text, nullable=False)
+    row_count = Column(Integer, default=0)
+    success = Column(Boolean, default=True, nullable=False)
+    error_message = Column(Text, nullable=True)
+
+
+class DataAskGoldenQuery(Base, TimestampMixin):
+    __tablename__ = "data_ask_golden_queries"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(36), ForeignKey("data_sources.id"), nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    sql_text = Column(Text, nullable=False)
+    confirmed_by = Column(String(36), ForeignKey("users.id"), nullable=True)
+    use_count = Column(Integer, default=1, nullable=False)

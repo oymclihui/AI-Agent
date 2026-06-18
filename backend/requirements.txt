@@ -7,6 +7,8 @@ aiosignal==1.4.0
 aiosqlite==0.22.1
 asyncpg==0.30.0
 psycopg2-binary==2.9.10
+pymysql==1.1.1
+hdbcli==2.23.27
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0
@@ -80,6 +82,8 @@ overrides==7.7.0
 packaging==26.2
 pandas==3.0.3
 openpyxl==3.1.5
+xlrd==2.0.1
+scikit-learn==1.6.1
 python-pptx==1.0.2
 pypdf==5.4.0
 python-docx==1.1.2
@@ -113,6 +117,7 @@ shellingham==1.5.4
 six==1.17.0
 sniffio==1.3.1
 soupsieve==2.8.4
+sqlglot==26.12.0
 SQLAlchemy==2.0.50
 starlette==1.2.1
 structlog==26.1.0

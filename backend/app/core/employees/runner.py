@@ -218,6 +218,92 @@ async def _run_crew_task(
     task.last_status = "completed"
 
 
+async def _run_data_ask_task(
+    db: AsyncSession,
+    task: EmployeeScheduledTask,
+    employee: DigitalEmployee,
+    run: EmployeeTaskRun,
+    task_config: dict[str, Any],
+    prompt: str,
+    start: float,
+) -> None:
+    from app.db.models import DataSource, User as UserModel
+    from app.core.data_ask.service import run_data_ask, run_multi_data_ask
+    from app.core.data_ask.intelligence.nl2sql import analyze_results
+
+    ds_id = str(task_config.get("data_source_id") or "")
+    ds = await db.get(DataSource, ds_id)
+    if ds and not ds.report_enabled:
+        raise ValueError("Scheduled reports disabled for this data source")
+
+    owner = await db.get(UserModel, employee.owner_id) if employee.owner_id else None
+    queries_cfg = task_config.get("queries")
+    if isinstance(queries_cfg, list) and queries_cfg:
+        multi = await run_multi_data_ask(
+            db,
+            data_source_id=ds_id,
+            queries=[{"name": q.get("name"), "question": q.get("question")} for q in queries_cfg if q.get("question")],
+            user=owner,
+        )
+        snapshot_parts = []
+        for block in multi:
+            snapshot_parts.append(f"### {block.get('name')}\nSQL: {block.get('sql')}\nRows: {block.get('row_count')}")
+            for row in block.get("rows", [])[:20]:
+                snapshot_parts.append("\t".join(str(c) for c in row))
+        snapshot = "\n".join(snapshot_parts)
+        question = str(task_config.get("query") or "汇总多维度业务指标")
+        qr = multi[0] if multi else {"sql": "", "columns": [], "rows": [], "row_count": 0}
+    else:
+        question = str(task_config.get("query") or "汇总今日关键业务指标与异常项").strip()
+        qr = await run_data_ask(
+            db,
+            data_source_id=ds_id,
+            question=question,
+            user=owner,
+            llm_provider=None,
+            llm_model=None,
+        )
+        snapshot_lines = [
+            f"Columns: {', '.join(qr['columns'])}",
+            f"Rows: {qr['row_count']}",
+        ]
+        for row in qr.get("rows", [])[:50]:
+            snapshot_lines.append("\t".join(str(c) for c in row))
+        snapshot = "\n".join(snapshot_lines)
+    filled_prompt = prompt.replace("{data_snapshot}", snapshot)
+    agent_model = await _resolve_agent(db, employee)
+    if not agent_model:
+        raise ValueError(f"Agent not found: {employee.agent_id}")
+    report_body = await analyze_results(
+        db,
+        question=filled_prompt,
+        sql=qr.get("sql") or "",
+        columns=qr.get("columns") or [],
+        rows=qr.get("rows") or [],
+        llm_provider=agent_model.llm_provider,
+        llm_model=agent_model.llm_model,
+    )
+    duration_ms = int((time.monotonic() - start) * 1000)
+    report_name = run_report_filename(run, task)
+    report_md = (
+        f"# {employee.name} · {task.name}\n\n"
+        f"## 数据快照\n\n{snapshot[:4000]}\n\n"
+        f"## 分析报告\n\n{report_body}\n"
+    )
+    artifacts = [save_text_artifact(report_md, report_name)]
+    run.status = ExecutionStatus.completed
+    run.output_data = {
+        "output": report_body,
+        "sql": qr.get("sql"),
+        "row_count": qr.get("row_count"),
+        "multi_query_count": len(queries_cfg) if isinstance(queries_cfg, list) else 1,
+        "artifacts": artifacts,
+        "report_filename": report_name,
+    }
+    run.duration_ms = duration_ms
+    task.last_status = "completed"
+
+
 async def run_scheduled_task(
     db: AsyncSession,
     task: EmployeeScheduledTask,
@@ -281,6 +367,12 @@ async def run_scheduled_task(
 
         if task_type == EmployeeTaskType.crew.value:
             await _run_crew_task(db, task, employee, run, task_config, start)
+            _finalize_task_schedule(task)
+            await db.flush()
+            return run
+
+        if task_config.get("data_ask") and task_config.get("data_source_id"):
+            await _run_data_ask_task(db, task, employee, run, task_config, prompt, start)
             _finalize_task_schedule(task)
             await db.flush()
             return run

@@ -1,0 +1,81 @@
+# 单位内网离线部署 — 不拉取外网 pip/npm，基础镜像需先 docker load
+# 用法: bash install-offline.sh
+
+services:
+  chromadb:
+    image: aiagnet-chromadb:latest
+    container_name: aiagnet_chromadb
+    restart: unless-stopped
+    pull_policy: never
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.offline
+      pull: false
+    image: aiagnet-backend:latest
+    container_name: aiagnet_backend
+    restart: unless-stopped
+    pull_policy: never
+    env_file: .env
+    environment:
+      APP_NAME: AI-AGENT
+      DEBUG: "false"
+      CHROMA_MODE: server
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      LOCAL_UPLOADS_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      chromadb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.offline
+      pull: false
+      args:
+        BACKEND_URL: http://backend:8000
+    image: aiagnet-frontend:latest
+    container_name: aiagnet_frontend
+    restart: unless-stopped
+    pull_policy: never
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: aiagnet-nginx:latest
+    container_name: aiagnet_nginx
+    restart: unless-stopped
+    pull_policy: never
+    ports:
+      - "${HTTP_PORT:-3000}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+volumes:
+  chroma_data:
+  backend_uploads:

@@ -724,6 +724,54 @@ class GroupDiscussNode(BaseNode):
         return state
 
 
+class DataAskNode(BaseNode):
+    """Natural-language query against a configured data source."""
+    node_type = "data_ask"
+
+    async def __call__(self, state: WorkflowState) -> WorkflowState:
+        from app.db.session import AsyncSessionLocal
+        from app.core.data_ask.service import run_data_ask
+
+        state.current_node = self.node_id
+        cfg = resolve_config(self.config, state)
+        ds_id = str(cfg.get("data_source_id") or "").strip()
+        question = str(state.input or cfg.get("question") or cfg.get("prompt") or "").strip()
+        if not ds_id:
+            state.errors.append(f"DataAskNode {self.node_id}: data_source_id required")
+            return state
+        if not question:
+            state.errors.append(f"DataAskNode {self.node_id}: question or input required")
+            return state
+        user_id = state.context.get("_user_id")
+        user = None
+        try:
+            async with AsyncSessionLocal() as session:
+                if user_id:
+                    from app.db.models import User as UserModel
+                    user = await session.get(UserModel, user_id)
+                result = await run_data_ask(
+                    session,
+                    data_source_id=ds_id,
+                    question=question,
+                    user=user,
+                )
+                await session.commit()
+        except Exception as exc:
+            state.errors.append(f"DataAskNode {self.node_id}: {exc}")
+            return state
+        output = str(result.get("answer") or "")
+        state.output = output
+        state.context["data_ask"] = {
+            "sql": result.get("sql"),
+            "row_count": result.get("row_count"),
+            "columns": result.get("columns"),
+            "rows": result.get("rows", [])[:20],
+            "chart": result.get("chart"),
+        }
+        state.add_message("assistant", output, self.node_id)
+        return state
+
+
 class DesktopReplayNode(BaseNode):
     """Replay a recorded desktop demo via local sidecar."""
     node_type = "desktop_replay"

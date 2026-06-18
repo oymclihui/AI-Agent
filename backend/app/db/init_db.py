@@ -308,6 +308,10 @@ def _add_org_rbac_columns(sync_conn, schema: str | None = None) -> None:
     _add_column(inspector, sync_conn, "users", "user_tier", "VARCHAR(32) DEFAULT 'staff' NOT NULL", schema=schema)
     _add_column(inspector, sync_conn, "departments", "liaison_user_id", "VARCHAR(36)", schema=schema)
     _add_column(inspector, sync_conn, "departments", "dept_tier", "VARCHAR(32) DEFAULT 'business' NOT NULL", schema=schema)
+    _add_column(
+        inspector, sync_conn, "data_source_tables", "object_type", "VARCHAR(16) DEFAULT 'table' NOT NULL", schema=schema
+    )
+    _add_column(inspector, sync_conn, "data_ask_audit_logs", "question", "TEXT", schema=schema)
 
 
 def _add_column(inspector, sync_conn, table: str, col: str, col_def: str, schema: str | None = None) -> None:

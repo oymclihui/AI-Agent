@@ -27,6 +27,7 @@
 | **Model Hub** | 模型配置 **增删改查**、设默认、**推理参数**（temperature / top_p / max_tokens 等）、OpenAI 兼容 Base URL |
 | **用户与权限** | 工号 / 邮箱登录、JWT、**组织 RBAC + 分层赋权**、**Excel 批量导入权限**、个人模型 API Key |
 | **Tools** | 内置计算器、HTTP 请求、网页搜索、日期时间等工具 |
+| **问数数据源（DataAsk）** | 连接业务库 **SQL 问数** + **Excel 临时分析**（Python/pandas/ML）；权限表、语义模型、审计、Schema 漂移 |
 | **Orchestrator** | 多智能体协同编排（CrewAI 风格 sequential 流程） |
 
 前端支持 **中 / 英** 双语界面。
@@ -34,6 +35,57 @@
 ---
 
 ## 更新日志
+
+### 2026-06 — 问数数据源（DataAsk）与 Excel 临时分析
+
+**一句话：** 连接 PostgreSQL / VastBase / MySQL / Doris / Hive / SAP HANA 做 **NL→SQL 问数**；或上传 **Excel 文件夹**，用 **Python + pandas + scikit-learn** 做一次性分析，**执行成功后自动释放文件**，不占服务器磁盘。
+
+| 能力 | 说明 |
+|------|------|
+| **数据库问数** | 向导：连库 → 选表/视图 + 权限表 → 语义模型 → Chat/即时问数 |
+| **多库驱动** | `postgresql` / `vastbase` / `mysql` / `doris` / `hive` / `hana` |
+| **行级权限** | 权限表/视图 + `user_id` → `country_code` 注入 SQL WHERE |
+| **NL→SQL** | Schema Top-K、Q-SQL 记忆、SQL 纠错环（最多 2 次）、可编辑 SQL 后执行 |
+| **Excel 临时分析（方案 B）** | 上传 `.xlsx/.xls/.csv` → 勾选文件 → **生成 Python → 执行**；成功后 **自动删文件 + 清空注册表** |
+| **Python 分析** | 沙箱执行 pandas / numpy / scikit-learn（KMeans、回归、PCA 等） |
+| **存储护栏** | 单文件 ≤50MB、每数据源文件夹 ≤200MB（`.env` 可配） |
+| **审计 / 漂移** | 查询审计日志、Golden Query 记忆、Schema 漂移检测与同步 |
+
+**前端入口：** 侧边栏 **问数数据源** → `/data-sources` → 新建（数据库或 **Excel 文件夹**）→ 详情页 **问数** Tab（SQL / Python 编辑区已加大）
+
+**主要 API：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| CRUD | `/data-sources/` | 数据源管理 |
+| POST | `/data-sources/test` | 测试连接 / 搜索远程表 |
+| PUT | `/data-sources/{id}/tables` | 注册数据表 + 权限表 |
+| GET/POST | `/data-sources/{id}/excel/files` · `/excel/upload` | Excel 列表 / 上传 |
+| POST | `/data-ask/query` | 问数（`execute=false` 仅生成 SQL/Python） |
+| GET | `/data-sources/{id}/audit-logs` | 审计 |
+| GET/POST | `/data-sources/{id}/golden-queries` | Q-SQL 记忆 |
+
+**环境变量（Excel 临时分析，可选）：**
+
+```env
+DATA_ASK_EXCEL_MAX_FILE_MB=50
+DATA_ASK_EXCEL_MAX_FOLDER_MB=200
+LOCAL_UPLOADS_DIR=./uploads
+```
+
+**测试脚本：**
+
+```bash
+cd backend
+python scripts/smoke_test_data_ask.py          # 单元 + ASGI API（含 excel_folder 驱动）
+python scripts/test_excel_ephemeral.py         # 临时分析：执行后文件释放
+python scripts/create_test_table_pg.py         # 远程 PG 造 test 表（192.168.50.10）
+python scripts/create_permission_table_pg.py   # 造 user_data_scope 权限表
+```
+
+**涉及模块：** `backend/app/core/data_ask/`、`backend/app/api/data_sources.py`、`frontend/src/app/data-sources/`
+
+> Excel 为 **临时分析模式**：仅「执行」且成功返回结果后释放；「生成 Python」不删文件。审计日志与当次分析结果保留，原始 Excel 不长期落盘。
 
 ### 2026-06 — 组织权限 Excel 批量导入与界面优化
 
@@ -279,6 +331,7 @@ AI-Agent/
 │   ├── app/
 │   │   ├── api/          # REST API 路由
 │   │   ├── core/         # 智能体、工作流、对话、工具、技能、数字员工调度
+│   │   │   ├── data_ask/     # 问数：连接器、NL→SQL、Excel Python 分析、权限、审计
 │   │   │   ├── auth/         # JWT、密码、用户数据范围、智能体 ACL、权限 Excel 导入
 │   │   │   ├── chat/         # 推荐问题、会话清理、导出技能/知识库、对话沉淀（deposit）
 │   │   │   ├── skills/       # 技能注入、在线技能库
@@ -375,6 +428,8 @@ set SMOKE_BASE_URL=http://127.0.0.1:8001
 set SMOKE_ADMIN_PASSWORD=your-admin-password
 python smoke_test.py
 python scripts/smoke_test_permission_import.py
+python scripts/smoke_test_data_ask.py
+python scripts/test_excel_ephemeral.py
 python scripts/run_launch_preflight.py   # 上线前全量预检
 ```
 
@@ -492,6 +547,8 @@ cd frontend && cp .env.example .env.local
 | `/knowledge` | 知识库与文档检索 |
 | `/models` | 模型配置 CRUD、设默认、推理参数、可用模型列表 |
 | `/tools` | 工具注册表 |
+| `/data-sources` | 问数数据源 CRUD、连库测试、表注册、Excel 上传、语义模型、审计 |
+| `/data-ask` | 问数查询（NL→SQL 或 NL→Python，`execute` 控制是否执行） |
 | `/orchestrator` | 多智能体编排 |
 
 完整接口见 Swagger UI：http://localhost:8000/docs
@@ -843,6 +900,7 @@ sequenceDiagram
 - [x] 用户登录与按用户数据隔离（个人 API Key、30 天会话清理）
 - [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户、**Excel 批量导入** — `/settings/organization`）
 - [x] Windows 自包含交付包（`package_win_release.ps1`：内置 Python/Node/依赖 + `AI-AGENT.bat`）
+- [x] **问数数据源 DataAsk**（多库 NL→SQL、权限注入、审计、Schema 漂移、Excel 临时 Python 分析）
 - [~] Docker Compose 一键部署（compose 文件已有，待完善）
 
 ---

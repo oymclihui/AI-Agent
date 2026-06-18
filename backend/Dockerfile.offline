@@ -1,0 +1,19 @@
+FROM docker.m.daocloud.io/library/python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 离线安装：wheels/ 由 package_docker_office_offline.ps1 预下载
+COPY wheels /wheels
+COPY requirements.txt .
+RUN pip install --no-index --find-links=/wheels --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

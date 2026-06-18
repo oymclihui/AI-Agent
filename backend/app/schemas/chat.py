@@ -38,8 +38,9 @@ class ConversationCreate(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: bool = False
-    chat_mode: Literal["single", "group"] = "single"
+    chat_mode: Literal["single", "group", "data_ask"] = "single"
     group_config: Optional[GroupChatConfig] = None
+    data_source_id: Optional[str] = None
 
 
 class ConversationContextUpdate(BaseModel):
@@ -49,8 +50,9 @@ class ConversationContextUpdate(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: Optional[bool] = None
-    chat_mode: Optional[Literal["single", "group"]] = None
+    chat_mode: Optional[Literal["single", "group", "data_ask"]] = None
     group_config: Optional[GroupChatConfig] = None
+    data_source_id: Optional[str] = None
 
 
 class ConversationResponse(BaseModel):

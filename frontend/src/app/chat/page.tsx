@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
@@ -430,6 +430,27 @@ export default function ChatPage() {
   useEffect(() => {
     return () => suggestAbortRef.current?.abort();
   }, []);
+
+  const searchParams = useSearchParams();
+  const dataSourceFromUrl = searchParams.get("data_source_id");
+  const dataAskBootRef = useRef(false);
+
+  useEffect(() => {
+    if (!dataSourceFromUrl || dataAskBootRef.current) return;
+    dataAskBootRef.current = true;
+    chatApi
+      .createConversation({
+        title: lang === "zh" ? "问数对话" : "Data Ask",
+        chat_mode: "data_ask",
+        data_source_id: dataSourceFromUrl,
+      })
+      .then(({ data }) => {
+        setConversations((c) => [data, ...c]);
+        setActiveConv(data.id);
+        setMessages([]);
+      })
+      .catch(() => {});
+  }, [dataSourceFromUrl, lang]);
 
   const sceneOptions = CHAT_SCENES.map((s) => ({
     value: s.value,

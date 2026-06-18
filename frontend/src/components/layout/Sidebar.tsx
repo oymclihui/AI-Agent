@@ -6,7 +6,7 @@ import {
   Bot, Workflow, MessageSquare,
   Cpu, Zap, Home, Settings, Languages, BookOpen, Briefcase, Monitor,
   Library, Lightbulb, MousePointer2, Shield,
-  Building2, Crown,
+  Building2, Crown, Database,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useLangStore } from "@/lib/langStore";
@@ -34,6 +34,7 @@ export default function Sidebar() {
     { href: "/inspiration", icon: Lightbulb,      labelKey: "inspiration" as const, show: true },
     { href: "/models",      icon: Cpu,            labelKey: "models" as const, show: true },
     { href: "/tools",       icon: Zap,            labelKey: "tools" as const, show: true },
+    { href: "/data-sources", icon: Database, labelKey: "dataSources" as const, show: true },
   ].filter((item) => item.show);
 
   return (

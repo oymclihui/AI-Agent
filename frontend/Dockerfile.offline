@@ -1,0 +1,15 @@
+# 离线前端镜像：.next 与 node_modules 在打包机上预先构建，服务器 build 时不访问 npm
+FROM docker.m.daocloud.io/library/node:20-alpine
+
+WORKDIR /app
+ENV NODE_ENV=production
+ARG BACKEND_URL=http://backend:8000
+ENV BACKEND_URL=$BACKEND_URL
+
+COPY package.json package-lock.json* ./
+COPY node_modules ./node_modules
+COPY .next ./.next
+COPY public ./public
+
+EXPOSE 3000
+CMD ["npm", "start"]

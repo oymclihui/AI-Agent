@@ -172,6 +172,7 @@ def _apply_chat_mode(
     *,
     chat_mode: str | None = None,
     group_config: dict | None = None,
+    data_source_id: str | None = None,
 ) -> None:
     meta = dict(conv.metadata_ or {})
     if chat_mode is not None:
@@ -179,11 +180,19 @@ def _apply_chat_mode(
             meta["chat_mode"] = "group"
             if group_config:
                 meta["group"] = group_config
+            meta.pop("data_source_id", None)
+        elif chat_mode == "data_ask":
+            meta["chat_mode"] = "data_ask"
+            meta.pop("group", None)
+            if data_source_id:
+                meta["data_source_id"] = data_source_id
         else:
             meta["chat_mode"] = "single"
             meta.pop("group", None)
     elif group_config is not None:
         meta["group"] = group_config
+    if data_source_id is not None:
+        meta["data_source_id"] = data_source_id
     conv.metadata_ = meta
 
 
@@ -381,6 +390,9 @@ async def create_conversation(
             agent = await db.get(AgentModel, aid)
             await require_agent_use(db, agent, user)
 
+    if payload.chat_mode == "data_ask" and not payload.data_source_id:
+        raise HTTPException(status_code=400, detail="data_source_id required for data_ask mode")
+
     conv = Conversation(
         id=generate_uuid(),
         owner_id=user.id,
@@ -403,6 +415,12 @@ async def create_conversation(
             conv,
             chat_mode="group",
             group_config=payload.group_config.model_dump(),
+        )
+    elif payload.chat_mode == "data_ask":
+        _apply_chat_mode(
+            conv,
+            chat_mode="data_ask",
+            data_source_id=payload.data_source_id,
         )
     else:
         _apply_chat_mode(conv, chat_mode="single")
@@ -470,7 +488,7 @@ async def update_conversation_context(
             web_search_enabled=unset.get("web_search_enabled") if "web_search_enabled" in unset else None,
         )
 
-    if "chat_mode" in unset or "group_config" in unset:
+    if "chat_mode" in unset or "group_config" in unset or "data_source_id" in unset:
         gc = unset.get("group_config")
         if gc is not None and hasattr(gc, "model_dump"):
             gc = gc.model_dump()
@@ -482,6 +500,7 @@ async def update_conversation_context(
             conv,
             chat_mode=unset.get("chat_mode") if "chat_mode" in unset else None,
             group_config=gc if "group_config" in unset else None,
+            data_source_id=unset.get("data_source_id") if "data_source_id" in unset else None,
         )
 
     await db.flush()
@@ -644,6 +663,75 @@ async def send_message(
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_group_stream(), media_type="text/event-stream")
+
+    from app.core.data_ask.experience.chat_bridge import resolve_data_source_for_chat, format_data_ask_for_chat
+    from app.core.data_ask.service import run_data_ask, stream_data_ask
+
+    data_source = await resolve_data_source_for_chat(
+        db, agent_id=conv.agent_id, conversation_meta=meta,
+    )
+    if data_source and meta.get("chat_mode", "single") in ("single", "data_ask"):
+        ask_message = message
+        if attachment_context:
+            ask_message = f"{message}\n\n{attachment_context}"
+
+        if stream:
+            async def sse_data_ask():
+                full = ""
+                try:
+                    async for line in stream_data_ask(
+                        db,
+                        data_source_id=data_source.id,
+                        question=ask_message,
+                        user=user,
+                    ):
+                        ev = json.loads(line)
+                        if ev.get("event") == "token":
+                            full += ev.get("token") or ""
+                        yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+                    assistant_msg = Message(
+                        id=generate_uuid(),
+                        conversation_id=conv_id,
+                        role=MessageRole.assistant,
+                        content=full,
+                        metadata_={"data_ask": True, "data_source_id": data_source.id},
+                    )
+                    db.add(assistant_msg)
+                    await db.commit()
+                except Exception as exc:
+                    detail = str(exc)[:500]
+                    yield f"data: {json.dumps({'event': 'error', 'error': detail}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(sse_data_ask(), media_type="text/event-stream")
+
+        try:
+            result = await run_data_ask(
+                db,
+                data_source_id=data_source.id,
+                question=ask_message,
+                user=user,
+            )
+            content = await format_data_ask_for_chat(result, user)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)[:500]) from exc
+        assistant_msg = Message(
+            id=generate_uuid(),
+            conversation_id=conv_id,
+            role=MessageRole.assistant,
+            content=content,
+            metadata_={"data_ask": True, "data_source_id": data_source.id, "sql": result.get("sql")},
+        )
+        db.add(assistant_msg)
+        await db.commit()
+        return MessageResponse(
+            id=assistant_msg.id,
+            conversation_id=conv_id,
+            role=assistant_msg.role.value,
+            content=assistant_msg.content,
+            created_at=assistant_msg.created_at,
+            metadata=assistant_msg.metadata_ or {},
+        )
 
     use_agent_tools = _agent_has_tools(agent_model)
 

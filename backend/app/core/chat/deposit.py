@@ -342,6 +342,16 @@ JSON schema:
     suggestions = spec.get("suggestions") if isinstance(spec.get("suggestions"), list) else []
     draft_body = spec.get("draft") if isinstance(spec.get("draft"), dict) else {}
 
+    ds_id = (conv.metadata_ or {}).get("data_source_id")
+    if ds_id:
+        suggestions.append({
+            "type": "employee",
+            "title": "沉淀为问数数字员工",
+            "summary": "基于问数数据源创建定时报告数字员工（DataAsk）",
+            "confidence": 0.9,
+        })
+        worth = True
+
     if not worth or not suggestions:
         # Do not clear an existing draft — a follow-up message may re-analyze as
         # "not worth depositing" while the user still has the panel open.

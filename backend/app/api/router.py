@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import agents, workflows, chat, knowledge, models, tools, orchestrator, skills, employees, dashboard, artifacts, auth, desktop_automation, harness, organization, integrations, database, setup, group_chat
+from app.api import agents, workflows, chat, knowledge, models, tools, orchestrator, skills, employees, dashboard, artifacts, auth, desktop_automation, harness, organization, integrations, database, setup, group_chat, data_sources
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -24,3 +24,5 @@ api_router.include_router(desktop_automation.router)
 api_router.include_router(harness.router)
 api_router.include_router(integrations.router)
 api_router.include_router(database.router)
+api_router.include_router(data_sources.router)
+api_router.include_router(data_sources.ask_router)

@@ -22,6 +22,7 @@ export const translations = {
     skills:     { zh: "技能",    en: "Skills" },
     models:     { zh: "模型",    en: "Models" },
     tools:      { zh: "工具",    en: "Tools" },
+    dataSources:{ zh: "问数数据源", en: "Data Sources" },
     desktopAutomation: { zh: "桌面自动化", en: "Desktop Automation" },
     settings:   { zh: "设置",    en: "Settings" },
   },

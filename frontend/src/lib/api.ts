@@ -475,6 +475,42 @@ export const setupApi = {
 
 export const SETUP_TOKEN_STORAGE_KEY = "aiagnet_setup_token";
 
+export const dataSourcesApi = {
+  list: () => api.get("/data-sources/"),
+  create: (data: object) => api.post("/data-sources/", data),
+  get: (id: string) => api.get(`/data-sources/${id}`),
+  update: (id: string, data: object) => api.patch(`/data-sources/${id}`, data),
+  delete: (id: string) => api.delete(`/data-sources/${id}`),
+  test: (data: object) => api.post("/data-sources/test", data),
+  testSaved: (id: string) => api.post(`/data-sources/${id}/test`),
+  listRemoteTables: (id: string, params?: { q?: string; object_type?: string; limit?: number }) =>
+    api.get(`/data-sources/${id}/tables/remote`, { params }),
+  setTables: (id: string, data: object) => api.put(`/data-sources/${id}/tables`, data),
+  updateSemanticModel: (id: string, data: object) => api.put(`/data-sources/${id}/semantic-model`, data),
+  schemaDrift: (id: string) => api.get(`/data-sources/${id}/schema-drift`),
+  reindexSchema: (id: string) => api.post(`/data-sources/${id}/schema/reindex`),
+  auditLogs: (id: string, params?: { limit?: number; offset?: number }) =>
+    api.get(`/data-sources/${id}/audit-logs`, { params }),
+  goldenQueries: (id: string) => api.get(`/data-sources/${id}/golden-queries`),
+  saveGoldenQuery: (id: string, data: object) => api.post(`/data-sources/${id}/golden-queries`, data),
+  schemaGraph: (id: string) => api.get(`/data-sources/${id}/schema-graph`),
+  blueprint: (id: string, data: object) => api.post(`/data-sources/${id}/blueprint`, data),
+  bindAgent: (id: string, data: object) => api.post(`/data-sources/${id}/bind-agent`, data),
+  createEmployee: (id: string, data: object) => api.post(`/data-sources/${id}/create-employee`, data),
+  listExcelFiles: (id: string) => api.get(`/data-sources/${id}/excel/files`),
+  uploadExcel: (id: string, files: File[]) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    return api.post(`/data-sources/${id}/excel/upload`, form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+};
+
+export const dataAskApi = {
+  query: (data: object) => api.post("/data-ask/query", data),
+};
+
 // ── Digital Employees ───────────────────────────────
 export const employeesApi = {
   list: () => api.get("/employees/"),

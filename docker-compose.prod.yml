@@ -51,6 +51,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-AI-AGENT}
       DB_NAME: ${DB_NAME:-AI-AGENT}
       DB_SSL: ${DB_SSL:-prefer}
+      DB_SCHEMA: ${DB_SCHEMA:-public}
+      REDIS_URL: ${REDIS_URL:-}
       VECTOR_STORE_TYPE: ${VECTOR_STORE_TYPE:-chroma}
       CHROMA_MODE: server
       CHROMA_HOST: chromadb

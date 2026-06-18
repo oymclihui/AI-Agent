@@ -111,9 +111,16 @@ export function agentAvatarTone(id: string): string {
   return AVATAR_TONES[hash];
 }
 
+function toolEntryName(t: { tool_name?: string; name?: string } | string | null | undefined): string | null {
+  if (typeof t === "string") return t.trim() || null;
+  if (!t || typeof t !== "object") return null;
+  const raw = t.tool_name ?? t.name;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
 export function agentTags(agent: {
   role: string;
-  tools_config: Array<{ tool_name: string }> | null;
+  tools_config: Array<{ tool_name?: string; name?: string } | string> | null;
   skills_config?: Array<{ skill_id: string }> | null;
 }): string[] {
   const tags: string[] = [];
@@ -121,7 +128,8 @@ export function agentTags(agent: {
   tags.push(...roleBits.filter(Boolean));
   for (const t of agent.tools_config ?? []) {
     if (tags.length >= 4) break;
-    tags.push(t.tool_name.replace(/_/g, " "));
+    const label = toolEntryName(t);
+    if (label) tags.push(label.replace(/_/g, " "));
   }
   if (tags.length < 4 && (agent.skills_config?.length ?? 0) > 0) {
     tags.push(`${agent.skills_config!.length} skills`);
@@ -130,15 +138,16 @@ export function agentTags(agent: {
 }
 
 export function agentPopularity(agent: {
-  tools_config: Array<{ tool_name: string }> | null;
+  tools_config: Array<{ tool_name?: string; name?: string } | string> | null;
   skills_config?: Array<{ skill_id: string }> | null;
 }): number {
-  return (agent.tools_config?.length ?? 0) + (agent.skills_config?.length ?? 0) * 2;
+  const toolCount = (agent.tools_config ?? []).filter((t) => toolEntryName(t)).length;
+  return toolCount + (agent.skills_config?.length ?? 0) * 2;
 }
 
 export function isCustomAgent(agent: {
   skills_config?: Array<{ skill_id: string }> | null;
-  tools_config: Array<{ tool_name: string }> | null;
+  tools_config: Array<{ tool_name?: string; name?: string } | string> | null;
 }): boolean {
-  return (agent.skills_config?.length ?? 0) > 0 || (agent.tools_config?.length ?? 0) > 0;
+  return (agent.skills_config?.length ?? 0) > 0 || (agent.tools_config ?? []).some((t) => toolEntryName(t));
 }

@@ -165,7 +165,7 @@ class WorkflowBuilder:
             LLMNode, HttpNode, CodeNode, NoteNode, TriggerNode, SwitchNode,
             SetNode, MergeNode, SplitNode, FilterNode, WaitNode, TransformNode,
             IntegrationNode, SubWorkflowNode, RespondWebhookNode, StopErrorNode,
-            DesktopCaptureNode, DesktopReplayNode, GroupDiscussNode,
+            DesktopCaptureNode, DesktopReplayNode, GroupDiscussNode, DataAskNode,
         )
         from app.core.workflow.node_catalog import get_node_definition, catalog_type_to_exec_type
         from app.core.agents.executor import AgentExecutor
@@ -186,6 +186,7 @@ class WorkflowBuilder:
             "chattrigger": "trigger",
             "desktopcapture": "desktop_capture", "desktopreplay": "desktop_replay",
             "groupdiscuss": "group_discuss", "group_discuss": "group_discuss",
+            "dataask": "data_ask", "data_ask": "data_ask",
         }
 
         def _normalize_type(raw: str, catalog_id: str | None = None) -> str:
@@ -279,6 +280,8 @@ class WorkflowBuilder:
                 node = DesktopReplayNode(nid, config)
             elif ntype == "group_discuss":
                 node = GroupDiscussNode(nid, config)
+            elif ntype == "data_ask":
+                node = DataAskNode(nid, config)
             else:
                 logger.warning("unknown_workflow_node_type", node_id=nid, type=node_def.get("type"))
                 continue

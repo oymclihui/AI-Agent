@@ -48,19 +48,25 @@ def _build_tarball() -> Path:
     return tar_path
 
 
-def _safe_print(text: str, *, stream=None) -> None:
-    """Print SSH output without crashing on Windows console encoding."""
-    if not text.strip():
+def _safe_write(text: str, *, stream=None) -> None:
+    """Write SSH stream chunks without crashing on Windows console encoding."""
+    if not text:
         return
     target = stream or sys.stdout
     enc = getattr(target, "encoding", None) or "utf-8"
     try:
-        target.write(text.rstrip() + "\n")
+        target.write(text)
         target.flush()
     except UnicodeEncodeError:
         target.buffer.write(text.encode(enc, errors="replace"))
-        target.buffer.write(b"\n")
         target.buffer.flush()
+
+
+def _safe_print(text: str, *, stream=None) -> None:
+    """Print SSH output without crashing on Windows console encoding."""
+    if not text.strip():
+        return
+    _safe_write(text.rstrip() + "\n", stream=stream)
 
 
 def _sudo(ssh: paramiko.SSHClient, password: str, cmd: str, check: bool = True) -> tuple[int, str, str]:
@@ -94,8 +100,7 @@ def _run(ssh: paramiko.SSHClient, cmd: str, check: bool = True) -> tuple[int, st
         if chan.recv_ready():
             chunk = chan.recv(8192).decode("utf-8", errors="replace")
             out_parts.append(chunk)
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
+            _safe_write(chunk)
         elif chan.exit_status_ready():
             break
         else:
@@ -103,8 +108,7 @@ def _run(ssh: paramiko.SSHClient, cmd: str, check: bool = True) -> tuple[int, st
     while chan.recv_ready():
         chunk = chan.recv(8192).decode("utf-8", errors="replace")
         out_parts.append(chunk)
-        sys.stdout.write(chunk)
-        sys.stdout.flush()
+        _safe_write(chunk)
     out = "".join(out_parts)
     err = stderr.read().decode("utf-8", errors="replace")
     code = chan.recv_exit_status()
