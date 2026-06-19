@@ -320,14 +320,14 @@ export default function NewDataSourcePage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl p-6">
+    <div className="mx-auto min-w-0 max-w-2xl p-4 sm:p-6">
       <Link href="/data-sources" className="mb-4 inline-flex items-center gap-1 text-sm theme-muted hover:theme-text">
         <ArrowLeft className="h-4 w-4" />
         {t("返回列表", "Back")}
       </Link>
       <h1 className="text-xl font-semibold theme-text mb-6">{t("新建问数数据源", "New data source")}</h1>
 
-      <div className="mb-8 flex gap-4 text-sm">
+      <div className="mb-8 flex flex-wrap gap-x-4 gap-y-2 text-sm">
         {[1, 2, 3, 4].map((n) => (
           <span key={n} className={step === n ? "font-semibold text-blue-500" : "theme-muted"}>
             {n}. {t(["连接", "选表", "绑 Agent", "启用"][n - 1], ["Connect", "Tables", "Agent", "Enable"][n - 1])}
@@ -336,13 +336,13 @@ export default function NewDataSourcePage() {
       </div>
 
       {step === 1 && (
-        <div className="space-y-4 theme-surface rounded-xl border theme-border p-5">
+        <div className="min-w-0 space-y-4 theme-surface rounded-xl border theme-border p-4 sm:p-5">
           <label className="block text-sm">{t("名称", "Name")}
             <input className="input mt-1 w-full" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("财务分析库", "Finance DB")} />
           </label>
-          <label className="block text-sm">{t("数据库类型", "Driver")}
-            <div className="mt-2">
-              <SegmentedControl value={driver} onChange={onDriverChange} options={DRIVERS} />
+          <label className="block min-w-0 text-sm">{t("数据库类型", "Driver")}
+            <div className="mt-2 min-w-0">
+              <SegmentedControl wrap size="sm" value={driver} onChange={onDriverChange} options={DRIVERS} />
             </div>
           </label>
           {isExcel ? (

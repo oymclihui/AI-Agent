@@ -124,8 +124,11 @@ class PgConnector(DataConnector):
             keys = list(result.keys())
             raw = result.fetchall()
         truncated = len(raw) > limit
-        rows = [list(r) for r in raw[:limit]]
-        return QueryResult(columns=keys, rows=rows, row_count=len(rows), truncated=truncated)
+        from app.core.data_ask.utils.json_safe import json_safe_value
+
+        rows = [[json_safe_value(v) for v in row] for row in raw[:limit]]
+        safe_cols = [json_safe_value(k) for k in keys]
+        return QueryResult(columns=safe_cols, rows=rows, row_count=len(rows), truncated=truncated)
 
     def _quote_table(self, table_name: str) -> str:
         parts = table_name.split(".")

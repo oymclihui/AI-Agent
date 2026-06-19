@@ -272,8 +272,8 @@ export default function DataSourceDetailPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-6xl p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="mx-auto min-w-0 max-w-6xl p-4 sm:p-6 space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <Link href="/data-sources" className="mb-2 inline-flex items-center gap-1 text-sm theme-muted">
             <ArrowLeft className="h-4 w-4" />{t("返回", "Back")}
@@ -290,7 +290,7 @@ export default function DataSourceDetailPage() {
         </button>
       </div>
 
-      <SegmentedControl value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
+      <SegmentedControl wrap size="sm" value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
 
       {tab === "overview" && (
         <>
@@ -352,7 +352,7 @@ export default function DataSourceDetailPage() {
       )}
 
       {tab === "ask" && (
-        <div className="theme-surface rounded-xl border theme-border p-4 space-y-3">
+        <div className="min-w-0 theme-surface rounded-xl border theme-border p-4 space-y-3">
           <h2 className="font-medium">{t("即时问数", "Quick ask")}</h2>
           {isExcel && (
             <p className="text-xs text-amber-600">

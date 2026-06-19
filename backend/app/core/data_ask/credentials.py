@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 
 from app.config import settings
@@ -23,6 +24,12 @@ def encrypt_secret(plain: str) -> str:
 def decrypt_secret(cipher: str) -> str:
     if not cipher:
         return ""
-    key = _key_bytes()
-    data = base64.urlsafe_b64decode(cipher.encode("ascii"))
-    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data)).decode("utf-8")
+    try:
+        key = _key_bytes()
+        pad = "=" * (-len(cipher) % 4)
+        data = base64.urlsafe_b64decode((cipher + pad).encode("ascii"))
+        raw = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, binascii.Error, ValueError):
+        # Legacy rows may store the password in plain text.
+        return cipher
