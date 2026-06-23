@@ -29,11 +29,13 @@ class AgentExecutor:
         tools: list[BaseTool],
         memory_manager: Optional[MemoryManager] = None,
         skill_messages: Optional[list[SystemMessage]] = None,
+        response_style: Optional[str] = None,
     ):
         self.definition = definition
         self.tools = tools
         self.memory_manager = memory_manager
         self.skill_messages = skill_messages or []
+        self.response_style = response_style
         self._llm = None
 
     async def _get_llm(self):
@@ -43,7 +45,8 @@ class AgentExecutor:
             self._llm = await ModelRouter.get_llm(
                 provider=self.definition.llm_provider,
                 model=self.definition.llm_model,
-                temperature=self.definition.temperature,
+                response_style=self.response_style,
+                temperature=None if self.response_style else self.definition.temperature,
             )
             if self.tools:
                 self._llm = self._llm.bind_tools(self.tools)

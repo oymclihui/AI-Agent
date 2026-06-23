@@ -15,6 +15,7 @@ from app.models_hub.inference import (
     merge_inference,
 )
 from app.models_hub.resolver import resolve_model_config
+from app.models_hub.response_style import ResponseStyle, preset_for_style, DEFAULT_STYLE
 from app.models_hub.user_credentials import resolve_user_credentials
 from app.schemas.model_inference import ModelInferenceParams
 
@@ -34,6 +35,7 @@ class ModelRouter:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
+        response_style: Optional[str] = None,
         streaming: bool = False,
         base_url: Optional[str] = None,
         inference_params: Optional[dict[str, Any]] = None,
@@ -65,8 +67,16 @@ class ModelRouter:
             resolved_base_url = user_base_url
 
         merged = merge_inference(stored, inference_params, temperature_override=temperature)
-        if "temperature" not in merged:
-            merged["temperature"] = temperature if temperature is not None else 0.7
+        if response_style:
+            try:
+                style = ResponseStyle(response_style)
+            except ValueError:
+                style = DEFAULT_STYLE
+            merged.update(preset_for_style(style))
+        elif temperature is not None:
+            merged["temperature"] = temperature
+        elif "temperature" not in merged:
+            merged.update(preset_for_style(DEFAULT_STYLE))
 
         cache_key = f"{provider}:{api_model}:{resolved_base_url}:{resolved_api_key}:{user_id}:{streaming}:{sorted(merged.items())}"
         if cache_key in cls._cache:

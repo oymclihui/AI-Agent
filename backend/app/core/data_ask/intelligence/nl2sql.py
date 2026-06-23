@@ -118,7 +118,7 @@ async def _invoke_sql_llm(
         provider=llm_provider,
         model=llm_model,
         user_id=user_id,
-        temperature=0.2,
+        response_style="precise",
     )
     resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     text = resp.content if isinstance(resp.content, str) else str(resp.content)
@@ -155,7 +155,7 @@ async def analyze_results(
         provider=llm_provider,
         model=llm_model,
         user_id=user_id,
-        temperature=0.3,
+        response_style="precise",
     )
     resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     return resp.content if isinstance(resp.content, str) else str(resp.content)

@@ -558,6 +558,14 @@ export const translations = {
     },
     webSearchOff: { zh: "已关闭联网", en: "Web search off" },
     webSearchSearching: { zh: "正在联网检索…", en: "Searching the web…" },
+    responseStyle: { zh: "回答风格", en: "Response style" },
+    responseStylePrecise: { zh: "精准", en: "Precise" },
+    responseStyleBalanced: { zh: "平衡", en: "Balanced" },
+    responseStyleCreative: { zh: "发散", en: "Creative" },
+    responseStyleLocked: {
+      zh: "问数模式固定为精准风格",
+      en: "Data ask is locked to Precise style",
+    },
     connectorSetupTitle: { zh: "配置邮箱连接器", en: "Configure mail connector" },
     connectorSetupDesc: {
       zh: "填写邮箱与密码/授权码，保存后即可在对话中读取邮件。",

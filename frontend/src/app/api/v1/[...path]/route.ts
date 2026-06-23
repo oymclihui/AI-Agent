@@ -16,6 +16,7 @@ const COLLECTION_ROOTS = new Set([
   "models",
   "orchestrator",
   "chat",
+  "data-sources",
 ]);
 
 function buildUpstreamPath(pathSegments: string[]): string {

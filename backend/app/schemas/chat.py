@@ -5,6 +5,8 @@ from enum import Enum
 
 from app.schemas.agent import SkillBinding
 
+ResponseStyleLiteral = Literal["precise", "balanced", "creative"]
+
 
 class GroupChatConfig(BaseModel):
     agent_ids: list[str] = Field(..., min_length=2, max_length=6)
@@ -38,6 +40,7 @@ class ConversationCreate(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: bool = False
+    response_style: ResponseStyleLiteral = "balanced"
     chat_mode: Literal["single", "group", "data_ask"] = "single"
     group_config: Optional[GroupChatConfig] = None
     data_source_id: Optional[str] = None
@@ -50,6 +53,7 @@ class ConversationContextUpdate(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: Optional[bool] = None
+    response_style: Optional[ResponseStyleLiteral] = None
     chat_mode: Optional[Literal["single", "group", "data_ask"]] = None
     group_config: Optional[GroupChatConfig] = None
     data_source_id: Optional[str] = None
@@ -67,6 +71,7 @@ class ConversationResponse(BaseModel):
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
     web_search_enabled: bool = False
+    response_style: str = "balanced"
     chat_mode: str = "single"
     group_config: Optional[dict[str, Any]] = None
     created_at: datetime
@@ -97,6 +102,7 @@ class ConversationResponse(BaseModel):
             model_config_id=meta.get("model_config_id"),
             connector_id=meta.get("connector_id"),
             web_search_enabled=bool(meta.get("web_search_enabled")),
+            response_style=str(meta.get("response_style") or "balanced"),
             chat_mode=str(meta.get("chat_mode") or "single"),
             group_config=meta.get("group"),
             created_at=conv.created_at,

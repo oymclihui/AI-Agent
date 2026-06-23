@@ -60,6 +60,7 @@ class DialogueManager:
         context: Optional[dict[str, Any]] = None,
         extra_system_messages: Optional[list[SystemMessage]] = None,
         attachment_context: Optional[str] = None,
+        response_style: Optional[str] = None,
         db: Optional[AsyncSession] = None,
         user_id: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -73,18 +74,16 @@ class DialogueManager:
 
         llm_provider = None
         llm_model = None
-        temperature = None
         if agent_definition:
             llm_provider = agent_definition.llm_provider
             llm_model = agent_definition.llm_model
-            temperature = agent_definition.temperature
             if not system_prompt:
                 system_prompt = agent_definition.system_prompt()
 
         llm = await ModelRouter.get_llm(
             provider=llm_provider,
             model=llm_model,
-            temperature=temperature,
+            response_style=response_style,
             db=db,
             user_id=user_id,
         )
@@ -151,6 +150,7 @@ class DialogueManager:
         system_prompt: Optional[str] = None,
         extra_system_messages: Optional[list[SystemMessage]] = None,
         attachment_context: Optional[str] = None,
+        response_style: Optional[str] = None,
         db: Optional[AsyncSession] = None,
         user_id: Optional[str] = None,
     ) -> AsyncIterator[dict[str, str]]:
@@ -159,18 +159,16 @@ class DialogueManager:
 
         llm_provider = None
         llm_model = None
-        temperature = None
         if agent_definition:
             llm_provider = agent_definition.llm_provider
             llm_model = agent_definition.llm_model
-            temperature = agent_definition.temperature
             if not system_prompt:
                 system_prompt = agent_definition.system_prompt()
 
         llm = await ModelRouter.get_llm(
             provider=llm_provider,
             model=llm_model,
-            temperature=temperature,
+            response_style=response_style,
             db=db,
             user_id=user_id,
         )

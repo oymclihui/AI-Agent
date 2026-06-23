@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, RefreshCw, Search, Upload } from "lucide-react";
 import toast from "react-hot-toast";
-import { dataSourcesApi } from "@/lib/api";
+import { dataSourcesApi, formatApiError } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { SegmentedControl } from "@/components/SegmentedControl";
 
@@ -205,8 +205,8 @@ export default function NewDataSourcePage() {
       setSourceId(id);
       setStep(2);
       toast.success(t("Excel 文件夹已创建，请上传文件", "Excel folder created — upload files"));
-    } catch {
-      toast.error(t("创建失败", "Create failed"));
+    } catch (e: unknown) {
+      toast.error(formatApiError(e, t("创建失败", "Create failed")));
     } finally {
       setBusy(false);
     }

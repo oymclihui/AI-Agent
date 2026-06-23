@@ -205,11 +205,17 @@ class GroupChatOrchestrator:
         user_prompt: str,
     ) -> AsyncIterator[dict[str, str]]:
         from app.models_hub.router import ModelRouter
+        from app.models_hub.response_style import resolve_conversation_style
+
+        meta = self.conv.metadata_ or {}
+        style = resolve_conversation_style(
+            meta, agent_temperature=runtime.definition.temperature,
+        )
 
         llm = await ModelRouter.get_llm(
             provider=runtime.definition.llm_provider,
             model=runtime.definition.llm_model,
-            temperature=runtime.definition.temperature,
+            response_style=style.value,
             db=self.db,
             user_id=self.user.id,
         )

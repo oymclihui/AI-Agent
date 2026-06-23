@@ -62,10 +62,13 @@ interface Conversation {
   model_config_id?: string | null;
   connector_id?: string | null;
   web_search_enabled?: boolean;
+  response_style?: "precise" | "balanced" | "creative";
   chat_mode?: string;
   group_config?: { agent_ids?: string[]; orchestration?: string; max_rounds?: number };
   created_at: string;
 }
+
+type ResponseStyle = "precise" | "balanced" | "creative";
 interface ModelConfigOption {
   id: string;
   name: string;
@@ -197,6 +200,7 @@ export default function ChatPage() {
   const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>("");
   const [selectedConnector, setSelectedConnector] = useState<string>("");
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [responseStyle, setResponseStyle] = useState<ResponseStyle>("balanced");
   const [modelConfigs, setModelConfigs] = useState<ModelConfigOption[]>([]);
   const [mailboxSaved, setMailboxSaved] = useState<{
     email: string;
@@ -673,6 +677,10 @@ export default function ChatPage() {
     if (conv.connector_id) setSelectedConnector(conv.connector_id);
     else setSelectedConnector("");
     setWebSearchEnabled(Boolean(conv.web_search_enabled));
+    const style = conv.response_style;
+    setResponseStyle(
+      style === "precise" || style === "balanced" || style === "creative" ? style : "balanced",
+    );
     const kbIds = conv.knowledge_base_ids || [];
     setSelectedKbId(kbIds[0] || "");
     const skillIds = (conv.skills_config || []).map((s) => s.skill_id);
@@ -754,6 +762,7 @@ export default function ChatPage() {
     model_config_id?: string | null;
     connector_id?: string | null;
     web_search_enabled?: boolean;
+    response_style?: ResponseStyle;
     chat_mode?: "single" | "group";
     group_config?: ReturnType<typeof buildGroupConfig> | null;
   }) => {
@@ -767,6 +776,7 @@ export default function ChatPage() {
       model_config_id: string | null;
       connector_id: string | null;
       web_search_enabled: boolean;
+      response_style: ResponseStyle;
       chat_mode: "single" | "group";
       group_config?: ReturnType<typeof buildGroupConfig> | null;
     } = {
@@ -784,6 +794,9 @@ export default function ChatPage() {
       web_search_enabled: overrides?.web_search_enabled !== undefined
         ? overrides.web_search_enabled
         : webSearchEnabled,
+      response_style: overrides?.response_style !== undefined
+        ? overrides.response_style
+        : responseStyle,
       chat_mode: "single",
     };
     const gc = getGroupConfigFromState(chatMode, groupAgentIds, groupOrchestration, groupMaxRounds, lang);
@@ -815,6 +828,7 @@ export default function ChatPage() {
       model_config_id: selectedModelConfigId || null,
       connector_id: selectedConnector || null,
       web_search_enabled: webSearchEnabled,
+      response_style: responseStyle,
     };
     const gc = getGroupConfigFromState(chatMode, groupAgentIds, groupOrchestration, groupMaxRounds, lang);
     if (gc) {
@@ -845,6 +859,12 @@ export default function ChatPage() {
     if (kb) parts.push(kb.name);
     if (selectedConnector) parts.push(connectorLabel(selectedConnector, lang));
     if (webSearchEnabled) parts.push(t.webSearch[lang]);
+    const styleLabel = {
+      precise: t.responseStylePrecise[lang],
+      balanced: t.responseStyleBalanced[lang],
+      creative: t.responseStyleCreative[lang],
+    }[responseStyle];
+    if (styleLabel) parts.push(styleLabel);
     return parts.join(" · ");
   };
 
@@ -1371,8 +1391,12 @@ export default function ChatPage() {
         )
       : messages;
 
+  const activeConversation = conversations.find((c) => c.id === activeConv);
+  const responseStyleLocked = activeConversation?.chat_mode === "data_ask";
+  const effectiveResponseStyle: ResponseStyle = responseStyleLocked ? "precise" : responseStyle;
+
   const activeConvTitle =
-    conversations.find((c) => c.id === activeConv)?.title?.trim() || t.untitled[lang];
+    activeConversation?.title?.trim() || t.untitled[lang];
 
   return (
     <div className="chat-page flex h-full min-h-0">
@@ -1982,6 +2006,29 @@ export default function ChatPage() {
                   </option>
                 ))}
               </select>
+              <div
+                title={responseStyleLocked ? t.responseStyleLocked[lang] : t.responseStyle[lang]}
+                className={clsx(responseStyleLocked && "cursor-not-allowed")}
+              >
+                <SegmentedControl
+                  value={effectiveResponseStyle}
+                  onChange={(v) => {
+                    if (responseStyleLocked) return;
+                    setResponseStyle(v);
+                    void syncContextToServer({ response_style: v });
+                  }}
+                  options={[
+                    { value: "precise", label: t.responseStylePrecise[lang] },
+                    { value: "balanced", label: t.responseStyleBalanced[lang] },
+                    { value: "creative", label: t.responseStyleCreative[lang] },
+                  ]}
+                  size="sm"
+                  className={clsx(
+                    "shrink-0",
+                    responseStyleLocked && "pointer-events-none opacity-60",
+                  )}
+                />
+              </div>
               <button
                 type="button"
                 onClick={() => {

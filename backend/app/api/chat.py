@@ -36,6 +36,7 @@ from app.core.chat.connectors import build_connector_messages
 from app.core.chat.web_context import build_web_search_messages
 from app.core.chat.deposit import analyze_conversation_deposit, confirm_conversation_deposit as execute_deposit_confirm
 from app.core.group_chat.orchestrator import GroupChatOrchestrator, get_group_config_from_conversation
+from app.models_hub.response_style import resolve_conversation_style
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 logger = structlog.get_logger(__name__)
@@ -141,12 +142,19 @@ def _agent_has_tools(agent_model: AgentModel | None) -> bool:
     return any(isinstance(t, dict) and t.get("tool_name") for t in tools)
 
 
+def _conversation_response_style(conv: Conversation, agent_model: AgentModel | None = None) -> str:
+    meta = conv.metadata_ or {}
+    agent_temp = agent_model.temperature if agent_model else None
+    return resolve_conversation_style(meta, agent_temperature=agent_temp).value
+
+
 def _merge_conversation_preferences(
     conv: Conversation,
     *,
     model_config_id: str | None = None,
     connector_id: str | None = None,
     web_search_enabled: bool | None = None,
+    response_style: str | None = None,
 ) -> None:
     meta = dict(conv.metadata_ or {})
     if model_config_id is not None:
@@ -164,6 +172,11 @@ def _merge_conversation_preferences(
             meta["web_search_enabled"] = True
         else:
             meta.pop("web_search_enabled", None)
+    if response_style is not None:
+        if response_style in ("precise", "balanced", "creative"):
+            meta["response_style"] = response_style
+        else:
+            meta.pop("response_style", None)
     conv.metadata_ = meta
 
 
@@ -183,6 +196,7 @@ def _apply_chat_mode(
             meta.pop("data_source_id", None)
         elif chat_mode == "data_ask":
             meta["chat_mode"] = "data_ask"
+            meta["response_style"] = "precise"
             meta.pop("group", None)
             if data_source_id:
                 meta["data_source_id"] = data_source_id
@@ -404,11 +418,13 @@ async def create_conversation(
         memory_type=payload.memory_type,
         metadata_={},
     )
+    create_style = "precise" if payload.chat_mode == "data_ask" else payload.response_style
     _merge_conversation_preferences(
         conv,
         model_config_id=payload.model_config_id,
         connector_id=payload.connector_id,
         web_search_enabled=payload.web_search_enabled,
+        response_style=create_style,
     )
     if payload.chat_mode == "group" and payload.group_config:
         _apply_chat_mode(
@@ -480,12 +496,14 @@ async def update_conversation_context(
             s.model_dump() if hasattr(s, "model_dump") else s for s in raw_skills
         ]
 
-    if "model_config_id" in unset or "connector_id" in unset or "web_search_enabled" in unset:
+    pref_keys = ("model_config_id", "connector_id", "web_search_enabled", "response_style")
+    if any(k in unset for k in pref_keys):
         _merge_conversation_preferences(
             conv,
             model_config_id=unset.get("model_config_id") if "model_config_id" in unset else None,
             connector_id=unset.get("connector_id") if "connector_id" in unset else None,
             web_search_enabled=unset.get("web_search_enabled") if "web_search_enabled" in unset else None,
+            response_style=unset.get("response_style") if "response_style" in unset else None,
         )
 
     if "chat_mode" in unset or "group_config" in unset or "data_source_id" in unset:
@@ -588,6 +606,7 @@ async def send_message(
     await db.flush()
 
     agent_definition, skill_messages, agent_model, retriever = await _resolve_effective_context(db, conv, user)
+    response_style = _conversation_response_style(conv, agent_model)
     meta = conv.metadata_ or {}
     connector_id_active = meta.get("connector_id")
     if connector_id_active:
@@ -744,7 +763,9 @@ async def send_message(
             HarnessContext(user_id=user.id, source="chat", source_id=conv_id)
         )
         try:
-            executor = await build_agent_executor(db, agent_model, memory_manager=memory)
+            executor = await build_agent_executor(
+                db, agent_model, memory_manager=memory, response_style=response_style,
+            )
             if skill_messages:
                 executor.skill_messages = [*executor.skill_messages, *skill_messages]
             task_prompt = message
@@ -806,6 +827,7 @@ async def send_message(
                     agent_definition=agent_definition,
                     extra_system_messages=skill_messages,
                     attachment_context=attachment_context or None,
+                    response_style=response_style,
                     db=db,
                     user_id=user.id,
                 ):
@@ -846,6 +868,7 @@ async def send_message(
             agent_definition=agent_definition,
             extra_system_messages=skill_messages,
             attachment_context=attachment_context or None,
+            response_style=response_style,
             db=db,
             user_id=user.id,
         )

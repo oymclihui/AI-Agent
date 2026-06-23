@@ -14,6 +14,7 @@ async def build_agent_executor(
     db: AsyncSession,
     agent_model: AgentModel,
     memory_manager: Optional[MemoryManager] = None,
+    response_style: Optional[str] = None,
 ) -> AgentExecutor:
     tool_names = [t.get("tool_name") for t in (agent_model.tools_config or [])]
     registry = ToolRegistry.get_instance()
@@ -37,4 +38,5 @@ async def build_agent_executor(
         tools=tools,
         memory_manager=memory_manager,
         skill_messages=skill_messages,
+        response_style=response_style,
     )
