@@ -549,6 +549,14 @@ export const translations = {
     scrollRight:  { zh: "向右查看更多", en: "Scroll right" },
     selectModel:  { zh: "模型", en: "Model" },
     noModel:      { zh: "默认模型", en: "Default model" },
+    modelSwitchWarn: {
+      zh: "该模型当前不可用",
+      en: "This model is currently unavailable",
+    },
+    modelSwitchFailed: {
+      zh: "保存模型选择失败",
+      en: "Failed to save model selection",
+    },
     selectConnector: { zh: "连接器", en: "Connector" },
     noConnector:  { zh: "无连接器", en: "No connector" },
     webSearch: { zh: "联网", en: "Web" },

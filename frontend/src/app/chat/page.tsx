@@ -11,7 +11,7 @@ import { GroupChatPanel, getGroupConfigFromState } from "@/components/chat/Group
 import { GroupChatMessageRow } from "@/components/chat/GroupChatMessageRow";
 import type { GroupChatTemplate, GroupOrchestration, GroupMessageMeta } from "@/lib/groupChat";
 import { buildGroupConfig } from "@/lib/groupChat";
-import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi } from "@/lib/api";
+import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi, formatApiError } from "@/lib/api";
 import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
@@ -622,6 +622,20 @@ export default function ChatPage() {
 
   const onModelChange = (modelId: string) => {
     setSelectedModelConfigId(modelId);
+    if (modelId) {
+      void modelsApi.testConfigConnection(modelId).then(({ data }) => {
+        if (!data.ok) {
+          toast.error(
+            data.message
+              ? `${t.modelSwitchWarn[lang]}: ${data.message}`
+              : t.modelSwitchWarn[lang],
+            { duration: 6000 },
+          );
+        }
+      }).catch(() => {
+        /* optional probe */
+      });
+    }
     void syncContextToServer({ model_config_id: modelId || null });
   };
 
@@ -674,6 +688,7 @@ export default function ChatPage() {
     if (conv.agent_id) setSelectedAgent(conv.agent_id);
     else setSelectedAgent("");
     if (conv.model_config_id) setSelectedModelConfigId(conv.model_config_id);
+    else setSelectedModelConfigId("");
     if (conv.connector_id) setSelectedConnector(conv.connector_id);
     else setSelectedConnector("");
     setWebSearchEnabled(Boolean(conv.web_search_enabled));
@@ -812,8 +827,8 @@ export default function ChatPage() {
     try {
       const { data } = await chatApi.updateContext(activeConv, payload);
       setConversations((list) => list.map((c) => (c.id === data.id ? data : c)));
-    } catch {
-      /* non-blocking */
+    } catch (err: unknown) {
+      toast.error(formatApiError(err, t.modelSwitchFailed[lang]));
     }
   };
 

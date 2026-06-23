@@ -50,6 +50,12 @@ def _friendly_llm_error(exc: Exception) -> str:
             "无法连接大模型服务（请确认已接入公司内网/VPN，或在「模型配置」中将默认模型切换为 Ollama）。"
             f" 详情: {msg}"
         )
+    if "401" in lower or "unauthorized" in lower:
+        return (
+            "模型鉴权失败（401）。Ollama 云端模型请在「模型中心 → 我的模型 API Key」配置 Ollama Key，"
+            "或在「模型配置」中为该模型填写 API Key 后重试。"
+            f" 详情: {msg}"
+        )
     return f"大模型调用失败: {msg}"
 
 _memory_managers: dict[str, MemoryManager] = {}

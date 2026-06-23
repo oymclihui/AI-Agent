@@ -444,10 +444,6 @@ async def seed_default_models(session) -> None:
     ollama_models = [
         ("qwen3.6:35b", 32768, "Qwen3.6 35B local"),
         ("gemma4:31b", 32768, "Gemma4 31B local"),
-        ("kimi-k2.6:cloud", 131072, "Kimi K2.6 cloud-routed"),
-        ("deepseek-v4-pro:cloud", 65536, "DeepSeek V4 Pro cloud-routed"),
-        ("deepseek-v4-flash:cloud", 65536, "DeepSeek V4 Flash cloud-routed"),
-        ("qwen3.5:cloud", 32768, "Qwen3.5 cloud-routed"),
     ]
     for model_id, ctx, label in ollama_models:
         catalog[("ollama", model_id)] = dict(
@@ -485,7 +481,11 @@ async def seed_default_models(session) -> None:
         # Other existing rows are left unchanged so user edits in Model Hub persist.
 
     for (provider, model_id), cfg in existing.items():
-        if (provider, model_id) not in catalog or model_id in STALE_MODEL_IDS:
+        if (
+            (provider, model_id) not in catalog
+            or model_id in STALE_MODEL_IDS
+            or ":cloud" in model_id
+        ):
             cfg.is_active = False
             cfg.is_default = False
 

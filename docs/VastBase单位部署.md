@@ -10,8 +10,9 @@
 |------|------|
 | 服务器 | Linux 64 位（Ubuntu / CentOS / OpenEuler 等） |
 | Docker | 20+，含 `docker compose` |
-| 数据库 | **VastBase 海量**（PostgreSQL 兼容协议，端口通常 5432） |
-| 网络 | 应用服务器能访问 VastBase 主机；用户浏览器能访问应用端口（默认 3000） |
+| 数据库 | **VastBase 海量** @ `10.9.240.114:5432`，库 `fian`，schema `aiagent` |
+| Redis | **10.138.133.102:6479**（消息/任务；密码 URL 编码） |
+| 网络 | 应用服务器能访问 VastBase 与 Redis；用户浏览器能访问应用端口（默认 3000） |
 
 > VastBase 由单位 DBA 提供连接信息（主机、端口、用户名、密码、库名、schema）。
 
@@ -25,12 +26,16 @@ scp aiagnet-vastbase-linux-*.tar.gz user@server:/opt/
 ssh user@server
 cd /opt && tar -xzf aiagnet-vastbase-linux-*.tar.gz && cd aiagnet-vastbase-linux-*
 
-# 2. 一键安装（会询问 VastBase 地址）
+# 2a. 单位一键安装（包内已带 .env.unit 时）
+sudo bash install_unit.sh
+
+# 2b. 或交互安装（可修改连接信息）
 sudo bash install.sh
 #   数据库类型选 vastbase
-#   填写单位提供的 DB 主机 / 用户 / 密码 / 库名
+#   DB: 10.9.240.114 / fian / schema aiagent
+#   Redis URL: redis://:密码@10.138.133.102:6479/0  （密码含 % 写 %25）
 
-# 3. 管理员浏览器打开 install.sh 输出的 setup 链接，完成建表
+# 3. 管理员浏览器打开 SETUP_TOKEN.admin.txt 中的 setup 链接，完成建表
 
 # 4. 用户访问
 #   http://<服务器IP>:3000

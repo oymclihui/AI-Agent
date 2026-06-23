@@ -122,6 +122,11 @@ class ModelRouter:
         if provider == "ollama":
             from langchain_ollama import ChatOllama
             kwargs = build_ollama_kwargs(params, streaming)
+            if api_key:
+                token = api_key.removeprefix("Bearer ").strip()
+                kwargs["client_kwargs"] = {
+                    "headers": {"Authorization": f"Bearer {token}"},
+                }
             return ChatOllama(
                 model=model,
                 base_url=base_url or settings.OLLAMA_BASE_URL,

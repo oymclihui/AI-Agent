@@ -26,11 +26,7 @@ DEFAULT_PROBE_PRIORITY: list[tuple[str, str]] = [
     ("openai", "gpt-4o-mini"),
     ("openai", "gpt-4o"),
     ("ollama", "qwen3.6:35b"),
-    ("ollama", "deepseek-v4-flash:cloud"),
-    ("ollama", "qwen3.5:cloud"),
     ("ollama", "gemma4:31b"),
-    ("ollama", "kimi-k2.6:cloud"),
-    ("ollama", "deepseek-v4-pro:cloud"),
 ]
 
 
