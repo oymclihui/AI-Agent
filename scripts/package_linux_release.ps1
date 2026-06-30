@@ -55,7 +55,7 @@ foreach ($f in @(
 $backendDest = Join-Path $OutDir "backend"
 New-Item -ItemType Directory -Path $backendDest -Force | Out-Null
 robocopy "$Root\backend" $backendDest /E /XD .venv __pycache__ .pytest_cache uploads chroma_data .cursor `
-    /XF *.db *.db-shm *.db-wal .env .env.local /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+    /XF *.db *.db-shm *.db-wal .env .env.local *.zip /NFL /NDL /NJH /NJS /NC /NS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Backend copy failed" }
 
 # Frontend source (Docker builds .next inside image)
@@ -63,7 +63,7 @@ $frontendDest = Join-Path $OutDir "frontend"
 New-Item -ItemType Directory -Path $frontendDest -Force | Out-Null
 robocopy "$Root\frontend" $frontendDest /E /XD .git .next .next\cache node_modules `
     "lowcode-designer\node_modules" "lowcode-designer\build" `
-    /XF .env .env.local /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+    /XF .env .env.local *.zip /NFL /NDL /NJH /NJS /NC /NS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Frontend copy failed" }
 
 $lcDesigner = Join-Path $frontendDest "lowcode-designer"

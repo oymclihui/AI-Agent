@@ -9,7 +9,7 @@ from app.core.data_ask.utils.json_safe import json_safe_value
 
 async def introspect_tables(source, table_names: list[str]) -> list[dict[str, Any]]:
     driver = str(getattr(source, "driver", "") or "")
-    if driver == "excel_folder":
+    if driver in ("excel_folder", "excel_template"):
         from app.core.data_ask.excel.introspect import introspect_excel_files
 
         return await introspect_excel_files(str(source.id), table_names)

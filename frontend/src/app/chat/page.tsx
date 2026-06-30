@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe } from "lucide-react";
+import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe, Pencil, Download } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
 import { MessageCopyButton } from "@/components/MessageCopyButton";
@@ -11,7 +11,7 @@ import { GroupChatPanel, getGroupConfigFromState } from "@/components/chat/Group
 import { GroupChatMessageRow } from "@/components/chat/GroupChatMessageRow";
 import type { GroupChatTemplate, GroupOrchestration, GroupMessageMeta } from "@/lib/groupChat";
 import { buildGroupConfig } from "@/lib/groupChat";
-import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi, formatApiError } from "@/lib/api";
+import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi, formatApiError, dataSourcesApi } from "@/lib/api";
 import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
@@ -65,6 +65,14 @@ interface Conversation {
   response_style?: "precise" | "balanced" | "creative";
   chat_mode?: string;
   group_config?: { agent_ids?: string[]; orchestration?: string; max_rounds?: number };
+  data_source_id?: string | null;
+  excel_load?: {
+    status?: string;
+    sheet_count?: number;
+    total_rows?: number;
+    file_count?: number;
+    error?: string | null;
+  };
   created_at: string;
 }
 
@@ -231,12 +239,35 @@ export default function ChatPage() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeOption[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const CHAT_INPUT_MIN_HEIGHT = 40;
+  const CHAT_INPUT_MAX_HEIGHT = 200;
+
+  const adjustChatInputHeight = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(Math.max(el.scrollHeight, CHAT_INPUT_MIN_HEIGHT), CHAT_INPUT_MAX_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > CHAT_INPUT_MAX_HEIGHT ? "auto" : "hidden";
+  }, []);
+  const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const [excelLoadState, setExcelLoadState] = useState<Conversation["excel_load"] | null>(null);
+  const excelPreloadRef = useRef<string | null>(null);
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
 
   const appendVoiceText = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
     setInput((prev) => (prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
   }, []);
+
+  useEffect(() => {
+    adjustChatInputHeight();
+  }, [input, adjustChatInputHeight]);
 
   const voiceDialog = useVoiceChatStore((s) => s.enabled);
   const setVoiceDialog = useVoiceChatStore((s) => s.setEnabled);
@@ -452,9 +483,72 @@ export default function ChatPage() {
         setConversations((c) => [data, ...c]);
         setActiveConv(data.id);
         setMessages([]);
+        if (data.data_source_id) {
+          void dataSourcesApi.preloadExcel(data.data_source_id, data.id).then(({ data: status }) => {
+            setExcelLoadState(status);
+            setConversations((list) =>
+              list.map((c) => (c.id === data.id ? { ...c, excel_load: status } : c)),
+            );
+          }).catch(() => {});
+        }
       })
       .catch(() => {});
   }, [dataSourceFromUrl, lang]);
+
+  useEffect(() => {
+    const conv = conversationsRef.current.find((c) => c.id === activeConv);
+    if (!conv?.data_source_id) {
+      setExcelLoadState(null);
+      excelPreloadRef.current = null;
+      return;
+    }
+
+    const sourceId = conv.data_source_id;
+    const cacheKey = `${conv.id}:${sourceId}`;
+    if (excelPreloadRef.current === cacheKey && conv.excel_load?.status === "ready") {
+      setExcelLoadState(conv.excel_load);
+      return;
+    }
+
+    let cancelled = false;
+    excelPreloadRef.current = cacheKey;
+
+    const syncStatus = (status: NonNullable<Conversation["excel_load"]>) => {
+      if (cancelled) return;
+      setExcelLoadState(status);
+      setConversations((list) =>
+        list.map((c) => (c.id === conv.id ? { ...c, excel_load: status } : c)),
+      );
+    };
+
+    const run = async () => {
+      try {
+        const { data } = await dataSourcesApi.preloadExcel(sourceId, conv.id);
+        if (cancelled) return;
+        syncStatus(data);
+        if (data.status === "ready") {
+          toast.success(t.excelReady[lang], { id: `excel-ready-${conv.id}` });
+        } else if (data.status === "loading") {
+          window.setTimeout(run, 2000);
+        } else if (data.status === "error") {
+          toast.error(data.error || t.excelLoadFailed[lang]);
+        }
+      } catch {
+        if (!cancelled) toast.error(t.excelLoadFailed[lang]);
+      }
+    };
+
+    if (conv.excel_load?.status === "ready") {
+      setExcelLoadState(conv.excel_load);
+    } else {
+      setExcelLoadState({ status: "loading" });
+      void run();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConv, lang, t.excelLoadFailed, t.excelReady]);
 
   const sceneOptions = CHAT_SCENES.map((s) => ({
     value: s.value,
@@ -463,6 +557,11 @@ export default function ChatPage() {
   const visibleCapsules = capsulesForScene(scene);
 
   const applyCapsule = (cap: QuickCapsule) => {
+    const conv = conversationsRef.current.find((c) => c.id === activeConv);
+    const blocked =
+      Boolean(conv?.data_source_id || conv?.chat_mode === "data_ask")
+      && excelLoadState?.status !== "ready";
+    if (blocked) return;
     setInput(lang === "zh" ? cap.prompt.zh : cap.prompt.en);
     const agentId = matchAgentByHint(agents, cap.agentHint);
     if (agentId) setSelectedAgent(agentId);
@@ -770,6 +869,37 @@ export default function ChatPage() {
     }
   };
 
+  const startRename = (conv: Conversation, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setRenamingConvId(conv.id);
+    setRenameDraft(conv.title || "");
+  };
+
+  const commitRename = async () => {
+    const convId = renamingConvId;
+    const title = renameDraft.trim();
+    setRenamingConvId(null);
+    if (!convId || !title) return;
+    try {
+      const { data } = await chatApi.renameConversation(convId, title);
+      setConversations((list) => list.map((c) => (c.id === data.id ? data : c)));
+      toast.success(t.renameChatOk[lang]);
+    } catch {
+      toast.error(t.renameChatFailed[lang]);
+    }
+  };
+
+  const downloadConversation = async (format: "md" | "docx", attachments = false) => {
+    if (!activeConv) return;
+    setDownloadMenuOpen(false);
+    try {
+      await chatApi.downloadConversation(activeConv, { format, lang, attachments });
+      toast.success(t.downloadChatOk[lang]);
+    } catch {
+      toast.error(translations.common.actionFailed[lang]);
+    }
+  };
+
   const syncContextToServer = async (overrides?: {
     agent_id?: string | null;
     knowledge_base_ids?: string[];
@@ -907,6 +1037,15 @@ export default function ChatPage() {
     try {
       const { data: conv } = await chatApi.getConversation(convId);
       applyConversationContext(conv);
+      if (conv.data_source_id) {
+        if (conv.excel_load?.status === "ready") {
+          setExcelLoadState(conv.excel_load);
+        } else {
+          setExcelLoadState({ status: "loading" });
+        }
+      } else {
+        setExcelLoadState(null);
+      }
       setConversations((list) => {
         const exists = list.some((c) => c.id === conv.id);
         return exists ? list.map((c) => (c.id === conv.id ? conv : c)) : [conv, ...list];
@@ -1026,6 +1165,15 @@ export default function ChatPage() {
     const hasText = messageText.length > 0;
     const hasFiles = pendingFiles.length > 0;
     if ((!hasText && !hasFiles) || streaming) return null;
+
+    const convForSend = conversations.find((c) => c.id === activeConv);
+    const excelBlocked =
+      Boolean(convForSend?.data_source_id || convForSend?.chat_mode === "data_ask")
+      && excelLoadState?.status !== "ready";
+    if (excelBlocked) {
+      toast.error(t.excelLoading[lang], { id: "excel-blocked" });
+      return null;
+    }
 
     const isGroupChat = chatMode === "group" && groupAgentIds.length >= 2;
     if (chatMode === "group" && groupAgentIds.length < 2) {
@@ -1389,12 +1537,18 @@ export default function ChatPage() {
     }
   };
 
+  const activeConversation = conversations.find((c) => c.id === activeConv);
+  const isExcelAskSession = Boolean(
+    activeConversation?.data_source_id || activeConversation?.chat_mode === "data_ask",
+  );
+  const excelInputBlocked = isExcelAskSession && excelLoadState?.status !== "ready";
+
   const handleQaChoice = (text: string) => {
-    if (streaming) return;
+    if (streaming || excelInputBlocked) return;
     void send(text);
   };
 
-  const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming;
+  const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !streaming && !excelInputBlocked;
 
   const visibleMessages =
     chatMode === "group" && consensusOnly
@@ -1406,8 +1560,7 @@ export default function ChatPage() {
         )
       : messages;
 
-  const activeConversation = conversations.find((c) => c.id === activeConv);
-  const responseStyleLocked = activeConversation?.chat_mode === "data_ask";
+  const responseStyleLocked = isExcelAskSession;
   const effectiveResponseStyle: ResponseStyle = responseStyleLocked ? "precise" : responseStyle;
 
   const activeConvTitle =
@@ -1467,8 +1620,34 @@ export default function ChatPage() {
               >
                 <div className="flex items-center gap-2">
                   <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                  <span className="line-clamp-1">{conv.title || t.untitled[lang]}</span>
+                  {renamingConvId === conv.id ? (
+                    <input
+                      className="min-w-0 flex-1 rounded border border-blue-500/40 bg-[var(--surface)] px-1 py-0.5 text-sm text-white"
+                      value={renameDraft}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={() => void commitRename()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitRename();
+                        }
+                        if (e.key === "Escape") setRenamingConvId(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="line-clamp-1">{conv.title || t.untitled[lang]}</span>
+                  )}
                 </div>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => startRename(conv, e)}
+                className="shrink-0 rounded p-1 text-slate-600 opacity-0 transition-opacity hover:bg-[var(--hover)] hover:text-slate-300 group-hover:opacity-100"
+                title={t.renameChat[lang]}
+              >
+                <Pencil className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
@@ -1493,7 +1672,33 @@ export default function ChatPage() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <span className="chat-mobile-header-title">{activeConv ? activeConvTitle : t.conversations[lang]}</span>
+          <span className="chat-mobile-header-title">
+            {activeConv && renamingConvId === activeConv ? (
+              <input
+                className="max-w-[10rem] rounded border border-blue-500/40 bg-[var(--surface)] px-1 py-0.5 text-sm text-white"
+                value={renameDraft}
+                autoFocus
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={() => void commitRename()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void commitRename();
+                  }
+                  if (e.key === "Escape") setRenamingConvId(null);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="inline-flex max-w-full items-center gap-1 truncate"
+                onClick={() => activeConversation && startRename(activeConversation)}
+              >
+                {activeConv ? activeConvTitle : t.conversations[lang]}
+                {activeConv && <Pencil className="h-3 w-3 shrink-0 opacity-60" />}
+              </button>
+            )}
+          </span>
           <Link
             href="/home"
             className="rounded-lg p-2 text-slate-400 hover:bg-[var(--hover)] hover:text-white"
@@ -1548,6 +1753,42 @@ export default function ChatPage() {
             >
               {t.saveToKnowledge[lang]}
             </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setDownloadMenuOpen((v) => !v)}
+                disabled={streaming}
+                className="chat-export-btn chat-export-btn-kb inline-flex items-center gap-1"
+              >
+                <Download className="h-3 w-3" />
+                {t.downloadChat[lang]}
+              </button>
+              {downloadMenuOpen && (
+                <div className="absolute left-0 top-full z-20 mt-1 min-w-[10rem] rounded-lg border theme-border bg-[var(--surface)] py-1 shadow-lg">
+                  <button
+                    type="button"
+                    className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--hover)]"
+                    onClick={() => void downloadConversation("md")}
+                  >
+                    {t.downloadChatMd[lang]}
+                  </button>
+                  <button
+                    type="button"
+                    className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--hover)]"
+                    onClick={() => void downloadConversation("docx")}
+                  >
+                    {t.downloadChatDocx[lang]}
+                  </button>
+                  <button
+                    type="button"
+                    className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--hover)]"
+                    onClick={() => void downloadConversation("md", true)}
+                  >
+                    {t.downloadChatWithAttachments[lang]}
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => activeConv && fetchDepositSuggestion(activeConv, true)}
@@ -1758,7 +1999,8 @@ export default function ChatPage() {
                     key={cap.id}
                     type="button"
                     onClick={() => applyCapsule(cap)}
-                    className="chat-capsule-chip text-xs py-1"
+                    disabled={excelInputBlocked}
+                    className="chat-capsule-chip text-xs py-1 disabled:opacity-40 disabled:pointer-events-none"
                   >
                     {lang === "zh" ? cap.label.zh : cap.label.en}
                   </button>
@@ -1951,7 +2193,29 @@ export default function ChatPage() {
               )}
             </div>
           )}
-          <div className="chat-input-area rounded-xl border border-[#2d2d4e] bg-[#0d0d1a]">
+          {isExcelAskSession && (
+            <div className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              <span className="font-medium">{t.excelModeBadge[lang]}</span>
+              {" · "}
+              {excelLoadState?.status === "ready" ? (
+                <span>
+                  {excelLoadState.sheet_count ?? 0} {lang === "zh" ? "表" : "sheets"}
+                  {" · "}
+                  {excelLoadState.total_rows ?? 0} {lang === "zh" ? "行" : "rows"}
+                </span>
+              ) : excelLoadState?.status === "error" ? (
+                <span>{excelLoadState.error || t.excelLoadFailed[lang]}</span>
+              ) : (
+                <span>{t.excelLoading[lang]}</span>
+              )}
+            </div>
+          )}
+          <div
+            className={clsx(
+              "chat-input-area rounded-xl border border-[#2d2d4e] bg-[#0d0d1a]",
+              excelInputBlocked && "pointer-events-none opacity-60",
+            )}
+          >
             <div className="chat-input-toolbar">
               <Cpu className="h-3.5 w-3.5 text-slate-500" />
               <select
@@ -2076,7 +2340,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={streaming || isRecording || isProcessing || isSpeaking}
+              disabled={streaming || isRecording || isProcessing || isSpeaking || excelInputBlocked}
               className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-blue-400 disabled:opacity-40"
               title={t.attachFiles[lang]}
             >
@@ -2089,7 +2353,7 @@ export default function ChatPage() {
                 setVoiceDialog(next);
                 toast.success(next ? t.voiceDialogOn[lang] : t.voiceDialogOffOk[lang], { duration: 3500 });
               }}
-              disabled={streaming}
+              disabled={streaming || excelInputBlocked}
               className={clsx(
                 "rounded-lg p-2 transition-colors disabled:opacity-40",
                 voiceDialog
@@ -2103,7 +2367,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={handleVoiceClick}
-              disabled={(streaming && !voiceDialog) || (isProcessing && !isRecording)}
+              disabled={(streaming && !voiceDialog) || (isProcessing && !isRecording) || excelInputBlocked}
               className={clsx(
                 "rounded-lg p-2 transition-colors disabled:opacity-40",
                 isRecording
@@ -2131,15 +2395,17 @@ export default function ChatPage() {
               <Mic className="h-4 w-4" />
             </button>
             <textarea
-              className="flex-1 resize-none bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
-              rows={1}
-              placeholder={t.placeholder[lang]}
+              ref={inputRef}
+              className="chat-input-textarea flex-1 resize-none bg-transparent py-2 text-sm leading-relaxed text-white placeholder-slate-500 focus:outline-none disabled:opacity-50"
+              rows={2}
+              placeholder={excelInputBlocked ? t.excelLoading[lang] : t.placeholder[lang]}
               value={input}
+              readOnly={excelInputBlocked}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  send();
+                  if (canSend) void send();
                 }
               }}
             />

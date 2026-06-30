@@ -15,6 +15,7 @@ class DataSourceDriver(str, Enum):
     doris = "doris"
     hana = "hana"
     excel_folder = "excel_folder"
+    excel_template = "excel_template"
 
 
 class DataSourceTableRole(str, Enum):
@@ -62,10 +63,11 @@ class DataSourceCreate(BaseModel):
     semantic_model: dict[str, Any] = Field(default_factory=dict)
     chat_enabled: bool = True
     report_enabled: bool = True
+    template_id: Optional[str] = None
 
     @model_validator(mode="after")
     def excel_defaults(self) -> "DataSourceCreate":
-        if self.driver == DataSourceDriver.excel_folder:
+        if self.driver in (DataSourceDriver.excel_folder, DataSourceDriver.excel_template):
             self.host = self.host or "local"
             self.username = self.username or "-"
             self.password = self.password or ""
@@ -257,6 +259,16 @@ class ExcelFileListOut(BaseModel):
 class ExcelUploadOut(BaseModel):
     uploaded: list[str] = Field(default_factory=list)
     items: list[ExcelFileOut] = Field(default_factory=list)
+
+
+class ExcelLoadStatusOut(BaseModel):
+    status: str = "idle"
+    sheet_count: int = 0
+    total_rows: int = 0
+    file_count: int = 0
+    loaded_at: Optional[float] = None
+    error: Optional[str] = None
+    table_names: list[str] = Field(default_factory=list)
 
 
 class CreateEmployeeFromSourceOut(BaseModel):

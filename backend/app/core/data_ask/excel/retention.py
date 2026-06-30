@@ -14,7 +14,7 @@ RETENTION_WORKSPACE = "workspace"
 
 
 def excel_retention_mode(source: DataSource) -> str:
-    if str(source.driver) != "excel_folder":
+    if str(source.driver) not in ("excel_folder", "excel_template"):
         return RETENTION_WORKSPACE
     meta = source.metadata_ or {}
     return str(meta.get("excel_retention") or RETENTION_EPHEMERAL)

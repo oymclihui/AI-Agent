@@ -659,6 +659,7 @@ class DataSourceDriver(str, enum.Enum):
     doris = "doris"
     hana = "hana"
     excel_folder = "excel_folder"
+    excel_template = "excel_template"
 
 
 class DataSourceTableRole(str, enum.Enum):
@@ -745,3 +746,38 @@ class DataAskGoldenQuery(Base, TimestampMixin):
     sql_text = Column(Text, nullable=False)
     confirmed_by = Column(String(36), ForeignKey("users.id"), nullable=True)
     use_count = Column(Integer, default=1, nullable=False)
+
+
+class ExcelParseTemplate(Base, TimestampMixin):
+    __tablename__ = "excel_parse_templates"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    name = Column(String(255), nullable=False)
+    type = Column(String(32), nullable=False, default="BS")
+    sheet_mappings = Column(JSON, default=list)
+    is_global = Column(Boolean, default=False, nullable=False)
+    description = Column(Text, nullable=True)
+
+
+class ExcelParseJob(Base, TimestampMixin):
+    __tablename__ = "excel_parse_jobs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    template_id = Column(String(36), ForeignKey("excel_parse_templates.id"), nullable=False, index=True)
+    data_source_id = Column(String(36), ForeignKey("data_sources.id"), nullable=True, index=True)
+    folder_path = Column(Text, nullable=True)
+    recursive = Column(Boolean, default=True, nullable=False)
+    output_filename = Column(String(255), nullable=True)
+    status = Column(String(32), default="pending", nullable=False)
+    progress = Column(Integer, default=0, nullable=False)
+    row_count = Column(Integer, default=0, nullable=False)
+    success_count = Column(Integer, default=0, nullable=False)
+    failed_count = Column(Integer, default=0, nullable=False)
+    output_file = Column(String(255), nullable=True)
+    columns = Column(JSON, default=list)
+    result_preview = Column(JSON, default=list)
+    error_logs = Column(JSON, default=list)
+    error_message = Column(Text, nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)

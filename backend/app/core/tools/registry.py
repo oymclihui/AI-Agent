@@ -36,6 +36,7 @@ class ToolRegistry:
             DesktopReplayTool,
             DesktopCaptureTool,
         )
+        from app.core.tools.builtin.batch_parse_excel import BatchParseExcelTool
 
         builtins = [
             WebSearchTool,
@@ -47,6 +48,7 @@ class ToolRegistry:
             DesktopListDemosTool,
             DesktopReplayTool,
             DesktopCaptureTool,
+            BatchParseExcelTool,
         ]
         for tool in builtins:
             self.register(tool)

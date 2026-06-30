@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,11 +16,21 @@ from app.core.data_ask.connectors.base import RelationInfo
 from app.core.data_ask.excel.storage import (
     EXCEL_EXTENSIONS,
     ensure_excel_folder,
+    excel_folder,
+    excel_input_folder,
     folder_total_bytes,
+    is_excel_driver,
+    is_excel_template_driver,
     list_excel_files,
+    list_excel_input_files,
     remove_excel_folder,
 )
 from app.core.data_ask.excel.retention import RETENTION_EPHEMERAL
+from app.core.data_ask.excel.session_cache import (
+    get_load_status,
+    invalidate_excel_cache,
+    preload_excel_source,
+)
 from app.config import settings
 from app.core.data_ask.connectors.factory import build_connector_from_source
 from app.core.data_ask.credentials import encrypt_secret
@@ -37,8 +47,10 @@ from app.core.data_ask.schema.drift import detect_schema_drift
 from app.core.data_ask.schema.introspect import infer_join_graph, introspect_tables
 from app.core.data_ask.semantic.mdl import default_semantic_model, validate_semantic_model
 from app.core.data_ask.service import run_data_ask, stream_data_ask
+from app.core.excel_parser.service import create_parse_job
 from app.db.base import generate_uuid
 from app.db.models import (
+    Conversation,
     DataAskAuditLog,
     DataAskGoldenQuery,
     DataSource,
@@ -57,6 +69,7 @@ from app.schemas.data_source import (
     DataAskAuditLogOut,
     ExcelFileListOut,
     ExcelFileOut,
+    ExcelLoadStatusOut,
     ExcelUploadOut,
     DataSourceCreate,
     DataSourceListOut,
@@ -77,6 +90,7 @@ from app.schemas.data_source import (
     SchemaGraphOut,
     SemanticModelUpdateIn,
 )
+from app.schemas.excel_parser import ExcelParseJobOut, ExcelTemplateParseIn, ExcelTemplateStatusOut
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/data-sources", tags=["DataSources"])
@@ -194,12 +208,18 @@ async def create_data_source(
     )
     db.add(source)
     await db.flush()
-    if payload.driver.value == "excel_folder":
+    if payload.driver.value in ("excel_folder", "excel_template"):
         ensure_excel_folder(source.id)
+        if payload.driver.value == "excel_template":
+            excel_input_folder(source.id)
         source.metadata_ = {
             **(source.metadata_ or {}),
             "excel_retention": RETENTION_EPHEMERAL,
         }
+        if payload.driver.value == "excel_template":
+            source.metadata_["excel_template"] = True
+            source.metadata_["template_id"] = payload.template_id or ""
+            source.metadata_["parse_status"] = "idle"
         source.report_enabled = False
     await db.commit()
     await db.refresh(source, ["tables"])
@@ -246,7 +266,7 @@ async def delete_data_source(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
-    if str(source.driver) == "excel_folder":
+    if is_excel_driver(str(source.driver)):
         remove_excel_folder(source.id)
     await db.delete(source)
     await db.commit()
@@ -257,10 +277,15 @@ async def test_connection(
     payload: DataSourceTestIn,
     user: User = Depends(get_current_user),
 ):
-    if payload.driver.value == "excel_folder":
+    if payload.driver.value in ("excel_folder", "excel_template"):
+        msg = (
+            "Excel template — create source, upload raw files to input/, run parse, then ask questions"
+            if payload.driver.value == "excel_template"
+            else "Excel folder — create source first, then upload files"
+        )
         return DataSourceTestOut(
             ok=True,
-            message="Excel folder — create source first, then upload files",
+            message=msg,
             tables=[],
             relations=[],
             total_count=0,
@@ -356,7 +381,7 @@ async def set_source_tables(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
-    is_excel = str(source.driver) == "excel_folder"
+    is_excel = is_excel_driver(str(source.driver))
     perm_entries = [t for t in payload.tables if t.role == DataSourceTableRole.permission]
     if is_excel:
         if len(perm_entries) > 1:
@@ -430,7 +455,7 @@ async def list_excel_folder_files(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
-    if str(source.driver) != "excel_folder":
+    if not is_excel_driver(str(source.driver)):
         raise HTTPException(status_code=400, detail="Not an Excel folder data source")
     items = [ExcelFileOut(**item) for item in list_excel_files(source.id)]
     return ExcelFileListOut(items=items)
@@ -444,9 +469,12 @@ async def upload_excel_files(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
-    if str(source.driver) != "excel_folder":
+    if not is_excel_driver(str(source.driver)):
         raise HTTPException(status_code=400, detail="Not an Excel folder data source")
-    folder = ensure_excel_folder(source.id)
+    if is_excel_template_driver(str(source.driver)):
+        folder = excel_input_folder(source.id)
+    else:
+        folder = ensure_excel_folder(source.id)
     uploaded: list[str] = []
     max_file = settings.DATA_ASK_EXCEL_MAX_FILE_MB * 1024 * 1024
     max_folder = settings.DATA_ASK_EXCEL_MAX_FOLDER_MB * 1024 * 1024
@@ -473,8 +501,139 @@ async def upload_excel_files(
         dest.write_bytes(body)
         folder_used += len(body)
         uploaded.append(safe)
-    items = [ExcelFileOut(**item) for item in list_excel_files(source.id)]
+    invalidate_excel_cache(source.id)
+    if is_excel_template_driver(str(source.driver)):
+        items = [ExcelFileOut(**item) for item in list_excel_input_files(source.id)]
+    else:
+        items = [ExcelFileOut(**item) for item in list_excel_files(source.id)]
     return ExcelUploadOut(uploaded=uploaded, items=items)
+
+
+@router.post("/{source_id}/excel/preload", response_model=ExcelLoadStatusOut)
+async def excel_preload(
+    source_id: str,
+    conversation_id: str | None = Query(None),
+    force: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not is_excel_driver(str(source.driver)):
+        raise HTTPException(status_code=400, detail="Not an Excel data source")
+    try:
+        status = await preload_excel_source(source_id, force=force)
+    except Exception as exc:
+        status = get_load_status(source_id)
+        raise HTTPException(status_code=500, detail=status.get("error") or str(exc)) from exc
+
+    if conversation_id:
+        conv = await db.get(Conversation, conversation_id)
+        if conv and conv.owner_id == user.id and conv.is_active:
+            meta = dict(conv.metadata_ or {})
+            meta["excel_load"] = status
+            conv.metadata_ = meta
+            await db.commit()
+
+    return ExcelLoadStatusOut(**status)
+
+
+@router.get("/{source_id}/excel/load-status", response_model=ExcelLoadStatusOut)
+async def excel_load_status(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not is_excel_driver(str(source.driver)):
+        raise HTTPException(status_code=400, detail="Not an Excel data source")
+    return ExcelLoadStatusOut(**get_load_status(source_id))
+
+
+def _parse_job_out(job) -> ExcelParseJobOut:
+    return ExcelParseJobOut(
+        id=job.id,
+        template_id=job.template_id,
+        data_source_id=job.data_source_id,
+        folder_path=job.folder_path,
+        recursive=bool(job.recursive),
+        status=job.status,
+        progress=job.progress or 0,
+        row_count=job.row_count or 0,
+        success_count=job.success_count or 0,
+        failed_count=job.failed_count or 0,
+        output_file=job.output_file,
+        columns=job.columns or [],
+        error_message=job.error_message,
+        error_logs=job.error_logs or [],
+        result_preview=job.result_preview or [],
+        created_at=job.created_at,
+        completed_at=job.completed_at,
+    )
+
+
+@router.get("/{source_id}/excel-template/status", response_model=ExcelTemplateStatusOut)
+async def excel_template_status(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not is_excel_template_driver(str(source.driver)):
+        raise HTTPException(status_code=400, detail="Not an excel_template data source")
+    meta = source.metadata_ or {}
+    return ExcelTemplateStatusOut(
+        parse_status=str(meta.get("parse_status") or "idle"),
+        template_id=meta.get("template_id") or None,
+        last_job_id=meta.get("last_job_id") or None,
+        last_output_file=meta.get("last_output_file") or None,
+        input_file_count=len(list_excel_input_files(source.id)),
+        output_file_count=len(list_excel_files(source.id)),
+    )
+
+
+@router.get("/{source_id}/excel-template/input/files", response_model=ExcelFileListOut)
+async def list_excel_template_input_files(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not is_excel_template_driver(str(source.driver)):
+        raise HTTPException(status_code=400, detail="Not an excel_template data source")
+    return ExcelFileListOut(items=[ExcelFileOut(**item) for item in list_excel_input_files(source.id)])
+
+
+@router.post("/{source_id}/excel-template/parse", response_model=ExcelParseJobOut, status_code=status.HTTP_201_CREATED)
+async def start_excel_template_parse(
+    source_id: str,
+    payload: ExcelTemplateParseIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not is_excel_template_driver(str(source.driver)):
+        raise HTTPException(status_code=400, detail="Not an excel_template data source")
+    meta = source.metadata_ or {}
+    template_id = (payload.template_id or meta.get("template_id") or "").strip()
+    if not template_id:
+        raise HTTPException(status_code=400, detail="template_id required")
+    if payload.template_id and payload.template_id != meta.get("template_id"):
+        meta["template_id"] = template_id
+        source.metadata_ = meta
+        await db.flush()
+    try:
+        job = await create_parse_job(
+            db,
+            owner_id=user.id,
+            template_id=template_id,
+            data_source_id=source.id,
+            folder_path=payload.folder_path,
+            recursive=payload.recursive,
+            output_filename=payload.output_filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _parse_job_out(job)
 
 
 @router.put("/{source_id}/semantic-model", response_model=DataSourceOut)

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, FileSpreadsheet, MessageSquare, Play, RefreshCw, Save, Trash2, Upload, Wand2 } from "lucide-react";
 import toast from "react-hot-toast";
-import { dataAskApi, dataSourcesApi } from "@/lib/api";
+import { dataAskApi, dataSourcesApi, excelParserApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { useClientAuth } from "@/hooks/useClientAuth";
 import { SegmentedControl } from "@/components/SegmentedControl";
@@ -86,7 +86,32 @@ export default function DataSourceDetailPage() {
   const [reindexing, setReindexing] = useState(false);
   const [excelFiles, setExcelFiles] = useState<{ name: string; size_bytes: number }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [excelPreload, setExcelPreload] = useState<{
+    status?: string;
+    sheet_count?: number;
+    total_rows?: number;
+    error?: string | null;
+  } | null>(null);
+  const [parsingTemplate, setParsingTemplate] = useState(false);
+  const [templateStatus, setTemplateStatus] = useState<{
+    parse_status?: string;
+    template_id?: string | null;
+    input_file_count?: number;
+    output_file_count?: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadTemplateStatus = useCallback(() => {
+    if (!id) return;
+    dataSourcesApi.excelTemplateStatus(id).then(({ data }) => {
+      setTemplateStatus(data as {
+        parse_status?: string;
+        template_id?: string | null;
+        input_file_count?: number;
+        output_file_count?: number;
+      });
+    }).catch(() => {});
+  }, [id]);
 
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
 
@@ -121,9 +146,39 @@ export default function DataSourceDetailPage() {
     }).catch(() => {});
   }, [id]);
 
+  const refreshExcelPreload = useCallback(async () => {
+    if (!id || !ds?.driver || !["excel_folder", "excel_template"].includes(ds.driver)) return;
+    if (excelFiles.length === 0) {
+      setExcelPreload(null);
+      return;
+    }
+    setExcelPreload((prev) => prev?.status === "ready" ? prev : { status: "loading" });
+    try {
+      const { data } = await dataSourcesApi.preloadExcel(id);
+      setExcelPreload(data);
+    } catch {
+      try {
+        const { data } = await dataSourcesApi.excelLoadStatus(id);
+        setExcelPreload(data);
+      } catch {
+        setExcelPreload({ status: "error", error: t("Excel 加载失败", "Excel preload failed") });
+      }
+    }
+  }, [id, ds?.driver, excelFiles.length, lang]);
+
   useEffect(() => {
     if (ready) load();
   }, [ready, load]);
+
+  useEffect(() => {
+    if (ds?.driver && ["excel_folder", "excel_template"].includes(ds.driver) && excelFiles.length > 0) {
+      void refreshExcelPreload();
+    }
+  }, [ds?.driver, excelFiles.length, refreshExcelPreload]);
+
+  useEffect(() => {
+    if (ds?.driver === "excel_template") loadTemplateStatus();
+  }, [ds?.driver, loadTemplateStatus]);
 
   useEffect(() => {
     if (tab === "audit") loadAudit();
@@ -223,6 +278,13 @@ export default function DataSourceDetailPage() {
     try {
       await dataSourcesApi.uploadExcel(id, Array.from(fileList));
       toast.success(t("上传成功", "Uploaded"));
+      setExcelPreload({ status: "loading" });
+      try {
+        const { data } = await dataSourcesApi.preloadExcel(id);
+        setExcelPreload(data);
+      } catch {
+        setExcelPreload({ status: "error", error: t("Excel 加载失败", "Excel preload failed") });
+      }
       loadExcelFiles();
       load();
     } catch (e: unknown) {
@@ -243,6 +305,13 @@ export default function DataSourceDetailPage() {
         tables: selected.map((table_name) => ({ table_name, role: "data", object_type: "table" })),
       });
       toast.success(t("已更新问数文件", "Analysis files updated"));
+      setExcelPreload({ status: "loading" });
+      try {
+        const { data } = await dataSourcesApi.preloadExcel(id);
+        setExcelPreload(data);
+      } catch {
+        setExcelPreload({ status: "error", error: t("Excel 加载失败", "Excel preload failed") });
+      }
       load();
     } catch (e: unknown) {
       toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("保存失败", "Save failed")));
@@ -262,14 +331,49 @@ export default function DataSourceDetailPage() {
   const dataTables = ds.tables.filter((x) => x.role === "data");
   const permTable = ds.tables.find((x) => x.role === "permission");
   const isExcel = ds.driver === "excel_folder";
+  const isExcelTemplate = ds.driver === "excel_template";
+  const isExcelLike = isExcel || isExcelTemplate;
+  const excelAskBlocked = isExcelLike && excelFiles.length > 0 && excelPreload?.status !== "ready";
+  const templateAskBlocked = isExcelTemplate && templateStatus?.parse_status !== "ready";
+  const askBlocked = excelAskBlocked || templateAskBlocked;
   const tabs: { value: Tab; label: string }[] = [
     { value: "overview", label: t("概览", "Overview") },
-    ...(isExcel ? [{ value: "files" as Tab, label: t("Excel 文件", "Excel files") }] : []),
+    ...(isExcelLike ? [{ value: "files" as Tab, label: t("Excel 文件", "Excel files") }] : []),
     { value: "ask", label: t("问数", "Ask") },
     { value: "semantic", label: t("语义模型", "Semantic") },
     { value: "audit", label: t("审计", "Audit") },
-    ...(isExcel ? [] : [{ value: "drift" as Tab, label: t("Schema", "Schema") }]),
+    ...(isExcelLike ? [] : [{ value: "drift" as Tab, label: t("Schema", "Schema") }]),
   ];
+
+  const runTemplateParse = async () => {
+    if (!id) return;
+    setParsingTemplate(true);
+    try {
+      const { data: jobData } = await dataSourcesApi.parseExcelTemplate(id, {
+        template_id: templateStatus?.template_id || undefined,
+        recursive: true,
+      });
+      const jobId = (jobData as { id: string }).id;
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const { data: status } = await excelParserApi.getJob(jobId);
+        const st = status as { status: string; error_message?: string };
+        if (st.status === "completed") {
+          toast.success(t("批量解析完成", "Batch parse completed"));
+          loadExcelFiles();
+          loadTemplateStatus();
+          load();
+          return;
+        }
+        if (st.status === "failed") throw new Error(st.error_message || "failed");
+      }
+      toast.error(t("解析超时", "Parse timeout"));
+    } catch (e: unknown) {
+      toast.error(String((e as Error)?.message || t("解析失败", "Parse failed")));
+    } finally {
+      setParsingTemplate(false);
+    }
+  };
 
   return (
     <div className="mx-auto min-w-0 max-w-6xl p-4 sm:p-6 space-y-6">
@@ -280,9 +384,11 @@ export default function DataSourceDetailPage() {
           </Link>
           <h1 className="text-2xl font-semibold theme-text">{ds.name}</h1>
           <p className="text-sm theme-muted mt-1">
-            {isExcel
-              ? t("临时分析 · 执行完成后自动释放 Excel，不占服务器空间", "Ephemeral · Excel released after each run")
-              : `${ds.driver} · ${ds.host} / ${ds.database}`}
+            {isExcelTemplate
+              ? t("模板批量解析 · 上传原始 Excel → 解析宽表 → 问数", "Template parse · upload → wide table → Q&A")
+              : isExcel
+                ? t("临时分析 · 执行完成后自动释放 Excel，不占服务器空间", "Ephemeral · Excel released after each run")
+                : `${ds.driver} · ${ds.host} / ${ds.database}`}
           </p>
         </div>
         <button onClick={onDelete} className="btn-secondary text-red-500 flex items-center gap-1 px-3 py-2 text-sm">
@@ -296,7 +402,7 @@ export default function DataSourceDetailPage() {
         <>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="theme-surface rounded-xl border theme-border p-4">
-              <h2 className="font-medium mb-2">{isExcel ? t("已选 Excel", "Selected Excel files") : t("数据表", "Data tables")}</h2>
+              <h2 className="font-medium mb-2">{isExcelLike ? t("已选 Excel", "Selected Excel files") : t("数据表", "Data tables")}</h2>
               <ul className="text-sm space-y-1">
                 {dataTables.map((tbl) => (
                   <li key={tbl.table_name}>
@@ -338,22 +444,62 @@ export default function DataSourceDetailPage() {
         </>
       )}
 
-      {tab === "files" && isExcel && (
-        <ExcelFilesTab
-          lang={lang}
-          files={excelFiles}
-          selected={dataTables.map((x) => x.table_name)}
-          uploading={uploading}
-          fileInputRef={fileInputRef}
-          onUpload={onUploadExcel}
-          onSaveSelection={onSaveExcelSelection}
-          onRefresh={loadExcelFiles}
-        />
+      {tab === "files" && isExcelLike && (
+        <>
+          {isExcelTemplate && (
+            <div className="theme-surface rounded-xl border theme-border p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm theme-muted">
+                <p>{t("解析状态", "Parse status")}: <span className="font-medium theme-text">{templateStatus?.parse_status || "idle"}</span></p>
+                <p className="text-xs mt-1">
+                  {t("原始文件", "Raw")}: {templateStatus?.input_file_count ?? 0} · {t("宽表", "Output")}: {templateStatus?.output_file_count ?? 0}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={parsingTemplate}
+                onClick={runTemplateParse}
+                className="btn-primary px-3 py-1.5 text-sm"
+              >
+                {parsingTemplate ? t("解析中…", "Parsing…") : t("批量解析", "Batch parse")}
+              </button>
+            </div>
+          )}
+          <ExcelFilesTab
+            lang={lang}
+            files={excelFiles}
+            selected={dataTables.map((x) => x.table_name)}
+            uploading={uploading}
+            fileInputRef={fileInputRef}
+            onUpload={onUploadExcel}
+            onSaveSelection={onSaveExcelSelection}
+            onRefresh={loadExcelFiles}
+            isTemplate={isExcelTemplate}
+          />
+        </>
       )}
 
       {tab === "ask" && (
         <div className="min-w-0 theme-surface rounded-xl border theme-border p-4 space-y-3">
           <h2 className="font-medium">{t("即时问数", "Quick ask")}</h2>
+          {(isExcelLike && excelFiles.length > 0) && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              {excelPreload?.status === "ready" ? (
+                <span>
+                  {t("Excel 已就绪", "Excel ready")} · {excelPreload.sheet_count ?? 0}{" "}
+                  {t("表", "sheets")} · {excelPreload.total_rows ?? 0} {t("行", "rows")}
+                </span>
+              ) : excelPreload?.status === "error" ? (
+                <span>{excelPreload.error || t("Excel 加载失败", "Excel preload failed")}</span>
+              ) : (
+                <span>{t("正在加载 Excel 全量数据，请稍候再提问…", "Loading full Excel data — wait before asking…")}</span>
+              )}
+            </div>
+          )}
+          {isExcelTemplate && templateAskBlocked && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              {t("请先上传原始 Excel 并执行批量解析，再提问。", "Upload raw Excel and run batch parse before asking.")}
+            </div>
+          )}
           {isExcel && (
             <p className="text-xs text-amber-600">
               {t(
@@ -366,13 +512,20 @@ export default function DataSourceDetailPage() {
             className="input w-full"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={isExcel ? t("例如：对各 Excel 销量做聚类分析", "e.g. cluster sales across Excel files") : t("输入分析问题…", "Ask a question…")}
+            disabled={askBlocked}
+            placeholder={
+              askBlocked
+                ? t("正在加载 Excel 数据…", "Loading Excel data…")
+                : isExcel
+                  ? t("例如：对各 Excel 销量做聚类分析", "e.g. cluster sales across Excel files")
+                  : t("输入分析问题…", "Ask a question…")
+            }
           />
           <div className="flex flex-wrap gap-2">
-            <button disabled={asking} onClick={onGenerateSql} className="btn-secondary inline-flex items-center gap-1 px-3 py-2 text-sm">
+            <button disabled={asking || askBlocked} onClick={onGenerateSql} className="btn-secondary inline-flex items-center gap-1 px-3 py-2 text-sm">
               <Wand2 className="h-4 w-4" />{asking ? "…" : isExcel ? t("生成 Python", "Generate Python") : t("生成 SQL", "Generate SQL")}
             </button>
-            <button disabled={asking || !editSql.trim()} onClick={onRunSql} className="btn-primary inline-flex items-center gap-1 px-3 py-2 text-sm">
+            <button disabled={asking || askBlocked || !editSql.trim()} onClick={onRunSql} className="btn-primary inline-flex items-center gap-1 px-3 py-2 text-sm">
               <Play className="h-4 w-4" />{asking ? "…" : t("执行", "Run")}
             </button>
             <button disabled={!editSql.trim()} onClick={onSaveGolden} className="btn-secondary inline-flex items-center gap-1 px-3 py-2 text-sm">
@@ -385,6 +538,7 @@ export default function DataSourceDetailPage() {
               className="input mt-1 w-full min-h-[320px] font-mono text-sm leading-relaxed"
               value={editSql}
               onChange={(e) => setEditSql(e.target.value)}
+              readOnly={askBlocked}
               placeholder={isExcel ? t("先生成 Python 或直接编写", "Generate or write Python") : t("先生成 SQL 或直接编写", "Generate or write SQL")}
             />
           </label>
@@ -450,7 +604,7 @@ export default function DataSourceDetailPage() {
         </div>
       )}
 
-      {tab === "drift" && !isExcel && (
+      {tab === "drift" && !isExcelLike && (
         <div className="theme-surface rounded-xl border theme-border p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">{t("Schema 漂移检测", "Schema drift")}</h2>
@@ -493,6 +647,7 @@ function ExcelFilesTab({
   onUpload,
   onSaveSelection,
   onRefresh,
+  isTemplate = false,
 }: {
   lang: string;
   files: { name: string; size_bytes: number }[];
@@ -502,6 +657,7 @@ function ExcelFilesTab({
   onUpload: (files: FileList | null) => void;
   onSaveSelection: (names: string[]) => void;
   onRefresh: () => void;
+  isTemplate?: boolean;
 }) {
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
   const [picked, setPicked] = useState<string[]>(selected);
@@ -517,7 +673,7 @@ function ExcelFilesTab({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="font-medium flex items-center gap-2">
           <FileSpreadsheet className="h-5 w-5 text-green-600" />
-          {t("Excel 文件夹", "Excel folder")}
+          {isTemplate ? t("Excel 模板 · 宽表输出", "Excel template · wide table output") : t("Excel 文件夹", "Excel folder")}
         </h2>
         <div className="flex gap-2">
           <button type="button" onClick={onRefresh} className="btn-secondary text-xs px-2 py-1 inline-flex items-center gap-1">

@@ -283,6 +283,10 @@ body {
 .chat-page {
   height: 100%;
 }
+.chat-input-textarea {
+  min-height: 2.5rem;
+  max-height: min(12.5rem, 40vh);
+}
 .chat-mobile-backdrop {
   position: fixed;
   inset: 0;

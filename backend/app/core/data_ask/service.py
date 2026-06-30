@@ -19,7 +19,13 @@ from app.core.data_ask.govern.permission import (
     permission_config_from_rules,
 )
 from app.core.data_ask.govern.sql_guard import validate_select_sql
-from app.core.data_ask.analysis.python_runner import load_frames, run_python_analysis, validate_python_code
+from app.core.data_ask.analysis.python_runner import run_python_analysis, validate_python_code
+from app.core.data_ask.excel.session_cache import (
+    build_provenance,
+    ensure_ready,
+    get_all_frames,
+    get_all_tables,
+)
 from app.core.data_ask.excel.retention import release_ephemeral_excel_workspace
 from app.core.data_ask.intelligence.nlpython import analyze_python_results, generate_python, repair_python
 from app.core.data_ask.intelligence.nl2sql import analyze_results, generate_sql, repair_sql
@@ -116,7 +122,7 @@ async def run_data_ask(
     source = await db.get(DataSource, data_source_id)
     if not source:
         raise ValueError("Data source not found")
-    if str(source.driver) == "excel_folder":
+    if str(source.driver) in ("excel_folder", "excel_template"):
         return await run_excel_data_ask(
             db,
             source=source,
@@ -292,14 +298,15 @@ async def run_excel_data_ask(
     if not source.chat_enabled and execute:
         raise ValueError("Chat Q&A is disabled for this data source")
 
-    _, all_tables, semantic, _, _ = await load_source_context(db, source.id)
+    ensure_ready(source.id)
+    all_tables = get_all_tables(source.id)
     if not all_tables:
         raise ValueError("No Excel files selected for analysis")
 
-    ranked = rank_tables(question, all_tables, top_k=SCHEMA_TOP_K)
-    filenames = [t["table_name"] for t in ranked]
+    ranked = rank_tables(question, all_tables, top_k=len(all_tables))
     agent_provider, agent_model = await _resolve_llm(db, source, llm_provider, llm_model)
     memory_examples = await retrieve_similar_queries(db, data_source_id=source.id, question=question)
+    _, _, semantic, _, _ = await load_source_context(db, source.id)
 
     if python_override:
         code, explanation = python_override.strip(), "User provided Python"
@@ -344,7 +351,8 @@ async def run_excel_data_ask(
             "analysis_mode": "python",
         }
 
-    frames = load_frames(source.id, filenames)
+    frames = get_all_frames(source.id)
+    provenance = build_provenance(list(frames.keys()), frames)
     last_error = ""
     current_code = code
     qr: dict[str, Any] | None = None
@@ -420,6 +428,7 @@ async def run_excel_data_ask(
         "chart": chart,
         "analysis_mode": "python",
         "files_released": files_released,
+        "provenance": provenance,
     }
 
 

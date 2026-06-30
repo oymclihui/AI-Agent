@@ -46,6 +46,10 @@ class ConversationCreate(BaseModel):
     data_source_id: Optional[str] = None
 
 
+class ConversationUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=128)
+
+
 class ConversationContextUpdate(BaseModel):
     agent_id: Optional[str] = None
     knowledge_base_ids: Optional[list[str]] = None
@@ -74,6 +78,8 @@ class ConversationResponse(BaseModel):
     response_style: str = "balanced"
     chat_mode: str = "single"
     group_config: Optional[dict[str, Any]] = None
+    data_source_id: Optional[str] = None
+    excel_load: Optional[dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -105,6 +111,8 @@ class ConversationResponse(BaseModel):
             response_style=str(meta.get("response_style") or "balanced"),
             chat_mode=str(meta.get("chat_mode") or "single"),
             group_config=meta.get("group"),
+            data_source_id=meta.get("data_source_id"),
+            excel_load=meta.get("excel_load"),
             created_at=conv.created_at,
             updated_at=conv.updated_at,
         )

@@ -21,6 +21,20 @@ def excel_folder(source_id: str) -> Path:
     return folder
 
 
+def excel_input_folder(source_id: str) -> Path:
+    folder = excel_folder(source_id) / "input"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def is_excel_driver(driver: str) -> bool:
+    return str(driver) in ("excel_folder", "excel_template")
+
+
+def is_excel_template_driver(driver: str) -> bool:
+    return str(driver) == "excel_template"
+
+
 def ensure_excel_folder(source_id: str) -> Path:
     return excel_folder(source_id)
 
@@ -39,6 +53,25 @@ def resolve_excel_file(source_id: str, filename: str) -> Path:
 
 def list_excel_files(source_id: str) -> list[dict]:
     folder = excel_folder(source_id)
+    items: list[dict] = []
+    for path in sorted(folder.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in EXCEL_EXTENSIONS:
+            continue
+        stat = path.stat()
+        items.append(
+            {
+                "name": path.name,
+                "size_bytes": stat.st_size,
+                "modified_at": stat.st_mtime,
+            }
+        )
+    return items
+
+
+def list_excel_input_files(source_id: str) -> list[dict]:
+    folder = excel_input_folder(source_id)
     items: list[dict] = []
     for path in sorted(folder.iterdir()):
         if not path.is_file():

@@ -28,6 +28,7 @@ const DRIVER_LABEL: Record<string, string> = {
   hive: "Hive / Kylin",
   hana: "SAP HANA",
   excel_folder: "Excel 文件夹",
+  excel_template: "Excel 模板批量解析",
 };
 
 export default function DataSourcesPage() {

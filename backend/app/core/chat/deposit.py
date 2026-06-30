@@ -265,13 +265,13 @@ async def analyze_conversation_deposit(
     lang: str = "zh",
 ) -> dict[str, Any]:
     """Analyze transcript and store a deposit draft on the conversation metadata."""
-    from app.models_hub.router import ModelRouter
+    from app.core.chat.llm_context import get_llm_for_conversation
 
     messages, transcript = await _load_transcript(db, conv.id)
     if len(messages) < 2:
         return {"worth_deposit": False, "suggestions": [], "draft_id": None, "draft": None}
 
-    llm = await ModelRouter.get_llm(db=db, user_id=user_id, temperature=0.2)
+    llm = await get_llm_for_conversation(db, conv, user_id, temperature=0.2)
     lang_hint = "中文" if lang == "zh" else "English"
     system = (
         "你是企业 AI 上岗顾问。根据对话判断用户是否完成了可复用的工作（SOP、知识、岗位、定时任务）。"

@@ -497,6 +497,44 @@ async def seed_default_models(session) -> None:
     await session.commit()
 
 
+async def seed_default_excel_parse_template(session) -> None:
+    from sqlalchemy import select
+    from app.db.models import ExcelParseTemplate
+
+    existing = (
+        await session.execute(
+            select(ExcelParseTemplate).where(ExcelParseTemplate.id == "bs_template_v1").limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return
+
+    session.add(
+        ExcelParseTemplate(
+            id="bs_template_v1",
+            owner_id=None,
+            name="门店销售额",
+            type="XS",
+            is_global=True,
+            description="Default sample template migrated from excel_parser",
+            sheet_mappings=[
+                {
+                    "sheet_name": "Sheet1",
+                    "field_mapping": [
+                        {"field_name": "门店名称", "cell_ref": "B2"},
+                        {"field_name": "销售", "cell_ref": "C2"},
+                    ],
+                },
+                {
+                    "sheet_name": "Sheet2",
+                    "field_mapping": {"客单价": "B2"},
+                },
+            ],
+        )
+    )
+    await session.commit()
+
+
 async def seed_template_agents(session) -> None:
     from sqlalchemy import select
     from app.db.models import Agent, AgentStatus, AgentVisibility

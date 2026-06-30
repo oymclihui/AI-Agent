@@ -34,4 +34,7 @@ async def format_data_ask_for_chat(result: dict, user: User | None) -> str:
         lines.append("\n\n<details><summary>SQL</summary>\n\n```sql\n" + result["sql"] + "\n```\n</details>")
     if result.get("row_count") is not None:
         lines.append(f"\n\n*共 {result['row_count']} 行" + ("（已截断）" if result.get("truncated") else "") + "*")
+    provenance = result.get("provenance")
+    if provenance:
+        lines.append("\n\n---\n**数据来源**\n" + "\n".join(f"- {p}" for p in provenance))
     return "\n".join(lines)

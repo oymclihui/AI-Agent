@@ -1,7 +1,10 @@
 """Export a conversation to Skill or Knowledge Base."""
 from __future__ import annotations
 
+import io
 import re
+import zipfile
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -194,6 +197,56 @@ async def materialize_knowledge_from_spec(
     )
 
 
+def export_conversation_md(
+    title: str,
+    messages: list[Message],
+    *,
+    lang: str = "zh",
+) -> str:
+    heading = title or ("对话导出" if lang == "zh" else "Chat Export")
+    body = _format_transcript(messages)
+    return f"# {heading}\n\n{body}".strip() + "\n"
+
+
+async def export_conversation_document(
+    db: AsyncSession,
+    conv: Conversation,
+    user_id: str,
+    *,
+    fmt: str = "md",
+    lang: str = "zh",
+    include_attachments: bool = False,
+) -> tuple[bytes, str, str]:
+    from app.config import settings
+    from app.core.doc_export import FORMAT_MEDIA, convert_markdown, normalize_format, replace_extension
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conv.id)
+        .order_by(Message.created_at.asc())
+    )
+    messages = result.scalars().all()
+    md = export_conversation_md(conv.title or "", messages, lang=lang)
+    normalized = normalize_format(fmt)
+    title = conv.title or ("对话" if lang == "zh" else "Chat")
+    data = convert_markdown(md, normalized, title=title)
+    filename = replace_extension(f"chat-{conv.id[:8]}.md", normalized)
+
+    if include_attachments:
+        upload_dir = Path(settings.LOCAL_UPLOADS_DIR) / "chat" / conv.id
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(filename, data)
+            if upload_dir.is_dir():
+                for path in upload_dir.rglob("*"):
+                    if path.is_file():
+                        arc = f"attachments/{path.relative_to(upload_dir).as_posix()}"
+                        zf.write(path, arcname=arc)
+        return buf.getvalue(), replace_extension(f"chat-{conv.id[:8]}.zip", "zip"), "application/zip"
+
+    return data, filename, FORMAT_MEDIA[normalized]
+
+
 async def export_conversation_to_skill(
     db: AsyncSession,
     conv: Conversation,
@@ -201,7 +254,7 @@ async def export_conversation_to_skill(
     *,
     title: Optional[str] = None,
 ) -> Skill:
-    from app.models_hub.router import ModelRouter
+    from app.core.chat.llm_context import get_llm_for_conversation
 
     result = await db.execute(
         select(Message)
@@ -211,7 +264,7 @@ async def export_conversation_to_skill(
     messages = result.scalars().all()
     transcript = _format_transcript(messages)
 
-    llm = await ModelRouter.get_llm(db=db, user_id=user_id, temperature=0.3)
+    llm = await get_llm_for_conversation(db, conv, user_id, temperature=0.3)
     skill_title = title or conv.title or "对话技能"
     prompt = (
         "将以下对话提炼为可复用的 Agent Skill（SOP）。输出 Markdown，包含：\n"
@@ -252,7 +305,7 @@ async def export_conversation_to_knowledge(
     kb_id: Optional[str] = None,
     kb_name: Optional[str] = None,
 ) -> tuple[KnowledgeBase, Document]:
-    from app.models_hub.router import ModelRouter
+    from app.core.chat.llm_context import get_llm_for_conversation
     from app.config import settings
 
     result = await db.execute(
@@ -263,7 +316,7 @@ async def export_conversation_to_knowledge(
     messages = result.scalars().all()
     transcript = _format_transcript(messages)
 
-    llm = await ModelRouter.get_llm(db=db, user_id=user_id, temperature=0.3)
+    llm = await get_llm_for_conversation(db, conv, user_id, temperature=0.3)
     response = await llm.ainvoke([
         SystemMessage(content="将对话整理为结构化 Markdown 知识文档，含摘要、要点、结论与可引用细节。"),
         HumanMessage(content=transcript[:120000]),

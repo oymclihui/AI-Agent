@@ -205,6 +205,8 @@ export const chatApi = {
   listConversations: () => api.get("/chat/conversations"),
   getConversation: (id: string) => api.get(`/chat/conversations/${id}`),
   updateContext: (id: string, data: object) => api.patch(`/chat/conversations/${id}/context`, data),
+  renameConversation: (id: string, title: string) =>
+    api.patch(`/chat/conversations/${id}`, { title }),
   deleteConversation: (id: string) => api.delete(`/chat/conversations/${id}`),
   deleteAllConversations: () => api.delete("/chat/conversations"),
   getMessages: (id: string) => api.get(`/chat/conversations/${id}/messages`),
@@ -226,6 +228,31 @@ export const chatApi = {
     const a = document.createElement("a");
     a.href = url;
     a.download = `group-chat-${id.slice(0, 8)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  downloadConversation: async (
+    id: string,
+    opts: { format?: "md" | "docx"; lang?: string; attachments?: boolean } = {},
+  ) => {
+    const token = getAuthToken();
+    const params = new URLSearchParams({
+      format: opts.format || "md",
+      lang: opts.lang || "zh",
+    });
+    if (opts.attachments) params.set("attachments", "true");
+    const res = await fetch(`/api/v1/chat/conversations/${id}/export?${params}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const match = cd.match(/filename="([^"]+)"/);
+    const filename = match?.[1] || `chat-${id.slice(0, 8)}.${opts.format || "md"}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
   },
@@ -475,6 +502,25 @@ export const setupApi = {
 
 export const SETUP_TOKEN_STORAGE_KEY = "aiagnet_setup_token";
 
+export const excelParserApi = {
+  listTemplates: () => api.get("/excel-parser/templates"),
+  getTemplate: (id: string) => api.get(`/excel-parser/templates/${id}`),
+  createTemplate: (data: object) => api.post("/excel-parser/templates", data),
+  updateTemplate: (id: string, data: object) => api.put(`/excel-parser/templates/${id}`, data),
+  deleteTemplate: (id: string) => api.delete(`/excel-parser/templates/${id}`),
+  startJob: (data: object) => api.post("/excel-parser/jobs", data),
+  getJob: (id: string) => api.get(`/excel-parser/jobs/${id}`),
+  getJobResult: (id: string) => api.get(`/excel-parser/jobs/${id}/result`),
+  listJobs: (params?: { data_source_id?: string; limit?: number }) =>
+    api.get("/excel-parser/jobs", { params }),
+  globalStats: () => api.get("/excel-parser/stats/global"),
+  exportJob: (jobId: string, format: "excel" | "csv", filename: string) =>
+    downloadBlob(`/excel-parser/jobs/${jobId}/export`, `${filename}.${format === "csv" ? "csv" : "xlsx"}`, {
+      format,
+      filename,
+    }),
+};
+
 export const dataSourcesApi = {
   list: () => api.get("/data-sources/"),
   create: (data: object) => api.post("/data-sources/", data),
@@ -505,6 +551,16 @@ export const dataSourcesApi = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
+  preloadExcel: (id: string, conversationId?: string, force = false) =>
+    api.post(`/data-sources/${id}/excel/preload`, {}, {
+      params: { conversation_id: conversationId, force },
+      timeout: 300000,
+    }),
+  excelLoadStatus: (id: string) => api.get(`/data-sources/${id}/excel/load-status`),
+  excelTemplateStatus: (id: string) => api.get(`/data-sources/${id}/excel-template/status`),
+  listExcelTemplateInput: (id: string) => api.get(`/data-sources/${id}/excel-template/input/files`),
+  parseExcelTemplate: (id: string, data: object) =>
+    api.post(`/data-sources/${id}/excel-template/parse`, data),
 };
 
 export const dataAskApi = {

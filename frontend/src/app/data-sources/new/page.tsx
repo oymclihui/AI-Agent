@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, RefreshCw, Search, Upload } from "lucide-react";
 import toast from "react-hot-toast";
-import { dataSourcesApi, formatApiError } from "@/lib/api";
+import { dataAskApi, dataSourcesApi, excelParserApi, formatApiError } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { SegmentedControl } from "@/components/SegmentedControl";
 
@@ -24,6 +24,7 @@ type RemoteListPayload = {
 
 const DRIVERS = [
   { value: "excel_folder", label: "Excel 文件夹" },
+  { value: "excel_template", label: "Excel 模板批量解析" },
   { value: "vastbase", label: "VastBase" },
   { value: "postgresql", label: "PostgreSQL" },
   { value: "mysql", label: "MySQL" },
@@ -64,6 +65,10 @@ export default function NewDataSourcePage() {
   const uploadRef = useRef<HTMLInputElement>(null);
 
   const isExcel = driver === "excel_folder";
+  const isExcelTemplate = driver === "excel_template";
+  const isExcelLike = isExcel || isExcelTemplate;
+  const [templateId, setTemplateId] = useState("bs_template_v1");
+  const [templates, setTemplates] = useState<{ id: string; name: string; type: string }[]>([]);
 
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
 
@@ -156,11 +161,11 @@ export default function NewDataSourcePage() {
   useEffect(() => {
     if (step !== 2 || !sourceId) return;
     const timer = window.setTimeout(() => {
-      const ot = isExcel || dataTypeFilter === "all" ? undefined : dataTypeFilter;
+      const ot = isExcelLike || dataTypeFilter === "all" ? undefined : dataTypeFilter;
       fetchRelations(tableSearch, ot, { silent: true });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [step, sourceId, tableSearch, dataTypeFilter, fetchRelations, isExcel]);
+  }, [step, sourceId, tableSearch, dataTypeFilter, fetchRelations, isExcelLike]);
 
   const refreshRemoteTables = async () => {
     const ot = dataTypeFilter === "all" ? undefined : dataTypeFilter;
@@ -169,7 +174,7 @@ export default function NewDataSourcePage() {
 
   const onDriverChange = (d: string) => {
     setDriver(d);
-    if (d === "excel_folder") return;
+    if (d === "excel_folder" || d === "excel_template") return;
     setPort(
       d === "mysql" ? 3306
         : d === "doris" ? 9030
@@ -185,26 +190,46 @@ export default function NewDataSourcePage() {
     );
   };
 
+  useEffect(() => {
+    if (driver !== "excel_template") return;
+    excelParserApi.listTemplates().then(({ data }) => {
+      const items = (data as { items?: { id: string; name: string; type: string }[] }).items || [];
+      setTemplates(items);
+      if (items.length && !items.some((x) => x.id === templateId)) {
+        setTemplateId(items[0].id);
+      }
+    }).catch(() => {});
+  }, [driver, templateId]);
+
   const createExcelSource = async () => {
     if (!name.trim()) {
       toast.error(t("请填写名称", "Name required"));
+      return;
+    }
+    if (isExcelTemplate && !templateId) {
+      toast.error(t("请选择解析模板", "Select a parse template"));
       return;
     }
     setBusy(true);
     try {
       const created = await dataSourcesApi.create({
         name: name.trim(),
-        driver: "excel_folder",
+        driver: isExcelTemplate ? "excel_template" : "excel_folder",
         host: "local",
         port: 0,
         username: "-",
         password: "",
         database: name.trim(),
+        template_id: isExcelTemplate ? templateId : undefined,
       });
       const id = (created.data as { id: string }).id;
       setSourceId(id);
       setStep(2);
-      toast.success(t("Excel 文件夹已创建，请上传文件", "Excel folder created — upload files"));
+      toast.success(
+        isExcelTemplate
+          ? t("模板数据源已创建，请上传原始 Excel 并执行解析", "Template source created — upload raw Excel and parse")
+          : t("Excel 文件夹已创建，请上传文件", "Excel folder created — upload files"),
+      );
     } catch (e: unknown) {
       toast.error(formatApiError(e, t("创建失败", "Create failed")));
     } finally {
@@ -213,7 +238,7 @@ export default function NewDataSourcePage() {
   };
 
   const testAndCreate = async () => {
-    if (isExcel) {
+    if (isExcelLike) {
       await createExcelSource();
       return;
     }
@@ -256,7 +281,7 @@ export default function NewDataSourcePage() {
 
   const saveTables = async () => {
     if (!sourceId) return;
-    if (isExcel) {
+    if (isExcelLike) {
       if (selectedData.length < 1) {
         toast.error(t("请至少选择一个 Excel 文件", "Select at least one Excel file"));
         return;
@@ -273,7 +298,7 @@ export default function NewDataSourcePage() {
         role: "data",
         object_type: relationByName.get(table_name)?.object_type || "table",
       }));
-      if (!isExcel && permissionTable) {
+      if (!isExcelLike && permissionTable) {
         tables.push({ table_name: permissionTable, role: "permission", object_type: permissionObjectType });
       }
       await dataSourcesApi.setTables(sourceId, { tables });
@@ -282,6 +307,38 @@ export default function NewDataSourcePage() {
       toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("保存失败", "Save failed")));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const [parsingTemplate, setParsingTemplate] = useState(false);
+
+  const runTemplateParse = async () => {
+    if (!sourceId) return;
+    setParsingTemplate(true);
+    try {
+      const { data: jobData } = await dataSourcesApi.parseExcelTemplate(sourceId, {
+        template_id: templateId,
+        recursive: true,
+      });
+      const jobId = (jobData as { id: string }).id;
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const { data: status } = await excelParserApi.getJob(jobId);
+        const st = status as { status: string; error_message?: string };
+        if (st.status === "completed") {
+          toast.success(t("解析完成，请勾选宽表并继续", "Parse done — select wide table and continue"));
+          await fetchRelations("", undefined, { silent: true });
+          return;
+        }
+        if (st.status === "failed") {
+          throw new Error(st.error_message || t("解析失败", "Parse failed"));
+        }
+      }
+      toast.error(t("解析超时，请在数据源详情页查看", "Parse timeout — check data source detail"));
+    } catch (e: unknown) {
+      toast.error(String((e as Error)?.message || t("解析失败", "Parse failed")));
+    } finally {
+      setParsingTemplate(false);
     }
   };
 
@@ -352,6 +409,31 @@ export default function NewDataSourcePage() {
                 "Ephemeral Excel: upload → select → run analysis; files auto-deleted after success",
               )}
             </p>
+          ) : isExcelTemplate ? (
+            <>
+              <p className="text-sm text-amber-600">
+                {t(
+                  "模板批量解析：上传格式统一的原始 Excel → 按单元格映射生成大宽表 → 在对话中问数",
+                  "Template batch parse: upload raw Excel → extract cells → wide table → Q&A",
+                )}
+              </p>
+              <label className="block text-sm">{t("解析模板", "Parse template")}
+                <select className="input mt-1 w-full" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                  {templates.length === 0 ? (
+                    <option value="bs_template_v1">{t("默认模板 (bs_template_v1)", "Default (bs_template_v1)")}</option>
+                  ) : (
+                    templates.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>{tpl.name} ({tpl.type})</option>
+                    ))
+                  )}
+                </select>
+              </label>
+              <p className="mt-2 text-xs theme-muted">
+                <Link href="/excel-parser/config" className="text-blue-400 hover:underline">
+                  {t("管理 / 新建解析模板 →", "Manage or create templates →")}
+                </Link>
+              </p>
+            </>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
@@ -379,7 +461,7 @@ export default function NewDataSourcePage() {
           <button disabled={busy} onClick={testAndCreate} className="btn-primary w-full py-2">
             {busy
               ? t("处理中…", "Working…")
-              : isExcel
+              : isExcelLike
                 ? t("创建并继续", "Create & continue")
                 : t("测试并继续", "Test & continue")}
           </button>
@@ -388,24 +470,40 @@ export default function NewDataSourcePage() {
 
       {step === 2 && (
         <div className="space-y-4 theme-surface rounded-xl border theme-border p-5">
-          {isExcel && (
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm theme-muted">{t("上传 Excel 并勾选问数范围", "Upload Excel and select files for analysis")}</p>
-              <button
-                type="button"
-                disabled={uploading || busy}
-                onClick={() => uploadRef.current?.click()}
-                className="btn-primary inline-flex items-center gap-1 px-3 py-1.5 text-xs"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                {uploading ? t("上传中…", "Uploading…") : t("上传", "Upload")}
-              </button>
+          {isExcelLike && (
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-sm theme-muted">
+                {isExcelTemplate
+                  ? t("上传原始 Excel 到 input/，解析后勾选宽表", "Upload raw Excel, parse, then select wide table")
+                  : t("上传 Excel 并勾选问数范围", "Upload Excel and select files for analysis")}
+              </p>
+              <div className="flex items-center gap-2">
+                {isExcelTemplate && (
+                  <button
+                    type="button"
+                    disabled={parsingTemplate || busy}
+                    onClick={runTemplateParse}
+                    className="btn-secondary px-3 py-1.5 text-xs"
+                  >
+                    {parsingTemplate ? t("解析中…", "Parsing…") : t("批量解析", "Batch parse")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={uploading || busy}
+                  onClick={() => uploadRef.current?.click()}
+                  className="btn-primary inline-flex items-center gap-1 px-3 py-1.5 text-xs"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {uploading ? t("上传中…", "Uploading…") : t("上传", "Upload")}
+                </button>
+              </div>
               <input ref={uploadRef} type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={(e) => onUploadExcel(e.target.files)} />
             </div>
           )}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="text-sm theme-muted">
-              {isExcel ? t("Excel 文件（可多选）", "Excel files (multi)") : t("数据表/视图（可多选）", "Data tables/views (multi)")}
+              {isExcelLike ? t("Excel 文件（可多选）", "Excel files (multi)") : t("数据表/视图（可多选）", "Data tables/views (multi)")}
             </p>
             <span className="text-xs theme-muted">
               {t("已选", "Selected")} {selectedData.length}
@@ -427,10 +525,10 @@ export default function NewDataSourcePage() {
               className="input w-full pl-9"
               value={tableSearch}
               onChange={(e) => setTableSearch(e.target.value)}
-              placeholder={isExcel ? t("搜索文件名…", "Search file name…") : t("搜索表名或视图名…", "Search table or view name…")}
+              placeholder={isExcelLike ? t("搜索文件名…", "Search file name…") : t("搜索表名或视图名…", "Search table or view name…")}
             />
           </div>
-          {!isExcel && (
+          {!isExcelLike && (
           <SegmentedControl
             value={dataTypeFilter}
             onChange={(v) => setDataTypeFilter(v as "all" | "table" | "view")}
@@ -441,14 +539,14 @@ export default function NewDataSourcePage() {
             ]}
           />
           )}
-          {!isExcel && listTruncated && !tableSearch.trim() && (
+          {!isExcelLike && listTruncated && !tableSearch.trim() && (
             <p className="text-xs text-amber-600">
               {t("对象较多，仅显示前 120 条，请输入关键字搜索", "Many objects — showing first 120, use search")}
             </p>
           )}
           {remoteRelations.length === 0 ? (
             <p className="text-sm theme-muted py-4 text-center">
-              {isExcel ? t("请先上传 Excel 文件", "Upload Excel files first") : t("暂无对象，请点击刷新", "No objects — click Refresh")}
+              {isExcelLike ? t("请先上传 Excel 文件", "Upload Excel files first") : t("暂无对象，请点击刷新", "No objects — click Refresh")}
             </p>
           ) : filteredDataRelations.length === 0 ? (
             <p className="text-sm theme-muted py-4 text-center">
@@ -477,7 +575,7 @@ export default function NewDataSourcePage() {
             {t(`显示 ${filteredDataRelations.length} 条`, `Showing ${filteredDataRelations.length}`)}
             {tableSearch.trim() ? t("（已过滤）", " (filtered)") : ""}
           </p>
-          {!isExcel && (
+          {!isExcelLike && (
           <div className="space-y-2">
             <p className="text-sm">{t("权限来源（必选）", "Permission source (required)")}</p>
             <SegmentedControl

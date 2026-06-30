@@ -22,7 +22,7 @@
 | **Operations Screen** | 运营大屏 **`/screen`**：KPI、员工状态、任务趋势；**按组织 RBAC 过滤**；Dashboard API + SSE（需登录） |
 | **Organization RBAC** | **8 角色**、部门树、**接口人 / 高管秘书** 分层赋权；数字员工与大屏按 scope 隔离 |
 | **Workflows** | n8n 风格可视化设计器（675+ 节点库）、**自然语言生成工作流**、节点 AI 配置助手 |
-| **Chat** | 多轮对话、流式输出、**SessionContext**、**语音对话**（STT 自动发送 + TTS 朗读）、智能沉淀、附件与推荐问题 |
+| **Chat** | 多轮对话、流式输出、**SessionContext**、**响应风格**（精准 / 平衡 / 发散）、**群聊**（多智能体 Agent Room）、**语音对话**（STT 自动发送 + TTS 朗读）、智能沉淀、附件与推荐问题 |
 | **Knowledge** | 文档上传、向量检索（RAG，对话多库联合检索）；平台路线图自动种子与 **content_sha256 再索引** |
 | **Model Hub** | 模型配置 **增删改查**、设默认、**推理参数**（temperature / top_p / max_tokens 等）、OpenAI 兼容 Base URL |
 | **用户与权限** | 工号 / 邮箱登录、JWT、**组织 RBAC + 分层赋权**、**Excel 批量导入权限**、个人模型 API Key |
@@ -35,6 +35,75 @@
 ---
 
 ## 更新日志
+
+### 2026-06 — 对话响应风格（精准 / 平衡 / 发散）
+
+**一句话：** 对话页工具栏一键切换回答风格，覆盖 temperature / top_p / top_k，写入会话上下文并在全链路生效。
+
+| 能力 | 说明 |
+|------|------|
+| **三种预设** | **精准**（temperature 0.15）· **平衡**（0.65，默认）· **发散**（0.90） |
+| **持久化** | `PATCH /chat/conversations/{id}/context` 字段 `response_style` |
+| **生效范围** | 单聊流式 / 非流式、**群聊**编排、Agent 任务执行、问数 NL→SQL / NL→Python |
+| **问数锁定** | `chat_mode=data_ask` 时自动锁定为 **精准**，前端置灰并提示 |
+| **兼容旧数据** | 无 `response_style` 时按 Agent 原 temperature 推断，或默认平衡 |
+
+**前端入口：** 对话页 `/chat` 工具栏 **精准 / 平衡 / 发散** 分段控件（`SegmentedControl`）
+
+**涉及模块：** `backend/app/models_hub/response_style.py`、`models_hub/router.py`、`api/chat.py`、`core/dialogue/manager.py`、`core/group_chat/orchestrator.py`、`core/data_ask/intelligence/`、`frontend/src/app/chat/page.tsx`
+
+### 2026-06 — 模型切换修复与 Ollama 本地模型精简
+
+**一句话：** 修复 Ollama 模型切换 401；启动种子仅保留 GPU 本地模型，自动停用 `:cloud` 云端模型。
+
+| 能力 | 说明 |
+|------|------|
+| **Ollama 鉴权** | `ModelRouter` 为 Ollama 客户端注入 `Authorization: Bearer <api_key>`（若配置） |
+| **切换前探测** | 前端切换模型时调用连接测试，失败给出友好提示（`modelSwitchFailed`） |
+| **本地模型种子** | 仅 `qwen3.6:35b`（默认）、`gemma4:31b`；`OLLAMA_BASE_URL` 变更时自动同步 |
+| **停用 cloud** | 启动时 `init_db` 将 `:cloud` 模型设为非活跃；可用 `scripts/remove_cloud_models.py` 清理存量 |
+
+**涉及模块：** `backend/app/models_hub/router.py`、`db/init_db.py`、`models_hub/connectivity.py`、`api/chat.py`、`frontend/src/app/chat/page.tsx`
+
+### 2026-06 — VastBase 单位 Linux 安装包
+
+**一句话：** 面向单位内网 Ubuntu 的一键 Docker 安装包，预置 VastBase + Redis 连接，解压后 `install_unit.sh` 即可部署。
+
+| 能力 | 说明 |
+|------|------|
+| **打包脚本** | `scripts/package_vastbase_linux_release.ps1` → `release/aiagnet-vastbase-linux-*.tar.gz` |
+| **单位配置** | `deploy/office/.env.unit`（本地密钥，不提交 Git）→ 打入包内 `.env.unit` |
+| **一键安装** | 服务器 `sudo bash install_unit.sh`（生成 `.env`、`SETUP_TOKEN.admin.txt`、Docker 构建启动） |
+| **交互安装** | 亦可 `sudo bash install.sh` 逐步填写 VastBase / Redis |
+| **Redis 支持** | `install_linux.sh` / `install_unit.sh` 写入 `REDIS_URL`（密码 URL 编码） |
+
+**开发机打包：**
+
+```powershell
+cd E:\AIAGNET
+.\scripts\package_vastbase_linux_release.ps1
+```
+
+**服务器部署：**
+
+```bash
+tar -xzf aiagnet-vastbase-linux-*.tar.gz && cd aiagnet-vastbase-linux-*
+sudo bash install_unit.sh
+# 管理员打开 SETUP_TOKEN.admin.txt → /setup 建表 → 访问 http://<IP>:3000
+```
+
+详见 [docs/VastBase单位部署.md](docs/VastBase单位部署.md)。
+
+### 2026-06 — 群聊、界面主题与移动端体验
+
+| 能力 | 说明 |
+|------|------|
+| **Agent Room 群聊** | 对话页切换 **群聊** 模式，选 ≥2 个智能体；`GroupChatOrchestrator` 顺序发言 + 流式输出 |
+| **群聊模板** | `GET /chat/group/templates` 预置场景模板（中英 i18n） |
+| **浅色 / 深色主题** | 设置页切换；`ThemeProvider` + `data-theme` CSS 变量全局生效 |
+| **移动端侧边栏** | 窄屏折叠为图标栏，对话页布局与导航触控优化 |
+
+**涉及模块：** `backend/app/core/group_chat/`、`frontend/src/components/chat/GroupChatPanel.tsx`、`ThemeProvider.tsx`、`Sidebar.tsx`
 
 ### 2026-06 — 问数数据源（DataAsk）与 Excel 临时分析
 
@@ -256,7 +325,8 @@ python smoke_test.py                             # 全量冒烟
 
 - 产品名称统一为 **AI-AGENT**（界面、API 文档、配置项 `APP_NAME`）
 - **Windows 自包含交付包**：`scripts/package_win_release.ps1` → zip 内含 Python + Node + 依赖，双击 `AI-AGENT.bat` 启动（见 [Windows 交付包](#windows-交付包自包含)）
-- **远程 Linux 部署脚本**：`backend/scripts/remote_deploy.py`、`scripts/remote_docker_deploy.py`（Docker / systemd + Nginx）
+- **VastBase 单位 Linux 安装包**：`scripts/package_vastbase_linux_release.ps1` + `install_unit.sh`（见 [VastBase 单位 Linux 安装包](#vastbase-单位-linux-安装包)）
+- **远程 Linux 部署脚本**：`scripts/remote_docker_update.py`、`scripts/remote_docker_deploy.py`（Docker 重建 / systemd + Nginx）
 - 根目录 **`docker-compose.yml`** 初版（PG / Redis / Chroma / 前后端 / Nginx）；Ollama 需宿主机
 
 ### Model Hub 增强
@@ -264,11 +334,14 @@ python smoke_test.py                             # 全量冒烟
 - **完整 CRUD**：在 **`/models`** 页面或 API 创建 / 编辑 / 删除模型配置，支持设为默认
 - **推理参数**：temperature、top_p、top_k、max_tokens、frequency_penalty、presence_penalty、stop、seed、timeout 等（写入 `config.inference`）
 - **OpenAI 兼容接口**：provider 选 `openai`，填写 **Base URL** 即可对接内部网关或第三方 OpenAI 兼容服务
+- **Ollama 本地模型**：种子仅 `qwen3.6:35b`、`gemma4:31b`；`:cloud` 自动停用；切换前连接探测
 - 启动种子仅补全缺失模型，**用户修改不会被覆盖**
 
 ### 对话（Chat）增强
 
 - **SessionContext（会话上下文包）**：智能体 / 技能 / 资料库 / 模型 / 连接器下拉统一持久化
+- **响应风格**：精准 / 平衡 / 发散三档，写入 `response_style` 并映射推理参数
+- **Agent Room 群聊**：多智能体顺序协作，支持模板与流式输出
 - **语音对话**：扬声器开关 + 麦克风；识别后自动发送、回复自动朗读
 - **对话 RAG**：选定资料库后自动检索注入
 - **智能沉淀（Deposit）**：AI 分析对话 → 推荐技能 / 知识 / 智能体 / 数字员工 → 确认发布并互绑
@@ -538,7 +611,7 @@ cd frontend && cp .env.example .env.local
 | 路径 | 功能 |
 |------|------|
 | `/auth` | 登录、注册、`/me` 当前用户、**个人模型 Key** CRUD |
-| `/chat` | 对话、SessionContext（`GET/PATCH context`）、**对话 RAG**、推荐问题、智能沉淀、存为技能/知识库 |
+| `/chat` | 对话、SessionContext（`GET/PATCH context`）、**响应风格**、**群聊**、**对话 RAG**、推荐问题、智能沉淀、存为技能/知识库 |
 | `/skills` | 技能 CRUD（**删除需管理员**）；`/skills/library/*` 在线技能库 |
 | `/agents` | 智能体 CRUD、**scope 列表**、**分享设置**、**复制**、运行；`GET/PUT /{id}/sharing`、`GET /share-targets` |
 | `/employees` | 数字员工 CRUD、**模板导入**、定时任务、手动执行、运行记录、调度状态 |
@@ -638,6 +711,50 @@ aiagnet-win-*/
 
 ---
 
+## VastBase 单位 Linux 安装包
+
+适用于 **单位内网 Ubuntu / CentOS 等 Linux 服务器**：连接单位提供的 **VastBase 海量** 与 **Redis**，Docker Compose 一键部署。
+
+### 打包（开发机 Windows）
+
+```powershell
+cd E:\AIAGNET
+# 先在 deploy/office/.env.unit 填写单位 VastBase / Redis 连接（不提交 Git）
+.\scripts\package_vastbase_linux_release.ps1
+```
+
+输出：`release\aiagnet-vastbase-linux-YYYYMMDD-HHmm.tar.gz`
+
+| 包内文件 | 说明 |
+|----------|------|
+| `install_unit.sh` | 单位一键安装（读取 `.env.unit`） |
+| `install.sh` | 交互式安装（可现场改连接信息） |
+| `.env.unit` / `.env.unit.example` | VastBase、Redis、端口等 |
+| `VastBase单位部署.md` | 单位部署简明指南 |
+| `docker-compose.prod.yml` | 生产 Compose |
+
+### 部署（目标 Linux 服务器）
+
+| 项目 | 要求 |
+|------|------|
+| 操作系统 | Linux 64 位 |
+| Docker | 20+，含 `docker compose` |
+| 数据库 | 单位 VastBase（PG 兼容协议） |
+| Redis | 单位 Redis（可选，用于任务/缓存） |
+
+**步骤：**
+
+1. 上传并解压 tar.gz
+2. `sudo bash install_unit.sh`（或 `install.sh` 交互配置）
+3. 管理员打开 **`SETUP_TOKEN.admin.txt`**，访问 `/setup` 初始化表结构
+4. 用户访问 `http://<服务器IP>:3000`，默认 `admin / admin123`
+
+**数据迁移（可选）：** 从现有 PostgreSQL 复制到 VastBase — `backend/scripts/migrate_postgres_to_vastbase.py`
+
+完整说明：[docs/VastBase单位部署.md](docs/VastBase单位部署.md)
+
+---
+
 ## 技能 · 知识 · 对话 · 沉淀整合
 
 > **状态：P0 已上线（2026-06）；P1/P2 规划中**  
@@ -678,7 +795,7 @@ aiagnet-win-*/
 
 ### 核心概念：`SessionContext`（会话上下文包）
 
-对话页 **智能体 · 技能 · 资料库 · 模型 · 连接器** 统一抽象为运行时上下文，贯穿 **对话 → 沉淀 → 发布**：
+对话页 **智能体 · 技能 · 资料库 · 模型 · 连接器 · 响应风格** 统一抽象为运行时上下文，贯穿 **对话 → 沉淀 → 发布**：
 
 ```typescript
 SessionContext {
@@ -687,6 +804,8 @@ SessionContext {
   knowledge_base_ids: string[]
   model_config_id?: string
   connector_id?: string
+  response_style?: "precise" | "balanced" | "creative"  // 精准 / 平衡 / 发散
+  chat_mode?: "single" | "group" | "data_ask"
 }
 ```
 
@@ -901,6 +1020,11 @@ sequenceDiagram
 - [x] 组织权限与用户管理 UI（部门树、角色赋权、新建用户、**Excel 批量导入** — `/settings/organization`）
 - [x] Windows 自包含交付包（`package_win_release.ps1`：内置 Python/Node/依赖 + `AI-AGENT.bat`）
 - [x] **问数数据源 DataAsk**（多库 NL→SQL、权限注入、审计、Schema 漂移、Excel 临时 Python 分析）
+- [x] 对话 **响应风格**（精准 / 平衡 / 发散，全链路推理参数）
+- [x] **Agent Room 群聊**（多智能体顺序协作 + 模板）
+- [x] 界面 **浅色 / 深色主题** 与移动端导航优化
+- [x] **VastBase 单位 Linux 安装包**（`package_vastbase_linux_release.ps1` + `install_unit.sh`）
+- [x] Ollama 模型切换修复与 `:cloud` 模型停用
 - [~] Docker Compose 一键部署（compose 文件已有，待完善）
 
 ---
@@ -919,4 +1043,5 @@ sequenceDiagram
 - 技能 · 知识 · 沉淀整合：见上文 [技能 · 知识 · 对话 · 沉淀整合](#技能--知识--对话--沉淀整合)
 - 知识库增强规划：[docs/知识库增强规划.md](docs/知识库增强规划.md)
 - 单位部署指南：[docs/单位部署与首次登录.md](docs/单位部署与首次登录.md)
+- VastBase 单位部署：[docs/VastBase单位部署.md](docs/VastBase单位部署.md)
 - Windows 交付说明：[docs/Windows交付说明.md](docs/Windows交付说明.md)

@@ -15,7 +15,7 @@ from app.db.init_db import (
     init_db, seed_default_models, seed_template_agents,
     seed_template_workflows, seed_template_skills, seed_template_employees,
     seed_platform_knowledge_base, ensure_bundled_skills, seed_default_admin,
-    seed_desktop_operator_agent, seed_org_rbac,
+    seed_desktop_operator_agent, seed_org_rbac, seed_default_excel_parse_template,
 )
 from app.db.session import AsyncSessionLocal
 from app.core.tools.registry import ToolRegistry
@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
         try:
             async with AsyncSessionLocal() as session:
                 await seed_default_models(session)
+                await seed_default_excel_parse_template(session)
                 await seed_template_agents(session)
                 await seed_desktop_operator_agent(session)
                 await seed_template_workflows(session)

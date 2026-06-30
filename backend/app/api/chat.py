@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 import json
@@ -11,7 +11,7 @@ from app.db.models import (
 )
 from app.db.base import generate_uuid
 from app.schemas.chat import (
-    ConversationCreate, ConversationResponse, ConversationContextUpdate,
+    ConversationCreate, ConversationResponse, ConversationContextUpdate, ConversationUpdate,
     MessageResponse, ChatRequest, SuggestQuestionsResponse, TranscribeResponse,
     SaveAsSkillRequest, SaveToKnowledgeRequest, DeleteOkResponse,
     DepositSuggestRequest, DepositSuggestResponse, DepositConfirmRequest, DepositConfirmResponse,
@@ -21,7 +21,11 @@ from app.core.auth.deps import get_current_user
 from app.core.auth.scoping import scope_owned_only, assert_mutable_by_user
 from app.core.auth.agent_access import require_agent_use
 from app.core.chat.cleanup import cleanup_stale_conversations
-from app.core.chat.export import export_conversation_to_skill, export_conversation_to_knowledge
+from app.core.chat.export import (
+    export_conversation_to_skill,
+    export_conversation_to_knowledge,
+    export_conversation_document,
+)
 from app.core.agents.base import AgentDefinition, Task
 from app.core.skills.factory import build_agent_executor
 from app.core.dialogue.manager import DialogueManager
@@ -476,6 +480,53 @@ async def get_conversation(
     return ConversationResponse.from_conversation(conv)
 
 
+@router.patch("/conversations/{conv_id}", response_model=ConversationResponse)
+async def rename_conversation(
+    conv_id: str,
+    payload: ConversationUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await _get_user_conversation(db, conv_id, user)
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        conv.title = title[:128]
+    await db.commit()
+    await db.refresh(conv)
+    return ConversationResponse.from_conversation(conv)
+
+
+@router.get("/conversations/{conv_id}/export")
+async def export_conversation(
+    conv_id: str,
+    format: str = Query("md", alias="format"),
+    lang: str = Query("zh"),
+    attachments: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await _get_user_conversation(db, conv_id, user)
+    lang = lang if lang in ("zh", "en") else "zh"
+    try:
+        data, filename, media_type = await export_conversation_document(
+            db,
+            conv,
+            user.id,
+            fmt=format,
+            lang=lang,
+            include_attachments=attachments,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.patch("/conversations/{conv_id}/context", response_model=ConversationResponse)
 async def update_conversation_context(
     conv_id: str,
@@ -696,6 +747,26 @@ async def send_message(
         db, agent_id=conv.agent_id, conversation_meta=meta,
     )
     if data_source and meta.get("chat_mode", "single") in ("single", "data_ask"):
+        if str(data_source.driver) in ("excel_folder", "excel_template"):
+            from app.core.data_ask.excel.session_cache import ensure_ready, get_load_status
+
+            if str(data_source.driver) == "excel_template":
+                ds_meta = data_source.metadata_ or {}
+                if ds_meta.get("parse_status") != "ready":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Excel 模板解析尚未完成，请先在数据源中执行批量解析",
+                    )
+
+            load_status = get_load_status(data_source.id)
+            if load_status.get("status") != "ready":
+                detail = load_status.get("error") or "Excel 数据尚未完成全量加载，请稍候"
+                raise HTTPException(status_code=409, detail=detail)
+            try:
+                ensure_ready(data_source.id)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
         ask_message = message
         if attachment_context:
             ask_message = f"{message}\n\n{attachment_context}"

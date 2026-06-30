@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from app.db.models import DataSource
 
 
-DRIVERS = ("postgresql", "vastbase", "mysql", "hive", "doris", "hana", "excel_folder")
+DRIVERS = ("postgresql", "vastbase", "mysql", "hive", "doris", "hana", "excel_folder", "excel_template")
 
 
 def build_connector_from_source(source: "DataSource | dict[str, Any]") -> DataConnector:
@@ -42,7 +42,7 @@ def build_connector_from_source(source: "DataSource | dict[str, Any]") -> DataCo
         schema = d.get("db_schema") or "public"
         ssl = d.get("ssl") or "prefer"
 
-    if driver == "excel_folder":
+    if driver in ("excel_folder", "excel_template"):
         if not source_id:
             raise ValueError("Excel folder source requires id")
         return ExcelFolderConnector(source_id=str(source_id))
