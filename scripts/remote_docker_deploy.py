@@ -19,8 +19,9 @@ EXCLUDE_DIRS = {
     "chroma_data", "uploads", ".cursor", "release", "dist", "build",
     "lowcode-designer/node_modules",
     "lowcode-designer/build",
+    "_extract_excel_parser",
 }
-EXCLUDE_SUFFIX = {".db", ".db-shm", ".db-wal", ".pyc", ".zip", ".tar", ".gz"}
+EXCLUDE_SUFFIX = {".db", ".db-shm", ".db-wal", ".pyc", ".zip", ".tar", ".gz", ".rar"}
 EXCLUDE_NAMES = {".env", ".env.local"}
 
 
