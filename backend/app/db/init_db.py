@@ -57,6 +57,34 @@ async def _migrate_schema(engine: AsyncEngine, schema: str | None = None) -> Non
         await conn.run_sync(lambda c: _add_agent_visibility_columns(c, schema))
         await conn.run_sync(_ensure_users_table)
         await conn.run_sync(_ensure_postgres_enum_values)
+        await conn.run_sync(_ensure_data_source_grants_table)
+        await conn.run_sync(_ensure_system_settings_table)
+
+
+def _ensure_system_settings_table(sync_conn) -> None:
+    from sqlalchemy import inspect
+
+    inspector = inspect(sync_conn)
+    if inspector.has_table("system_settings"):
+        return
+    from app.db.base import Base
+
+    table = Base.metadata.tables.get("system_settings")
+    if table is not None:
+        table.create(sync_conn, checkfirst=True)
+
+
+def _ensure_data_source_grants_table(sync_conn) -> None:
+    from sqlalchemy import inspect
+
+    inspector = inspect(sync_conn)
+    if inspector.has_table("data_source_grants"):
+        return
+    from app.db.base import Base
+
+    table = Base.metadata.tables.get("data_source_grants")
+    if table is not None:
+        table.create(sync_conn, checkfirst=True)
 
 
 def _add_conversation_skills_config(sync_conn, schema: str | None = None) -> None:

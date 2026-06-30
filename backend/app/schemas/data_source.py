@@ -135,8 +135,33 @@ class DataSourceOut(BaseModel):
     report_enabled: bool = True
     status: str
     tables: list[DataSourceTableOut] = Field(default_factory=list)
+    can_manage: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class DataSourceGrantItemIn(BaseModel):
+    user_id: Optional[str] = None
+    login: Optional[str] = None
+    can_ask: bool = True
+    can_manage: bool = False
+
+
+class DataSourceGrantItemOut(BaseModel):
+    id: str
+    user_id: str
+    login: str
+    display_name: str
+    can_ask: bool
+    can_manage: bool
+
+
+class DataSourceGrantListOut(BaseModel):
+    items: list[DataSourceGrantItemOut] = Field(default_factory=list)
+
+
+class DataSourceGrantSetIn(BaseModel):
+    grants: list[DataSourceGrantItemIn] = Field(default_factory=list)
 
 
 class DataSourceListOut(BaseModel):

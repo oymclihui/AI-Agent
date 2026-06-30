@@ -3,6 +3,7 @@ import "./globals.css";
 import AppShell from "@/components/layout/AppShell";
 import ThemeProvider from "@/components/ThemeProvider";
 import ThemedToaster from "@/components/ThemedToaster";
+import BrandBootstrap from "@/components/BrandBootstrap";
 
 export const metadata: Metadata = {
   title: "AI-AGENT - AI Agent Network Platform",
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning data-theme="dark">
       <body className="flex h-screen overflow-hidden theme-bg theme-text">
         <ThemeProvider>
+          <BrandBootstrap />
           <AppShell>{children}</AppShell>
           <ThemedToaster />
         </ThemeProvider>

@@ -40,7 +40,12 @@ from app.core.data_ask.experience.employee_factory import (
     ensure_semantic_model,
     generate_agent_blueprint,
 )
-from app.core.data_ask.govern.access import assert_data_source_access, can_manage_all_data_sources
+from app.core.data_ask.govern.access import (
+    assert_data_source_access,
+    can_manage_all_data_sources,
+    data_source_list_filter,
+    user_can_manage_data_source,
+)
 from app.core.auth.permissions import resolve_data_scope
 from app.core.data_ask.intelligence.query_memory import save_golden_query
 from app.core.data_ask.schema.drift import detect_schema_drift
@@ -48,12 +53,15 @@ from app.core.data_ask.schema.introspect import infer_join_graph, introspect_tab
 from app.core.data_ask.semantic.mdl import default_semantic_model, validate_semantic_model
 from app.core.data_ask.service import run_data_ask, stream_data_ask
 from app.core.excel_parser.service import create_parse_job
+from app.core.excel_parser.access import assert_template_use
+from app.db.models import ExcelParseTemplate
 from app.db.base import generate_uuid
 from app.db.models import (
     Conversation,
     DataAskAuditLog,
     DataAskGoldenQuery,
     DataSource,
+    DataSourceGrant,
     DataSourceStatus,
     DataSourceTable,
     DataSourceTableRole,
@@ -72,6 +80,10 @@ from app.schemas.data_source import (
     ExcelLoadStatusOut,
     ExcelUploadOut,
     DataSourceCreate,
+    DataSourceGrantItemIn,
+    DataSourceGrantListOut,
+    DataSourceGrantSetIn,
+    DataSourceGrantItemOut,
     DataSourceListOut,
     DataSourceObjectType,
     DataSourceOut,
@@ -129,7 +141,7 @@ def _object_type_value(value) -> str:
     return str(value or "table")
 
 
-def _source_out(source: DataSource) -> DataSourceOut:
+def _source_out(source: DataSource, *, can_manage: bool = False) -> DataSourceOut:
     tables = [
         DataSourceTableOut(
             id=t.id,
@@ -162,6 +174,7 @@ def _source_out(source: DataSource) -> DataSourceOut:
         report_enabled=source.report_enabled,
         status=source.status.value if hasattr(source.status, "value") else str(source.status),
         tables=tables,
+        can_manage=can_manage,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
@@ -174,10 +187,14 @@ async def list_data_sources(
 ):
     q = select(DataSource).options(selectinload(DataSource.tables)).order_by(DataSource.updated_at.desc())
     scope = await resolve_data_scope(db, user)
-    if not can_manage_all_data_sources(user, scope):
-        q = q.where(DataSource.owner_id == user.id)
+    filt = await data_source_list_filter(db, user, scope)
+    if filt is not None:
+        q = q.where(filt)
     result = await db.execute(q)
-    items = [_source_out(s) for s in result.scalars().all()]
+    items = []
+    for s in result.scalars().all():
+        manage = await user_can_manage_data_source(db, s, user)
+        items.append(_source_out(s, can_manage=manage))
     return DataSourceListOut(items=items)
 
 
@@ -233,7 +250,8 @@ async def get_data_source(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
-    return _source_out(source)
+    manage = await user_can_manage_data_source(db, source, user)
+    return _source_out(source, can_manage=manage)
 
 
 @router.patch("/{source_id}", response_model=DataSourceOut)
@@ -244,6 +262,7 @@ async def update_data_source(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
     data = payload.model_dump(exclude_unset=True)
     if "password" in data:
         pw = data.pop("password")
@@ -266,6 +285,7 @@ async def delete_data_source(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
     if is_excel_driver(str(source.driver)):
         remove_excel_folder(source.id)
     await db.delete(source)
@@ -381,6 +401,7 @@ async def set_source_tables(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
     is_excel = is_excel_driver(str(source.driver))
     perm_entries = [t for t in payload.tables if t.role == DataSourceTableRole.permission]
     if is_excel:
@@ -469,6 +490,7 @@ async def upload_excel_files(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
     if not is_excel_driver(str(source.driver)):
         raise HTTPException(status_code=400, detail="Not an Excel folder data source")
     if is_excel_template_driver(str(source.driver)):
@@ -611,12 +633,15 @@ async def start_excel_template_parse(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_chat=True)
     if not is_excel_template_driver(str(source.driver)):
         raise HTTPException(status_code=400, detail="Not an excel_template data source")
     meta = source.metadata_ or {}
     template_id = (payload.template_id or meta.get("template_id") or "").strip()
     if not template_id:
         raise HTTPException(status_code=400, detail="template_id required")
+    template = await db.get(ExcelParseTemplate, template_id)
+    await assert_template_use(template, user)
     if payload.template_id and payload.template_id != meta.get("template_id"):
         meta["template_id"] = template_id
         source.metadata_ = meta
@@ -644,6 +669,7 @@ async def update_semantic_model(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
     source.semantic_model = validate_semantic_model(payload.semantic_model)
     await db.commit()
     await db.refresh(source, ["tables"])
@@ -848,6 +874,85 @@ async def create_employee_from_source(
         agent_id=source.agent_id or emp.agent_id,
         tasks_created=tasks,
     )
+
+
+async def _resolve_grant_user(db: AsyncSession, item: DataSourceGrantItemIn) -> User:
+    if item.user_id:
+        target = await db.get(User, item.user_id)
+        if target:
+            return target
+    login = (item.login or "").strip()
+    if login:
+        result = await db.execute(select(User).where(User.login == login).limit(1))
+        target = result.scalar_one_or_none()
+        if target:
+            return target
+    raise HTTPException(status_code=400, detail="User not found for grant")
+
+
+@router.get("/{source_id}/grants", response_model=DataSourceGrantListOut)
+async def list_data_source_grants(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not await user_can_manage_data_source(db, source, user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    rows = (
+        await db.execute(select(DataSourceGrant).where(DataSourceGrant.data_source_id == source_id))
+    ).scalars().all()
+    items: list[DataSourceGrantItemOut] = []
+    for g in rows:
+        u = await db.get(User, g.user_id)
+        if not u:
+            continue
+        items.append(
+            DataSourceGrantItemOut(
+                id=g.id,
+                user_id=g.user_id,
+                login=u.login,
+                display_name=u.display_name or u.login,
+                can_ask=bool(g.can_ask),
+                can_manage=bool(g.can_manage),
+            )
+        )
+    return DataSourceGrantListOut(items=items)
+
+
+@router.put("/{source_id}/grants", response_model=DataSourceGrantListOut)
+async def set_data_source_grants(
+    source_id: str,
+    payload: DataSourceGrantSetIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    if not await user_can_manage_data_source(db, source, user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    existing = (
+        await db.execute(select(DataSourceGrant).where(DataSourceGrant.data_source_id == source_id))
+    ).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    await db.flush()
+    seen: set[str] = set()
+    for item in payload.grants:
+        target = await _resolve_grant_user(db, item)
+        if target.id == user.id or target.id in seen:
+            continue
+        seen.add(target.id)
+        db.add(
+            DataSourceGrant(
+                id=generate_uuid(),
+                data_source_id=source_id,
+                user_id=target.id,
+                can_ask=item.can_ask,
+                can_manage=item.can_manage,
+            )
+        )
+    await db.commit()
+    return await list_data_source_grants(source_id, db, user)
 
 
 async def _get_source(db: AsyncSession, source_id: str, user: User) -> DataSource:

@@ -38,8 +38,8 @@ interface ExcelParserState {
   statsLoading: boolean;
 
   fetchTemplates: () => Promise<void>;
-  createTemplate: (data: { name: string; type: string; sheet_mappings: SheetMapping[]; description?: string }) => Promise<void>;
-  updateTemplate: (id: string, data: Partial<{ name: string; type: string; sheet_mappings: SheetMapping[]; description?: string }>) => Promise<void>;
+  createTemplate: (data: { name: string; type: string; sheet_mappings: SheetMapping[]; description?: string; is_global?: boolean }) => Promise<void>;
+  updateTemplate: (id: string, data: Partial<{ name: string; type: string; sheet_mappings: SheetMapping[]; description?: string; is_global?: boolean }>) => Promise<void>;
   deleteTemplate: (id: string) => Promise<void>;
   setCurrentTemplate: (template: ExcelTemplate | null) => void;
 

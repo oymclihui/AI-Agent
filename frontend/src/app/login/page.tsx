@@ -10,6 +10,8 @@ import { useAuthStore } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { useClientAuth } from "@/hooks/useClientAuth";
+import { BrandMark } from "@/components/BrandMark";
+import { useBrandingStore } from "@/lib/brandingStore";
 
 type AuthMode = "login" | "register";
 
@@ -19,6 +21,7 @@ export default function LoginPage() {
   const { ready, token } = useClientAuth();
   const { lang } = useLangStore();
   const a = translations.auth;
+  const systemName = useBrandingStore((s) => s.systemName);
 
   const [mode, setMode] = useState<AuthMode>("login");
   const [login, setLogin] = useState("");
@@ -98,11 +101,11 @@ export default function LoginPage() {
     <div className="fixed inset-0 flex items-center justify-center theme-bg p-4">
       <div className="w-full max-w-md rounded-2xl border theme-border theme-surface p-8 shadow-lg">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 font-bold text-white">
-            AI
-          </div>
+          <BrandMark size="lg" showName={false} />
           <div>
-            <h1 className="text-xl font-bold theme-text">{a.title[lang]}</h1>
+            <h1 className="text-xl font-bold theme-text">
+              {systemName}{lang === "zh" ? " 登录" : " Sign In"}
+            </h1>
             <p className="text-sm theme-muted">
               {mode === "login" ? a.subtitle[lang] : a.registerSubtitle[lang]}
             </p>

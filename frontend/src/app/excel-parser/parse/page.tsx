@@ -5,12 +5,16 @@ import Link from "next/link";
 import {
   CheckCircle,
   FileSearch,
+  FolderOpen,
   Loader2,
   Play,
   RefreshCw,
+  Upload,
   XCircle,
 } from "lucide-react";
-import { dataSourcesApi } from "@/lib/api";
+import toast from "react-hot-toast";
+import { dataSourcesApi, formatApiError } from "@/lib/api";
+import { pickLocalExcelFiles, uploadExcelFilesInBatches } from "@/lib/excelParser/localFolder";
 import { useExcelParserStore } from "@/lib/excelParser/store";
 import { useLangStore } from "@/lib/langStore";
 import { useClientAuth } from "@/hooks/useClientAuth";
@@ -33,8 +37,14 @@ export default function ExcelParserParsePage() {
   const [dataSourceId, setDataSourceId] = useState("");
   const [recursive, setRecursive] = useState(true);
   const [outputFilename, setOutputFilename] = useState("");
-  const [templateSources, setTemplateSources] = useState<{ id: string; name: string }[]>([]);
+  const [templateSources, setTemplateSources] = useState<{ id: string; name: string; can_manage?: boolean }[]>([]);
+  const [uploadingLocal, setUploadingLocal] = useState(false);
+  const [localFolderLabel, setLocalFolderLabel] = useState("");
+  const [uploadedFileCount, setUploadedFileCount] = useState(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const selectedSource = templateSources.find((s) => s.id === dataSourceId);
+  const canUploadLocal = !!dataSourceId && !!selectedSource?.can_manage;
 
   useEffect(() => {
     fetchTemplates();
@@ -43,8 +53,12 @@ export default function ExcelParserParsePage() {
   const loadSources = useCallback(() => {
     if (!ready) return;
     dataSourcesApi.list().then(({ data }) => {
-      const items = (data as { items: { id: string; name: string; driver: string }[] }).items || [];
-      setTemplateSources(items.filter((x) => x.driver === "excel_template").map((x) => ({ id: x.id, name: x.name })));
+      const items = (data as { items: { id: string; name: string; driver: string; can_manage?: boolean }[] }).items || [];
+      setTemplateSources(
+        items
+          .filter((x) => x.driver === "excel_template")
+          .map((x) => ({ id: x.id, name: x.name, can_manage: x.can_manage })),
+      );
     }).catch(() => {});
   }, [ready]);
 
@@ -78,6 +92,46 @@ export default function ExcelParserParsePage() {
     });
   };
 
+  const uploadLocalFiles = async (files: File[], folderLabel: string) => {
+    if (!dataSourceId) return;
+    setUploadingLocal(true);
+    try {
+      let uploaded = 0;
+      await uploadExcelFilesInBatches(async (batch) => {
+        await dataSourcesApi.uploadExcel(dataSourceId, batch);
+        uploaded += batch.length;
+        setUploadedFileCount(uploaded);
+      }, files);
+      setLocalFolderLabel(folderLabel);
+      toast.success(
+        t(`已从「${folderLabel || "本地文件夹"}」上传 ${uploaded} 个 Excel 文件`, `Uploaded ${uploaded} Excel file(s) from local folder`),
+      );
+    } catch (err) {
+      toast.error(formatApiError(err, t("上传失败", "Upload failed")));
+    } finally {
+      setUploadingLocal(false);
+    }
+  };
+
+  const handlePickLocalFolder = async () => {
+    if (!dataSourceId) {
+      toast.error(t("请先选择模板数据源", "Select a template data source first"));
+      return;
+    }
+    if (!selectedSource?.can_manage) {
+      toast.error(t("您没有该数据源的上传权限", "No upload permission for this data source"));
+      return;
+    }
+    try {
+      const { files, folderLabel } = await pickLocalExcelFiles(recursive);
+      if (files.length === 0) return;
+      setUploadedFileCount(0);
+      await uploadLocalFiles(files, folderLabel);
+    } catch (err) {
+      toast.error(formatApiError(err, t("选择文件夹失败", "Failed to pick folder")));
+    }
+  };
+
   const st = STATUS_CFG[parseTask.status];
   const progressPercent = parseTask.progress;
 
@@ -102,31 +156,69 @@ export default function ExcelParserParsePage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm theme-muted">{t("模板数据源（可选）", "Template data source (optional)")}</label>
-            <select value={dataSourceId} onChange={(e) => setDataSourceId(e.target.value)} className="input w-full">
-              <option value="">{t("不使用数据源", "None — use folder path")}</option>
+            <label className="mb-1 block text-sm theme-muted">{t("模板数据源", "Template data source")}</label>
+            <select value={dataSourceId} onChange={(e) => { setDataSourceId(e.target.value); setLocalFolderLabel(""); setUploadedFileCount(0); }} className="input w-full">
+              <option value="">{t("-- 请选择（本地上传必填）--", "-- Select (required for local upload) --")}</option>
               {templateSources.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.can_manage ? "" : t("（仅问数）", " (ask only)")}
+                </option>
               ))}
             </select>
             <p className="mt-1 text-xs theme-muted">
-              {t("选择后从该数据源的 input/ 目录读取已上传的原始 Excel", "Reads uploaded raw Excel from the source input/ folder")}
+              {t("从该数据源 input/ 读取 Excel；选择本地文件夹会先上传到此数据源", "Reads from source input/; local folder uploads go here first")}
             </p>
           </div>
 
-          <div>
-            <label className="mb-1 block text-sm theme-muted">{t("服务器文件夹路径（可选）", "Server folder path (optional)")}</label>
-            <input
-              type="text"
-              value={folderPath}
-              onChange={(e) => setFolderPath(e.target.value)}
-              placeholder={t("例如：E:\\data\\reports", "e.g. E:\\data\\reports")}
-              className="input w-full font-mono text-sm"
-            />
-            <p className="mt-1 text-xs theme-muted">
-              {t("后端可访问的绝对路径；与数据源二选一或同时填（优先数据源 input/）", "Absolute path on the backend host")}
-            </p>
+          <div className="rounded-lg border theme-border p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium theme-text">{t("本机 Excel 文件夹", "Local Excel folder")}</p>
+                <p className="text-xs theme-muted mt-0.5">
+                  {t("在浏览器中选择您电脑上的文件夹，自动上传后解析", "Pick a folder on your PC — files upload to the server first")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handlePickLocalFolder}
+                disabled={uploadingLocal || parseLoading || !canUploadLocal}
+                className="btn-secondary flex items-center gap-2 px-3 py-2 text-sm disabled:opacity-50"
+              >
+                {uploadingLocal ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+                {uploadingLocal ? t("上传中…", "Uploading…") : t("选择本地文件夹", "Pick local folder")}
+              </button>
+            </div>
+            {!dataSourceId && (
+              <p className="text-xs text-amber-600">{t("请先选择模板数据源", "Select a template data source first")}</p>
+            )}
+            {dataSourceId && !selectedSource?.can_manage && (
+              <p className="text-xs text-amber-600">{t("当前数据源仅有问数权限，无法上传本地文件", "Ask-only access — cannot upload local files")}</p>
+            )}
+            {localFolderLabel && uploadedFileCount > 0 && (
+              <p className="text-xs text-green-600 flex items-center gap-1">
+                <Upload className="h-3.5 w-3.5" />
+                {t(`已上传「${localFolderLabel}」中 ${uploadedFileCount} 个文件`, `${uploadedFileCount} file(s) uploaded from "${localFolderLabel}"`)}
+              </p>
+            )}
           </div>
+
+          <details className="group">
+            <summary className="cursor-pointer text-sm theme-muted hover:theme-text">
+              {t("高级：服务器文件夹路径", "Advanced: server folder path")}
+            </summary>
+            <div className="mt-2">
+              <input
+                type="text"
+                value={folderPath}
+                onChange={(e) => setFolderPath(e.target.value)}
+                placeholder={t("例如：/data/reports（服务器上的路径）", "e.g. /data/reports (on server)")}
+                className="input w-full font-mono text-sm"
+              />
+              <p className="mt-1 text-xs theme-muted">
+                {t("仅后端主机可访问的绝对路径；普通用户请用上方「选择本地文件夹」", "Absolute path on backend host only; use local folder picker above")}
+              </p>
+            </div>
+          </details>
 
           <div>
             <label className="mb-1 block text-sm theme-muted">{t("输出文件名（可选）", "Output filename (optional)")}</label>

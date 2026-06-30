@@ -10,7 +10,7 @@ import { useLangStore } from "@/lib/langStore";
 import { useClientAuth } from "@/hooks/useClientAuth";
 import { SegmentedControl } from "@/components/SegmentedControl";
 
-type Tab = "overview" | "files" | "ask" | "semantic" | "audit" | "drift";
+type Tab = "overview" | "files" | "ask" | "semantic" | "audit" | "drift" | "access";
 
 interface DataSourceDetail {
   id: string;
@@ -20,8 +20,18 @@ interface DataSourceDetail {
   database: string;
   agent_id?: string | null;
   employee_id?: string | null;
+  can_manage?: boolean;
   tables: { table_name: string; role: string; object_type?: string; column_meta?: { columns?: { name: string; type: string }[] } }[];
   semantic_model?: Record<string, unknown>;
+}
+
+interface GrantRow {
+  id: string;
+  user_id: string;
+  login: string;
+  display_name: string;
+  can_ask: boolean;
+  can_manage: boolean;
 }
 
 interface GraphData {
@@ -99,6 +109,11 @@ export default function DataSourceDetailPage() {
     input_file_count?: number;
     output_file_count?: number;
   } | null>(null);
+  const [grants, setGrants] = useState<GrantRow[]>([]);
+  const [grantLogin, setGrantLogin] = useState("");
+  const [grantCanAsk, setGrantCanAsk] = useState(true);
+  const [grantCanManage, setGrantCanManage] = useState(false);
+  const [savingGrants, setSavingGrants] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadTemplateStatus = useCallback(() => {
@@ -111,6 +126,13 @@ export default function DataSourceDetailPage() {
         output_file_count?: number;
       });
     }).catch(() => {});
+  }, [id]);
+
+  const loadGrants = useCallback(() => {
+    if (!id) return;
+    dataSourcesApi.listGrants(id).then(({ data }) => {
+      setGrants((data as { items: GrantRow[] }).items || []);
+    }).catch(() => setGrants([]));
   }, [id]);
 
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
@@ -184,7 +206,8 @@ export default function DataSourceDetailPage() {
     if (tab === "audit") loadAudit();
     if (tab === "drift") loadDrift();
     if (tab === "files") loadExcelFiles();
-  }, [tab, loadAudit, loadDrift, loadExcelFiles]);
+    if (tab === "access" && ds?.can_manage) loadGrants();
+  }, [tab, loadAudit, loadDrift, loadExcelFiles, loadGrants, ds?.can_manage]);
 
   const onGenerateSql = async () => {
     if (!id || !question.trim()) return;
@@ -342,6 +365,7 @@ export default function DataSourceDetailPage() {
     { value: "ask", label: t("问数", "Ask") },
     { value: "semantic", label: t("语义模型", "Semantic") },
     { value: "audit", label: t("审计", "Audit") },
+    ...(ds.can_manage ? [{ value: "access" as Tab, label: t("权限", "Access") }] : []),
     ...(isExcelLike ? [] : [{ value: "drift" as Tab, label: t("Schema", "Schema") }]),
   ];
 
@@ -391,9 +415,11 @@ export default function DataSourceDetailPage() {
                 : `${ds.driver} · ${ds.host} / ${ds.database}`}
           </p>
         </div>
-        <button onClick={onDelete} className="btn-secondary text-red-500 flex items-center gap-1 px-3 py-2 text-sm">
-          <Trash2 className="h-4 w-4" />{t("删除", "Delete")}
-        </button>
+        {ds.can_manage && (
+          <button onClick={onDelete} className="btn-secondary text-red-500 flex items-center gap-1 px-3 py-2 text-sm">
+            <Trash2 className="h-4 w-4" />{t("删除", "Delete")}
+          </button>
+        )}
       </div>
 
       <SegmentedControl wrap size="sm" value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
@@ -474,6 +500,7 @@ export default function DataSourceDetailPage() {
             onSaveSelection={onSaveExcelSelection}
             onRefresh={loadExcelFiles}
             isTemplate={isExcelTemplate}
+            canManage={!!ds.can_manage}
           />
         </>
       )}
@@ -569,10 +596,14 @@ export default function DataSourceDetailPage() {
           <p className="text-xs theme-muted">
             {t("定义 metrics / dimensions / relationships / columns.sensitivity", "Define metrics, dimensions, relationships, column sensitivity")}
           </p>
-          <textarea className="input w-full min-h-[320px] font-mono text-xs" value={mdlText} onChange={(e) => setMdlText(e.target.value)} />
-          <button disabled={savingMdl} onClick={onSaveMdl} className="btn-primary px-4 py-2 text-sm">
-            {savingMdl ? "…" : t("保存", "Save")}
-          </button>
+          <textarea className="input w-full min-h-[320px] font-mono text-xs" value={mdlText} onChange={(e) => setMdlText(e.target.value)} readOnly={!ds.can_manage} />
+          {ds.can_manage ? (
+            <button disabled={savingMdl} onClick={onSaveMdl} className="btn-primary px-4 py-2 text-sm">
+              {savingMdl ? "…" : t("保存", "Save")}
+            </button>
+          ) : (
+            <p className="text-xs theme-muted">{t("仅管理员可编辑语义模型", "Only managers can edit the semantic model")}</p>
+          )}
         </div>
       )}
 
@@ -601,6 +632,109 @@ export default function DataSourceDetailPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "access" && ds.can_manage && (
+        <div className="theme-surface rounded-xl border theme-border p-4 space-y-4">
+          <div>
+            <h2 className="font-medium">{t("访问权限", "Access control")}</h2>
+            <p className="text-sm theme-muted mt-1">
+              {t(
+                "为其他用户分配问数 / Excel 解析权限；部门负责人默认可查看本部门成员的数据源",
+                "Grant ask/parse access to others; dept leaders can see team sources by default",
+              )}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[200px] flex-1">
+              <label className="block text-xs theme-muted mb-1">{t("用户账号", "Username")}</label>
+              <input
+                className="input w-full"
+                value={grantLogin}
+                onChange={(e) => setGrantLogin(e.target.value)}
+                placeholder={t("登录名", "login")}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={grantCanAsk} onChange={(e) => setGrantCanAsk(e.target.checked)} />
+              {t("问数/解析", "Ask/Parse")}
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={grantCanManage} onChange={(e) => setGrantCanManage(e.target.checked)} />
+              {t("管理", "Manage")}
+            </label>
+            <button
+              type="button"
+              className="btn-primary px-3 py-2 text-sm"
+              disabled={!grantLogin.trim()}
+              onClick={() => {
+                if (!grantLogin.trim()) return;
+                setGrants((prev) => [
+                  ...prev.filter((g) => g.login !== grantLogin.trim()),
+                  {
+                    id: `draft-${grantLogin.trim()}`,
+                    user_id: "",
+                    login: grantLogin.trim(),
+                    display_name: grantLogin.trim(),
+                    can_ask: grantCanAsk,
+                    can_manage: grantCanManage,
+                  },
+                ]);
+                setGrantLogin("");
+              }}
+            >
+              {t("添加", "Add")}
+            </button>
+          </div>
+          {grants.length === 0 ? (
+            <p className="text-sm theme-muted">{t("尚未授权给其他用户", "No grants yet")}</p>
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {grants.map((g) => (
+                <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 rounded border theme-border px-3 py-2">
+                  <span>{g.display_name || g.login} <span className="text-xs theme-muted">({g.login})</span></span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs theme-muted">{g.can_ask ? t("问数", "Ask") : ""}{g.can_manage ? ` · ${t("管理", "Manage")}` : ""}</span>
+                    <button
+                      type="button"
+                      className="text-red-400 text-xs"
+                      onClick={() => setGrants((prev) => prev.filter((x) => x.login !== g.login))}
+                    >
+                      {t("移除", "Remove")}
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            disabled={savingGrants}
+            className="btn-primary px-4 py-2 text-sm"
+            onClick={async () => {
+              if (!id) return;
+              setSavingGrants(true);
+              try {
+                await dataSourcesApi.setGrants(id, {
+                  grants: grants.map((g) => ({
+                    login: g.login,
+                    user_id: g.user_id || undefined,
+                    can_ask: g.can_ask,
+                    can_manage: g.can_manage,
+                  })),
+                });
+                toast.success(t("权限已保存", "Grants saved"));
+                loadGrants();
+              } catch {
+                toast.error(t("保存失败", "Save failed"));
+              } finally {
+                setSavingGrants(false);
+              }
+            }}
+          >
+            {savingGrants ? "…" : t("保存权限", "Save grants")}
+          </button>
         </div>
       )}
 
@@ -648,6 +782,7 @@ function ExcelFilesTab({
   onSaveSelection,
   onRefresh,
   isTemplate = false,
+  canManage = true,
 }: {
   lang: string;
   files: { name: string; size_bytes: number }[];
@@ -658,6 +793,7 @@ function ExcelFilesTab({
   onSaveSelection: (names: string[]) => void;
   onRefresh: () => void;
   isTemplate?: boolean;
+  canManage?: boolean;
 }) {
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
   const [picked, setPicked] = useState<string[]>(selected);
@@ -679,23 +815,27 @@ function ExcelFilesTab({
           <button type="button" onClick={onRefresh} className="btn-secondary text-xs px-2 py-1 inline-flex items-center gap-1">
             <RefreshCw className="h-3.5 w-3.5" />{t("刷新", "Refresh")}
           </button>
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-            className="btn-primary text-xs px-3 py-1 inline-flex items-center gap-1"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            {uploading ? t("上传中…", "Uploading…") : t("上传 Excel", "Upload Excel")}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            multiple
-            className="hidden"
-            onChange={(e) => onUpload(e.target.files)}
-          />
+          {canManage && (
+            <>
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                className="btn-primary text-xs px-3 py-1 inline-flex items-center gap-1"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {uploading ? t("上传中…", "Uploading…") : t("上传 Excel", "Upload Excel")}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                multiple
+                className="hidden"
+                onChange={(e) => onUpload(e.target.files)}
+              />
+            </>
+          )}
         </div>
       </div>
       <p className="text-xs text-amber-600">
@@ -713,6 +853,7 @@ function ExcelFilesTab({
               <input
                 type="checkbox"
                 checked={picked.includes(f.name)}
+                disabled={!canManage}
                 onChange={(e) =>
                   setPicked((prev) => (e.target.checked ? [...prev, f.name] : prev.filter((x) => x !== f.name)))
                 }
@@ -723,14 +864,16 @@ function ExcelFilesTab({
           ))}
         </div>
       )}
-      <button
-        type="button"
-        disabled={picked.length < 1}
-        onClick={() => onSaveSelection(picked)}
-        className="btn-primary w-full py-2 text-sm"
-      >
-        {t(`保存问数范围（已选 ${picked.length} 个）`, `Save selection (${picked.length} file(s))`)}
-      </button>
+      {canManage && (
+        <button
+          type="button"
+          disabled={picked.length < 1}
+          onClick={() => onSaveSelection(picked)}
+          className="btn-primary w-full py-2 text-sm"
+        >
+          {t(`保存问数范围（已选 ${picked.length} 个）`, `Save selection (${picked.length} file(s))`)}
+        </button>
+      )}
     </div>
   );
 }

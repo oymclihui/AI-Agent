@@ -885,6 +885,16 @@ export const translations = {
     integrationsLinkDesc:  { zh: "查看飞书 / 钉钉 Webhook 配置与回调地址。", en: "View Feishu / DingTalk webhook config and callback URLs." },
     databaseLinkTitle: { zh: "数据库配置", en: "Database" },
     databaseLinkDesc:  { zh: "PostgreSQL / VastBase 连接、测试与一键建表初始化。", en: "PostgreSQL / VastBase connection, test, and one-click schema init." },
+    brandingTitle: { zh: "系统名称与图标", en: "System name & icon" },
+    brandingDesc: { zh: "自定义侧边栏与登录页显示的系统名称和 Logo，默认 AI-AGENT。", en: "Customize the name and logo shown in the sidebar and login page. Default: AI-AGENT." },
+    brandingName: { zh: "系统名称", en: "System name" },
+    brandingIcon: { zh: "系统图标", en: "System icon" },
+    brandingUpload: { zh: "上传图标", en: "Upload icon" },
+    brandingRemoveIcon: { zh: "恢复默认图标", en: "Reset icon" },
+    brandingSave: { zh: "保存外观", en: "Save branding" },
+    brandingSaved: { zh: "系统外观已保存", en: "Branding saved" },
+    brandingSaveFail: { zh: "保存失败", en: "Save failed" },
+    brandingIconHint: { zh: "支持 PNG / JPG / WebP，建议 128×128，最大 512KB", en: "PNG / JPG / WebP, 128×128 recommended, max 512KB" },
   },
 
   databaseSettings: {

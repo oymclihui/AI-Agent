@@ -748,6 +748,18 @@ class DataAskGoldenQuery(Base, TimestampMixin):
     use_count = Column(Integer, default=1, nullable=False)
 
 
+class DataSourceGrant(Base, TimestampMixin):
+    """Per-user access to a data source (问数 / Excel 解析)."""
+
+    __tablename__ = "data_source_grants"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(36), ForeignKey("data_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    can_ask = Column(Boolean, default=True, nullable=False)
+    can_manage = Column(Boolean, default=False, nullable=False)
+
+
 class ExcelParseTemplate(Base, TimestampMixin):
     __tablename__ = "excel_parse_templates"
 
@@ -781,3 +793,10 @@ class ExcelParseJob(Base, TimestampMixin):
     error_logs = Column(JSON, default=list)
     error_message = Column(Text, nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class SystemSetting(Base, TimestampMixin):
+    __tablename__ = "system_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(JSON, default=dict)

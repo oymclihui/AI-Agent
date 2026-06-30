@@ -15,6 +15,7 @@ export interface ExcelTemplate {
   sheet_mappings: SheetMapping[];
   description?: string | null;
   is_global?: boolean;
+  owner_id?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -22,6 +22,7 @@ export function SheetMappingEditor({
   onChange,
   onRemove,
   onCopyFromAbove,
+  readOnly = false,
 }: {
   sheetMapping: SheetMapping;
   index: number;
@@ -30,8 +31,9 @@ export function SheetMappingEditor({
   isExpanded: boolean;
   onToggleExpand: () => void;
   onChange: (sm: SheetMapping) => void;
-  onRemove: () => void;
-  onCopyFromAbove: () => void;
+  onRemove?: () => void;
+  onCopyFromAbove?: () => void;
+  readOnly?: boolean;
 }) {
   const { lang } = useLangStore();
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
@@ -102,14 +104,15 @@ export function SheetMappingEditor({
                 placeholder={t("例如：BS、Sheet1", "e.g. BS, Sheet1")}
                 className="input min-w-[200px] flex-1"
                 required
+                readOnly={readOnly}
               />
-              {!isFirst && (
+              {!readOnly && !isFirst && onCopyFromAbove && (
                 <button type="button" onClick={onCopyFromAbove} className="btn-secondary flex items-center gap-1 px-3 py-2 text-sm">
                   <Copy className="h-3.5 w-3.5" />
                   {t("复制上方映射", "Copy from above")}
                 </button>
               )}
-              {!isLast && (
+              {!readOnly && !isLast && onRemove && (
                 <button type="button" onClick={onRemove} className="text-red-400 hover:text-red-300" title={t("删除 Sheet", "Remove sheet")}>
                   <MinusCircle className="h-5 w-5" />
                 </button>
@@ -125,10 +128,12 @@ export function SheetMappingEditor({
           <div>
             <div className="mb-2 flex items-center justify-between">
               <label className="text-sm theme-muted">{t("字段映射", "Field mapping")}</label>
-              <button type="button" onClick={addField} className="btn-primary flex items-center gap-1 px-2 py-1 text-xs">
-                <PlusCircle className="h-3.5 w-3.5" />
-                {t("添加字段", "Add field")}
-              </button>
+              {!readOnly && (
+                <button type="button" onClick={addField} className="btn-primary flex items-center gap-1 px-2 py-1 text-xs">
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  {t("添加字段", "Add field")}
+                </button>
+              )}
             </div>
             <div className="overflow-x-auto rounded-lg border theme-border">
               <table className="w-full text-sm">
@@ -150,6 +155,7 @@ export function SheetMappingEditor({
                           onChange={(e) => updateField(fi, "field_name", e.target.value)}
                           placeholder={t("字段名", "Field name")}
                           className="input py-1.5"
+                          readOnly={readOnly}
                         />
                       </td>
                       <td className="px-3 py-2">
@@ -159,9 +165,11 @@ export function SheetMappingEditor({
                           onChange={(e) => updateField(fi, "cell_ref", e.target.value)}
                           placeholder="B3"
                           className="input py-1.5 font-mono"
+                          readOnly={readOnly}
                         />
                       </td>
                       <td className="px-2 py-2">
+                        {!readOnly && (
                         <div className="flex justify-center gap-1">
                           <button type="button" disabled={fi === 0} onClick={() => moveField(fi, -1)} className="p-1 disabled:opacity-30">
                             <ChevronUp className="h-3.5 w-3.5" />
@@ -170,9 +178,10 @@ export function SheetMappingEditor({
                             <ChevronDown className="h-3.5 w-3.5" />
                           </button>
                         </div>
+                        )}
                       </td>
                       <td className="px-2 py-2">
-                        {localFields.length > 1 && (
+                        {!readOnly && localFields.length > 1 && (
                           <button type="button" onClick={() => removeField(fi)} className="text-red-400">
                             <MinusCircle className="h-4 w-4" />
                           </button>

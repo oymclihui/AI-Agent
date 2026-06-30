@@ -1,17 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLangStore } from "@/lib/langStore";
 import { useThemeStore } from "@/lib/themeStore";
 import { useAuthStore } from "@/lib/authStore";
 import { translations } from "@/lib/i18n";
-import { authApi } from "@/lib/api";
+import { authApi, systemApi } from "@/lib/api";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import { ModelKeysPanel } from "@/components/ModelKeysPanel";
+import { BrandMark } from "@/components/BrandMark";
 import { canManageOrg, canDelegateDept, canDelegateExec } from "@/lib/permissions";
+import { useBrandingStore } from "@/lib/brandingStore";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -29,6 +31,11 @@ export default function SettingsPage() {
   const [mailboxEmail, setMailboxEmail] = useState("");
   const [mailboxPassword, setMailboxPassword] = useState("");
   const [mailboxSaved, setMailboxSaved] = useState<{ email: string; password_preview: string; imap_host: string; imap_port: number } | null>(null);
+  const { systemName, systemIcon, setBranding } = useBrandingStore();
+  const [brandName, setBrandName] = useState("AI-AGENT");
+  const [brandIconPreview, setBrandIconPreview] = useState<string | null>(null);
+  const [savingBrand, setSavingBrand] = useState(false);
+  const brandIconRef = useRef<HTMLInputElement>(null);
 
   const loadMailbox = () => {
     authApi.getMailbox().then(({ data }) => {
@@ -40,6 +47,11 @@ export default function SettingsPage() {
   };
 
   useEffect(() => { loadMailbox(); }, []);
+
+  useEffect(() => {
+    setBrandName(systemName);
+    setBrandIconPreview(systemIcon);
+  }, [systemName, systemIcon]);
 
   useEffect(() => {
     authApi.me().then(({ data }) => {
@@ -131,6 +143,43 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveBrand = async () => {
+    if (!brandName.trim()) {
+      toast.error(lang === "zh" ? "系统名称不能为空" : "System name is required");
+      return;
+    }
+    setSavingBrand(true);
+    try {
+      const { data } = await systemApi.updateBranding({
+        system_name: brandName.trim(),
+        system_icon: brandIconPreview,
+      });
+      const saved = data as { system_name: string; system_icon?: string | null };
+      setBranding(saved);
+      toast.success(s.brandingSaved[lang]);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : s.brandingSaveFail[lang]);
+    } finally {
+      setSavingBrand(false);
+    }
+  };
+
+  const handleBrandIconFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error(lang === "zh" ? "请选择图片文件" : "Please select an image file");
+      return;
+    }
+    if (file.size > 512 * 1024) {
+      toast.error(lang === "zh" ? "图标不能超过 512KB" : "Icon must be under 512KB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setBrandIconPreview(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="p-8">
       <h1 className="mb-2 text-2xl font-bold theme-text">{s.title[lang]}</h1>
@@ -143,6 +192,64 @@ export default function SettingsPage() {
           {s.logout[lang]}
         </button>
       </div>
+
+      {user?.is_admin && (
+        <div className="theme-card mb-6 border-blue-500/20 p-6">
+          <h2 className="mb-2 text-lg font-semibold theme-text">{s.brandingTitle[lang]}</h2>
+          <p className="mb-4 text-sm theme-muted">{s.brandingDesc[lang]}</p>
+          <div className="mb-4 flex flex-wrap items-center gap-4">
+            <BrandMark size="lg" name={brandName} icon={brandIconPreview} />
+            <div className="text-xs theme-muted">{s.brandingIconHint[lang]}</div>
+          </div>
+          <div className="mb-4 grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm theme-muted">{s.brandingName[lang]}</label>
+              <input
+                className="theme-input w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-slate-400"
+                value={brandName}
+                onChange={(e) => setBrandName(e.target.value)}
+                placeholder="AI-AGENT"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm theme-muted">{s.brandingIcon[lang]}</label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => brandIconRef.current?.click()}
+                  className="rounded-lg border theme-border px-4 py-2 text-sm hover:bg-white/5"
+                >
+                  {s.brandingUpload[lang]}
+                </button>
+                {brandIconPreview && (
+                  <button
+                    type="button"
+                    onClick={() => setBrandIconPreview(null)}
+                    className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10"
+                  >
+                    {s.brandingRemoveIcon[lang]}
+                  </button>
+                )}
+                <input
+                  ref={brandIconRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => handleBrandIconFile(e.target.files?.[0])}
+                />
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={savingBrand}
+            onClick={handleSaveBrand}
+            className="theme-btn-primary"
+          >
+            {savingBrand ? "…" : s.brandingSave[lang]}
+          </button>
+        </div>
+      )}
 
       <div className="theme-card mb-6 border-violet-500/20 p-6">
         <ModelKeysPanel lang={lang} />

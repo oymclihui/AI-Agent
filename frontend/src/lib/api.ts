@@ -121,6 +121,12 @@ function authHeaders(): HeadersInit {
 }
 
 // ── Auth ───────────────────────────────────────────
+export const systemApi = {
+  getBranding: () => api.get("/system/branding"),
+  updateBranding: (data: { system_name: string; system_icon?: string | null }) =>
+    api.put("/system/branding", data),
+};
+
 export const authApi = {
   login: (login: string, password: string) => api.post("/auth/login", { login, password }),
   register: (data: object) => api.post("/auth/register", data),
@@ -561,6 +567,9 @@ export const dataSourcesApi = {
   listExcelTemplateInput: (id: string) => api.get(`/data-sources/${id}/excel-template/input/files`),
   parseExcelTemplate: (id: string, data: object) =>
     api.post(`/data-sources/${id}/excel-template/parse`, data),
+  listGrants: (id: string) => api.get(`/data-sources/${id}/grants`),
+  setGrants: (id: string, data: { grants: { login?: string; user_id?: string; can_ask: boolean; can_manage: boolean }[] }) =>
+    api.put(`/data-sources/${id}/grants`, data),
 };
 
 export const dataAskApi = {

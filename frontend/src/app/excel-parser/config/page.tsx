@@ -16,6 +16,7 @@ import { useExcelParserStore } from "@/lib/excelParser/store";
 import type { ExcelTemplate, SheetMapping } from "@/lib/excelParser/types";
 import { getFieldCount, getSheetNames } from "@/lib/excelParser/utils";
 import { useLangStore } from "@/lib/langStore";
+import { useAuthStore } from "@/lib/authStore";
 
 const TYPE_SUGGESTIONS = ["BS", "PL", "CF", "XS"];
 
@@ -53,15 +54,18 @@ function TemplateEditor({
   template,
   onSave,
   onCancel,
+  readOnly = false,
   t,
 }: {
   template: ExcelTemplate | null;
-  onSave: (data: { name: string; type: string; sheet_mappings: SheetMapping[] }) => void;
+  onSave: (data: { name: string; type: string; sheet_mappings: SheetMapping[]; is_global: boolean }) => void;
   onCancel: () => void;
+  readOnly?: boolean;
   t: (zh: string, en: string) => string;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("BS");
+  const [isGlobal, setIsGlobal] = useState(false);
   const [sheetMappings, setSheetMappings] = useState<SheetMapping[]>([{ sheet_name: "", field_mapping: [] }]);
   const [expandedSheets, setExpandedSheets] = useState<Set<number>>(new Set([0]));
 
@@ -69,12 +73,14 @@ function TemplateEditor({
     if (template) {
       setName(template.name);
       setType(template.type);
+      setIsGlobal(!!template.is_global);
       const mappings = template.sheet_mappings?.length ? template.sheet_mappings : [{ sheet_name: "", field_mapping: [] }];
       setSheetMappings(mappings);
       setExpandedSheets(new Set([0]));
     } else {
       setName("");
       setType("BS");
+      setIsGlobal(false);
       setSheetMappings([{ sheet_name: "", field_mapping: [] }]);
       setExpandedSheets(new Set([0]));
     }
@@ -103,6 +109,7 @@ function TemplateEditor({
       name: name.trim(),
       type,
       sheet_mappings: sheetMappings.filter((sm) => sm.sheet_name.trim()),
+      is_global: isGlobal,
     });
   };
 
@@ -111,31 +118,38 @@ function TemplateEditor({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label className="mb-1 block text-sm theme-muted">{t("模板名称", "Template name")}</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input w-full" required />
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input w-full" required readOnly={readOnly} />
         </div>
         <div>
           <label className="mb-1 block text-sm theme-muted">{t("模板类型", "Type")}</label>
-          <input type="text" value={type} onChange={(e) => setType(e.target.value)} className="input w-full" list="excel-type-suggestions" />
+          <input type="text" value={type} onChange={(e) => setType(e.target.value)} className="input w-full" list="excel-type-suggestions" readOnly={readOnly} />
           <datalist id="excel-type-suggestions">
             {TYPE_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
           </datalist>
         </div>
       </div>
 
+      <label className="flex items-center gap-2 text-sm theme-text">
+        <input type="checkbox" checked={isGlobal} onChange={(e) => setIsGlobal(e.target.checked)} disabled={readOnly} />
+        {t("共享模板（组织内所有用户可用于解析）", "Share template (all users can use for parsing)")}
+      </label>
+
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold theme-text">{t("工作表与字段映射", "Sheets & field mapping")}</h3>
-          <button
-            type="button"
-            onClick={() => {
-              setSheetMappings([...sheetMappings, { sheet_name: "", field_mapping: [] }]);
-              setExpandedSheets((prev) => new Set([...prev, sheetMappings.length]));
-            }}
-            className="btn-primary flex items-center gap-1 px-2 py-1 text-xs"
-          >
-            <PlusCircle className="h-3.5 w-3.5" />
-            {t("添加 Sheet", "Add sheet")}
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => {
+                setSheetMappings([...sheetMappings, { sheet_name: "", field_mapping: [] }]);
+                setExpandedSheets((prev) => new Set([...prev, sheetMappings.length]));
+              }}
+              className="btn-primary flex items-center gap-1 px-2 py-1 text-xs"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              {t("添加 Sheet", "Add sheet")}
+            </button>
+          )}
         </div>
         <p className="text-xs theme-muted">
           {t("每个 Sheet 绑定独立字段映射；解析时按顺序匹配首个存在的 Sheet", "Each sheet has its own mapping; first matching sheet wins")}
@@ -155,8 +169,9 @@ function TemplateEditor({
                 updated[idx] = newSm;
                 setSheetMappings(updated);
               }}
-              onRemove={() => setSheetMappings(sheetMappings.filter((_, i) => i !== idx))}
-              onCopyFromAbove={() => copyFromAbove(idx)}
+              onRemove={readOnly ? undefined : () => setSheetMappings(sheetMappings.filter((_, i) => i !== idx))}
+              onCopyFromAbove={readOnly ? undefined : () => copyFromAbove(idx)}
+              readOnly={readOnly}
             />
           ))}
         </div>
@@ -167,10 +182,12 @@ function TemplateEditor({
           <X className="h-4 w-4" />
           {t("取消", "Cancel")}
         </button>
-        <button type="submit" className="btn-primary flex items-center gap-1 px-4 py-2 text-sm">
-          <Save className="h-4 w-4" />
-          {template ? t("保存修改", "Save") : t("创建模板", "Create")}
-        </button>
+        {!readOnly && (
+          <button type="submit" className="btn-primary flex items-center gap-1 px-4 py-2 text-sm">
+            <Save className="h-4 w-4" />
+            {template ? t("保存修改", "Save") : t("创建模板", "Create")}
+          </button>
+        )}
       </div>
     </form>
   );
@@ -178,6 +195,7 @@ function TemplateEditor({
 
 export default function ExcelParserConfigPage() {
   const { lang } = useLangStore();
+  const user = useAuthStore((s) => s.user);
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
   const {
     templates,
@@ -190,6 +208,12 @@ export default function ExcelParserConfigPage() {
     setCurrentTemplate,
   } = useExcelParserStore();
 
+  const canEditTemplate = (tpl: ExcelTemplate | null) => {
+    if (!tpl) return true;
+    if (user?.is_admin) return true;
+    return !tpl.owner_id || tpl.owner_id === user?.id;
+  };
+
   const [showEditor, setShowEditor] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ExcelTemplate | null>(null);
 
@@ -197,7 +221,7 @@ export default function ExcelParserConfigPage() {
     fetchTemplates();
   }, [fetchTemplates]);
 
-  const handleSave = async (data: { name: string; type: string; sheet_mappings: SheetMapping[] }) => {
+  const handleSave = async (data: { name: string; type: string; sheet_mappings: SheetMapping[]; is_global: boolean }) => {
     try {
       if (currentTemplate) await updateTemplate(currentTemplate.id, data);
       else await createTemplate(data);
@@ -248,6 +272,9 @@ export default function ExcelParserConfigPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className="font-semibold theme-text truncate">{tpl.name}</h4>
                       <span className="rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">{tpl.type}</span>
+                      {tpl.is_global && (
+                        <span className="rounded bg-green-500/15 px-2 py-0.5 text-xs text-green-500">{t("共享", "Shared")}</span>
+                      )}
                     </div>
                     <p className="mt-1 text-xs theme-muted">
                       {t("工作表", "Sheets")}: {getSheetNames(tpl)} · {t("字段", "Fields")}: {getFieldCount(tpl)}
@@ -257,9 +284,11 @@ export default function ExcelParserConfigPage() {
                     <button type="button" onClick={(e) => { e.stopPropagation(); setCurrentTemplate(tpl); setShowEditor(true); }} className="rounded p-1.5 theme-muted hover:theme-text">
                       <Pencil className="h-4 w-4" />
                     </button>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); setDeleteTarget(tpl); }} className="rounded p-1.5 text-red-400 hover:text-red-300">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    {canEditTemplate(tpl) && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); setDeleteTarget(tpl); }} className="rounded p-1.5 text-red-400 hover:text-red-300">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -271,12 +300,15 @@ export default function ExcelParserConfigPage() {
           {showEditor ? (
             <div className="theme-card">
               <h3 className="mb-4 text-lg font-semibold theme-text">
-                {currentTemplate ? t("编辑模板", "Edit template") : t("新建模板", "New template")}
+                {currentTemplate
+                  ? canEditTemplate(currentTemplate) ? t("编辑模板", "Edit template") : t("查看模板", "View template")
+                  : t("新建模板", "New template")}
               </h3>
               <TemplateEditor
                 template={currentTemplate}
                 onSave={handleSave}
                 onCancel={() => { setShowEditor(false); setCurrentTemplate(null); }}
+                readOnly={!!currentTemplate && !canEditTemplate(currentTemplate)}
                 t={t}
               />
             </div>

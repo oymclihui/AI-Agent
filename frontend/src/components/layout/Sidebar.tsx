@@ -13,6 +13,7 @@ import { useLangStore } from "@/lib/langStore";
 import { useAuthStore } from "@/lib/authStore";
 import { translations } from "@/lib/i18n";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { BrandMark } from "@/components/BrandMark";
 import { canManageOrg, canReadEmployees, canViewDashboard, canDelegateDept, canDelegateExec } from "@/lib/permissions";
 
 export default function Sidebar() {
@@ -41,10 +42,8 @@ export default function Sidebar() {
   return (
     <aside className="theme-surface flex h-screen min-h-0 w-16 shrink-0 flex-col items-center overflow-hidden border-r theme-border py-4 lg:w-56 lg:items-start lg:px-3">
       <div className="mb-4 flex shrink-0 items-center gap-2 px-1 lg:mb-6">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 text-on-primary font-bold text-sm shrink-0 shadow-sm">
-          AI
-        </div>
-        <span className="hidden font-semibold theme-text lg:block">AI-AGENT</span>
+        <BrandMark showName={false} className="lg:hidden" />
+        <BrandMark className="hidden lg:flex" nameClassName="hidden lg:block" />
       </div>
 
       <nav className="sidebar-nav-scroll flex min-h-0 w-full flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden pr-0.5">

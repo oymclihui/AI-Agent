@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth.deps import get_current_user
+from app.core.excel_parser.access import assert_template_edit, assert_template_use, can_edit_template
 from app.core.excel_parser.exporter import Exporter
 from app.core.excel_parser.service import (
     create_parse_job,
@@ -20,8 +21,9 @@ from app.core.excel_parser.service import (
     read_job_result_sync,
     resolve_job_output_path,
 )
+from app.core.data_ask.govern.access import assert_data_source_access, can_access_data_source
 from app.db.base import generate_uuid
-from app.db.models import ExcelParseJob, ExcelParseTemplate, User
+from app.db.models import DataSource, ExcelParseJob, ExcelParseTemplate, User
 from app.db.session import get_db
 from app.schemas.excel_parser import (
     ExcelParseGlobalStatsOut,
@@ -102,7 +104,7 @@ async def create_template(
         type=payload.type.strip(),
         sheet_mappings=[m.model_dump() for m in payload.sheet_mappings],
         description=payload.description,
-        is_global=payload.is_global and user.is_admin,
+        is_global=bool(payload.is_global),
     )
     db.add(template)
     await db.commit()
@@ -117,10 +119,7 @@ async def get_template(
     user: User = Depends(get_current_user),
 ):
     template = await db.get(ExcelParseTemplate, template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id and template.owner_id != user.id and not template.is_global:
-        raise HTTPException(status_code=403, detail="Access denied")
+    await assert_template_use(template, user)
     return _template_out(template)
 
 
@@ -132,11 +131,10 @@ async def update_template(
     user: User = Depends(get_current_user),
 ):
     template = await db.get(ExcelParseTemplate, template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id and template.owner_id != user.id and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    await assert_template_edit(template, user)
     data = payload.model_dump(exclude_unset=True)
+    if "is_global" in data and not user.is_admin and template.owner_id != user.id:
+        data.pop("is_global")
     if "sheet_mappings" in data and data["sheet_mappings"] is not None:
         data["sheet_mappings"] = [m.model_dump() if hasattr(m, "model_dump") else m for m in data["sheet_mappings"]]
     for key, value in data.items():
@@ -153,10 +151,7 @@ async def delete_template(
     user: User = Depends(get_current_user),
 ):
     template = await db.get(ExcelParseTemplate, template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id and template.owner_id != user.id and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    await assert_template_edit(template, user)
     jobs = (
         await db.execute(select(ExcelParseJob).where(ExcelParseJob.template_id == template_id))
     ).scalars().all()
@@ -173,6 +168,14 @@ async def start_parse_job(
     user: User = Depends(get_current_user),
 ):
     try:
+        template = await db.get(ExcelParseTemplate, payload.template_id)
+        await assert_template_use(template, user)
+        if payload.data_source_id:
+            source = await db.get(DataSource, payload.data_source_id)
+            if not source:
+                raise HTTPException(status_code=404, detail="Data source not found")
+            if not await can_access_data_source(db, source, user, require_ask=True):
+                raise HTTPException(status_code=403, detail="Forbidden")
         job = await create_parse_job(
             db,
             owner_id=user.id,
@@ -196,8 +199,7 @@ async def get_parse_job(
     job = await db.get(ExcelParseJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.owner_id and job.owner_id != user.id and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    await _assert_job_access_async(db, job, user)
     return _job_out(job)
 
 
@@ -208,18 +210,39 @@ async def list_parse_jobs(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if data_source_id:
+        source = await db.get(DataSource, data_source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Data source not found")
+        if not await can_access_data_source(db, source, user, require_ask=True):
+            raise HTTPException(status_code=403, detail="Forbidden")
     q = select(ExcelParseJob).order_by(ExcelParseJob.created_at.desc()).limit(max(1, min(limit, 100)))
     if data_source_id:
         q = q.where(ExcelParseJob.data_source_id == data_source_id)
-    if not user.is_admin:
-        q = q.where(ExcelParseJob.owner_id == user.id)
+    elif not user.is_admin:
+        from app.core.data_ask.govern.access import list_granted_source_ids
+
+        granted = await list_granted_source_ids(db, user.id)
+        if granted:
+            from sqlalchemy import or_
+
+            q = q.where(or_(ExcelParseJob.owner_id == user.id, ExcelParseJob.data_source_id.in_(list(granted))))
+        else:
+            q = q.where(ExcelParseJob.owner_id == user.id)
     result = await db.execute(q)
     return ExcelParseJobListOut(items=[_job_out(j) for j in result.scalars().all()])
 
 
-def _assert_job_access(job: ExcelParseJob, user: User) -> None:
-    if job.owner_id and job.owner_id != user.id and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+async def _assert_job_access_async(db: AsyncSession, job: ExcelParseJob, user: User) -> None:
+    if user.is_admin:
+        return
+    if job.owner_id == user.id:
+        return
+    if job.data_source_id:
+        source = await db.get(DataSource, job.data_source_id)
+        if source and await can_access_data_source(db, source, user, require_ask=True):
+            return
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 @router.get("/stats/global", response_model=ExcelParseGlobalStatsOut)
@@ -256,7 +279,7 @@ async def get_parse_job_result(
     job = await db.get(ExcelParseJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _assert_job_access(job, user)
+    await _assert_job_access_async(db, job, user)
     if job.status != "completed":
         raise HTTPException(status_code=400, detail="Job not completed")
     payload = await asyncio.to_thread(read_job_result_sync, job)
@@ -274,7 +297,7 @@ async def export_parse_job(
     job = await db.get(ExcelParseJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _assert_job_access(job, user)
+    await _assert_job_access_async(db, job, user)
     if job.status != "completed" or not job.output_file:
         raise HTTPException(status_code=400, detail="Job output not ready")
 
