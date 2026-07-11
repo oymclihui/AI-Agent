@@ -92,13 +92,44 @@ def main() -> int:
             return 1
         ok("GET organization/users", f"count={len(users)}")
 
-        target = next((u for u in users if u.get("employee_no")), users[0])
-        emp_no = target.get("employee_no") or "admin"
+        # Never demote admin / super_admin during smoke — create a disposable user.
+        import uuid
+
+        target_login = f"perm_imp_{uuid.uuid4().hex[:8]}"
+        reg = client.post(
+            f"{API}/auth/register",
+            json={
+                "employee_no": target_login,
+                "password": "SmokeTest123!",
+                "display_name": f"Perm Import {target_login}",
+            },
+        )
+        if reg.status_code not in (200, 201):
+            # Fall back to a non-admin existing user if register is unavailable.
+            target = next(
+                (
+                    u
+                    for u in users
+                    if u.get("employee_no")
+                    and u.get("employee_no") != ADMIN_LOGIN
+                    and not u.get("is_admin")
+                ),
+                None,
+            )
+            if not target:
+                fail("pick import target", "could not register or find non-admin user")
+                print(f"\n{PASS}/{PASS + FAIL} passed")
+                return 1
+            emp_no = target.get("employee_no")
+            display_name = target.get("display_name", "")
+        else:
+            emp_no = target_login
+            display_name = f"Perm Import {target_login}"
 
         buf = io.BytesIO()
         pd.DataFrame([{
             "工号": emp_no,
-            "姓名": target.get("display_name", ""),
+            "姓名": display_name,
             "主部门编码": "",
             "人员层级": "普通员工",
             "角色": "业务操作员",

@@ -518,12 +518,36 @@ async def delete_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     from app.core.auth.agent_access import is_platform_agent
+    from app.db.models import Conversation, DataSource, DigitalEmployee
+    from sqlalchemy import func, update
 
     if is_platform_agent(agent):
         assert_admin_user(user, "delete platform agents")
     elif agent.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Digital employees require a live agent_id — block delete when still bound.
+    emp_count = (
+        await db.execute(
+            select(func.count()).select_from(DigitalEmployee).where(DigitalEmployee.agent_id == agent_id)
+        )
+    ).scalar() or 0
+    if emp_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Agent is bound to {emp_count} digital employee(s); unbind or delete them first",
+        )
+
+    # Detach nullable FKs so delete is not rolled back after a false 204.
+    await db.execute(
+        update(Conversation).where(Conversation.agent_id == agent_id).values(agent_id=None)
+    )
+    await db.execute(
+        update(DataSource).where(DataSource.agent_id == agent_id).values(agent_id=None)
+    )
     await db.delete(agent)
+    # Flush before response so IntegrityError surfaces as 5xx instead of silent rollback.
+    await db.flush()
 
 
 @router.post("/{agent_id}/run")
