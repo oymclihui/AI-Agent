@@ -409,6 +409,15 @@ async def submit_feedback(
 
     if ftype in ("like", "dislike", "correction", "example"):
         try:
+            from app.core.cache.redis_cache import cache_delete_prefix
+
+            # 训练反馈改变问答口径：使问数结果缓存失效，重复提问立即走新记忆
+            deleted = await cache_delete_prefix("dataask:cache:")
+            if train_task is not None:
+                train_task.detail = {**(train_task.detail or {}), "cache_invalidated": deleted}
+        except Exception:
+            pass
+        try:
             from app.core.data_ask.distill_tasks import distill_examples_task
 
             distill_examples_task.delay(str(source.id), task_id=train_task.id)

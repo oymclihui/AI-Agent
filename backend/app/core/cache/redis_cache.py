@@ -144,3 +144,19 @@ def make_dataask_cache_key(*, data_source_id, question, sql_override=None,
         "hist": history or [],
     }, ensure_ascii=False, sort_keys=True, default=str)
     return "dataask:cache:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def cache_delete_prefix(prefix: str) -> int:
+    """按前缀删除缓存（纠正/训练反馈后使问数结果缓存失效）；Redis 不可用静默返回 0。"""
+    cli = await _get_client()
+    if cli is None:
+        return 0
+    deleted = 0
+    try:
+        async for k in cli.scan_iter(match=f"{prefix}*", count=200):
+            await cli.delete(k)
+            deleted += 1
+    except Exception as exc:
+        logger.warning("cache_delete_prefix_failed: %s", exc)
+        _mark_failed()
+    return deleted
