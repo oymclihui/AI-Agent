@@ -108,6 +108,33 @@ class PgConnector(DataConnector):
         ]
         return TableMeta(name=table_name, schema=self.schema, columns=cols)
 
+    async def find_shared_keys(
+        self,
+        columns: list[str],
+        exclude_tables: list[str],
+    ) -> list[dict[str, str]]:
+        safe_cols = [c for c in columns if c]
+        if not safe_cols:
+            return []
+        q = text(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = :schema
+              AND column_name = ANY(:columns)
+              AND NOT (table_name = ANY(:exclude))
+            LIMIT 80
+            """
+        )
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    q,
+                    {"schema": self.schema, "columns": safe_cols, "exclude": exclude_tables or [""]},
+                )
+            ).fetchall()
+        return [{"table": str(row[0]), "column": str(row[1])} for row in rows]
+
     async def sample_rows(self, table_name: str, limit: int = 5) -> list[dict[str, Any]]:
         safe = self._quote_table(table_name)
         q = text(f"SELECT * FROM {safe} LIMIT :lim")

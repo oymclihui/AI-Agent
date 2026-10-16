@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Database, Plus, RefreshCw } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Copy, Database, Pencil, Plus, RefreshCw } from "lucide-react";
 import toast from "react-hot-toast";
 import { dataSourcesApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
@@ -15,6 +16,7 @@ interface DataSourceItem {
   host: string;
   database: string;
   status: string;
+  can_manage?: boolean;
   agent_id?: string | null;
   employee_id?: string | null;
   tables: { table_name: string; role: string }[];
@@ -34,8 +36,10 @@ const DRIVER_LABEL: Record<string, string> = {
 export default function DataSourcesPage() {
   const { lang } = useLangStore();
   const { ready } = useClientAuth();
+  const router = useRouter();
   const [items, setItems] = useState<DataSourceItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [copyingId, setCopyingId] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -49,6 +53,19 @@ export default function DataSourcesPage() {
   useEffect(() => {
     if (ready) load();
   }, [ready, load]);
+
+  const copySource = async (sourceId: string) => {
+    setCopyingId(sourceId);
+    try {
+      const { data } = await dataSourcesApi.duplicate(sourceId);
+      toast.success(lang === "zh" ? "已复制，正在打开副本" : "Copied");
+      router.push(`/data-sources/${(data as { id: string }).id}`);
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || (lang === "zh" ? "复制失败" : "Copy failed")));
+    } finally {
+      setCopyingId("");
+    }
+  };
 
   return (
     <div className="mx-auto max-w-5xl p-6">
@@ -88,13 +105,12 @@ export default function DataSourcesPage() {
       ) : (
         <div className="grid gap-4">
           {items.map((ds) => (
-            <Link
+            <div
               key={ds.id}
-              href={`/data-sources/${ds.id}`}
-              className="theme-surface block rounded-xl border theme-border p-4 transition hover:border-blue-400/50"
+              className="theme-surface rounded-xl border theme-border p-4 transition hover:border-blue-400/50"
             >
               <div className="flex items-start justify-between gap-4">
-                <div>
+                <Link href={`/data-sources/${ds.id}`} className="min-w-0 flex-1">
                   <h2 className="font-medium theme-text">{ds.name}</h2>
                   <p className="mt-1 text-sm theme-muted">
                     {DRIVER_LABEL[ds.driver] || ds.driver} · {ds.host} / {ds.database}
@@ -104,12 +120,31 @@ export default function DataSourcesPage() {
                     {ds.agent_id ? " · Agent" : ""}
                     {ds.employee_id ? " · Employee" : ""}
                   </p>
+                </Link>
+                <div className="flex flex-col items-end gap-2">
+                  <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-xs text-green-600">
+                    {ds.status}
+                  </span>
+                  {ds.can_manage && (
+                    <div className="flex gap-2">
+                      <Link href={`/data-sources/${ds.id}?edit=1`} className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs">
+                        <Pencil className="h-3.5 w-3.5" />
+                        {lang === "zh" ? "修改" : "Edit"}
+                      </Link>
+                      <button
+                        type="button"
+                        disabled={copyingId === ds.id}
+                        onClick={() => copySource(ds.id)}
+                        className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        {copyingId === ds.id ? (lang === "zh" ? "复制中…" : "Copying…") : (lang === "zh" ? "复制" : "Copy")}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-xs text-green-600">
-                  {ds.status}
-                </span>
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       )}

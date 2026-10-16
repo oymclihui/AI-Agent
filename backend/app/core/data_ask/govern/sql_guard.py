@@ -17,8 +17,32 @@ _FORBIDDEN = re.compile(
 )
 _MULTI_STMT = re.compile(r";\s*\S")
 
+# sqlglot 26 dialect names. vastbase is PostgreSQL-compatible. HANA is not
+# bundled; Oracle is the closest parser for quoted identifiers.
+_DIALECT_MAP = {
+    "postgresql": "postgres",
+    "postgres": "postgres",
+    "pg": "postgres",
+    "vastbase": "postgres",
+    "mysql": "mysql",
+    "doris": "doris",
+    "starrocks": "starrocks",
+    "hive": "hive",
+    "hana": "oracle",
+}
 
-def validate_select_sql(sql: str, *, allowed_tables: set[str] | None = None) -> tuple[bool, str]:
+
+def sqlglot_dialect(driver: str | None) -> str:
+    key = (driver or "postgres").strip().lower()
+    return _DIALECT_MAP.get(key, "postgres")
+
+
+def validate_select_sql(
+    sql: str,
+    *,
+    allowed_tables: set[str] | None = None,
+    dialect: str | None = None,
+) -> tuple[bool, str]:
     text = (sql or "").strip()
     if not text:
         return False, "SQL is empty"
@@ -31,7 +55,7 @@ def validate_select_sql(sql: str, *, allowed_tables: set[str] | None = None) -> 
         return False, "Query must start with SELECT or WITH"
 
     if _HAS_SQLGLOT:
-        ok, msg, refs = _validate_with_sqlglot(text)
+        ok, msg, refs = _validate_with_sqlglot(text, sqlglot_dialect(dialect))
         if not ok:
             return False, msg
     else:
@@ -44,11 +68,11 @@ def validate_select_sql(sql: str, *, allowed_tables: set[str] | None = None) -> 
     return True, "OK"
 
 
-def _validate_with_sqlglot(text: str) -> tuple[bool, str, set[str]]:
+def _validate_with_sqlglot(text: str, dialect: str) -> tuple[bool, str, set[str]]:
     try:
-        parsed = sqlglot.parse_one(text, read="postgres")
+        parsed = sqlglot.parse_one(text, read=dialect)
     except Exception as exc:
-        return False, f"Invalid SQL: {exc}", set()
+        return False, f"Invalid SQL ({dialect}): {exc}", set()
 
     if parsed.find(exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create, exp.Alter):
         return False, "Only SELECT queries are allowed", set()

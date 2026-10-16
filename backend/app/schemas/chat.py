@@ -39,7 +39,7 @@ class ConversationCreate(BaseModel):
     system_prompt: Optional[str] = None
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
-    web_search_enabled: bool = False
+    web_search_enabled: bool = True
     response_style: ResponseStyleLiteral = "balanced"
     chat_mode: Literal["single", "group", "data_ask"] = "single"
     group_config: Optional[GroupChatConfig] = None
@@ -74,7 +74,7 @@ class ConversationResponse(BaseModel):
     is_active: bool
     model_config_id: Optional[str] = None
     connector_id: Optional[str] = None
-    web_search_enabled: bool = False
+    web_search_enabled: bool = True
     response_style: str = "balanced"
     chat_mode: str = "single"
     group_config: Optional[dict[str, Any]] = None
@@ -105,7 +105,11 @@ class ConversationResponse(BaseModel):
             skills_config=conv.skills_config or [],
             memory_type=conv.memory_type,
             is_active=conv.is_active,
-            model_config_id=meta.get("model_config_id"),
+            model_config_id=(
+                f"mine:{meta.get('personal_provider')}:{meta.get('personal_model_id')}"
+                if meta.get("personal_provider") and meta.get("personal_model_id")
+                else meta.get("model_config_id")
+            ),
             connector_id=meta.get("connector_id"),
             web_search_enabled=bool(meta.get("web_search_enabled")),
             response_style=str(meta.get("response_style") or "balanced"),
@@ -133,6 +137,7 @@ class MessageResponse(BaseModel):
     content: str
     tool_calls: Optional[list[dict]] = None
     token_usage: Optional[dict] = None
+    charts_data: Optional[list[dict]] = None
     metadata_: dict[str, Any] = Field(
         default_factory=dict,
         validation_alias="metadata_",

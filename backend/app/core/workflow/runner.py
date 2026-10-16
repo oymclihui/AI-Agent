@@ -11,6 +11,7 @@ from app.core.agents.base import AgentDefinition
 from app.core.artifacts import collect_artifacts_from_output, merge_artifacts
 from app.core.tools.registry import ToolRegistry
 from app.core.workflow.engine import WorkflowBuilder, WorkflowEngine
+from app.core.workflow.langgraph_engine import LangGraphWorkflowEngine
 from app.db.base import generate_uuid
 from app.db.models import Agent as AgentModel, ExecutionStatus, Workflow as WorkflowModel, WorkflowExecution
 
@@ -47,7 +48,12 @@ async def execute_workflow_by_id(
         agent_registry[agent_model.name] = definition
 
     graph = await WorkflowBuilder.build(workflow, tool_registry, agent_registry)
-    engine = WorkflowEngine(graph)
+    # lg5: Use LangGraph StateGraph engine (falls back to custom engine on error)
+    use_langgraph = True
+    if use_langgraph:
+        engine = LangGraphWorkflowEngine(graph, max_steps=100)
+    else:
+        engine = WorkflowEngine(graph)
 
     execution: WorkflowExecution | None = None
     if persist_execution:

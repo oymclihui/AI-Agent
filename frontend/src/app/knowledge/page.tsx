@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Database, Upload, Trash2, Search, FileText, Loader2, X, Eye, Settings, PlugZap, FolderOpen, Building2, HardDrive } from "lucide-react";
+import { Plus, Database, Upload, Trash2, Search, FileText, Loader2, X, Eye, FolderOpen, HardDrive, Shield } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import { knowledgeApi, modelsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
@@ -14,10 +14,17 @@ interface KB {
   name: string;
   description: string | null;
   status: string;
+  source_type: string;
   document_count: number;
   embedding_model: string;
-  source_type?: "local" | "byd_kms";
-  byd_kms?: { api_url: string; user_id: string; has_api_key: boolean } | null;
+  visibility?: string;
+  can_manage?: boolean;
+  grant_count?: number;
+}
+interface KbGrant {
+  grantee_type: string;
+  grantee_id: string;
+  label: string;
 }
 interface Doc {
   id: string;
@@ -26,6 +33,9 @@ interface Doc {
   status: string;
   chunk_count: number;
   file_size: number | null;
+  stage?: string;
+  stages?: Record<string, string>;
+  stage_error?: string;
 }
 interface DocContent {
   id: string;
@@ -38,22 +48,8 @@ interface DocContent {
 interface ModelOpt { model: string; type: string; }
 
 const FALLBACK_EMBEDDINGS = ["nomic-embed-text", "nomic-embed-text-v2-moe", "qwen3-embedding:0.6b", "bge-m3"];
-const DEFAULT_BYD_KMS_URL = "https://kms-api.byd.com/open-api/1.0/llm/v1/rag-qa";
 
-type KbSourceType = "local" | "byd_kms";
-type ListFilter = "all" | KbSourceType;
-
-interface BydKmsForm {
-  api_url: string;
-  user_id: string;
-  api_key: string;
-}
-
-const EMPTY_BYD_KMS: BydKmsForm = {
-  api_url: DEFAULT_BYD_KMS_URL,
-  user_id: "",
-  api_key: "",
-};
+type ListFilter = "all" | "local";
 
 function isMarkdown(fileType: string, filename: string) {
   const ext = filename.split(".").pop()?.toLowerCase() || fileType.toLowerCase();
@@ -78,24 +74,41 @@ export default function KnowledgePage() {
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [testingByd, setTestingByd] = useState(false);
   const [embedOptions, setEmbedOptions] = useState<string[]>(FALLBACK_EMBEDDINGS);
-  const [sourceType, setSourceType] = useState<KbSourceType>("local");
   const [listFilter, setListFilter] = useState<ListFilter>("all");
   const [kbFilterSearch, setKbFilterSearch] = useState("");
-  const [bydKmsForm, setBydKmsForm] = useState<BydKmsForm>(() => ({
-    ...EMPTY_BYD_KMS,
-    user_id: user?.employee_no || "",
-  }));
-  const [settingsBydForm, setSettingsBydForm] = useState<BydKmsForm>(EMPTY_BYD_KMS);
   const [form, setForm] = useState({ name: "", description: "", embedding_model: "nomic-embed-text", chunk_size: 1000, chunk_overlap: 200 });
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ content: string; score: number; document_name: string }[]>([]);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [faqOpen, setFaqOpen] = useState(false);
+  const [faqRows, setFaqRows] = useState<{ id: string; standard_question: string; answer: string }[]>([]);
+  const [faqQuestion, setFaqQuestion] = useState("");
+  const [faqSimilar, setFaqSimilar] = useState("");
+  const [faqNegative, setFaqNegative] = useState("");
+  const [faqAnswer, setFaqAnswer] = useState("");
+  const [wecomOpen, setWecomOpen] = useState(false);
+  const [wecomEnabled, setWecomEnabled] = useState(false);
+  const [wecomCorp, setWecomCorp] = useState("");
+  const [wecomSecret, setWecomSecret] = useState("");
+  const [wecomDocsText, setWecomDocsText] = useState("");
+  const [wecomStatus, setWecomStatus] = useState("");
+  const [shareVisibility, setShareVisibility] = useState<"private" | "public">("private");
+  const [shareGrants, setShareGrants] = useState<KbGrant[]>([]);
+  const [shareUsers, setShareUsers] = useState<{ id: string; display_name: string; employee_no?: string | null }[]>([]);
+  const [shareDepts, setShareDepts] = useState<{ id: string; name: string }[]>([]);
+  const [shareQuery, setShareQuery] = useState("");
+  const [shareDeptId, setShareDeptId] = useState("");
+  const [shareSaving, setShareSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const accessText = (kb: KB) => {
+    if (kb.visibility === "public") return lang === "zh" ? "公开" : "Public";
+    if ((kb.grant_count || 0) > 0) return lang === "zh" ? "已共享" : "Shared";
+    return lang === "zh" ? "私有" : "Private";
+  };
 
   const load = async () => {
     try {
@@ -123,107 +136,11 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     const f = new URLSearchParams(window.location.search).get("filter");
-    if (f === "local" || f === "byd_kms") setListFilter(f);
+    if (f === "local" || f === "all") setListFilter(f as ListFilter);
   }, []);
 
-  useEffect(() => {
-    if (user?.employee_no && !bydKmsForm.user_id) {
-      setBydKmsForm((f) => ({ ...f, user_id: user.employee_no || "" }));
-    }
-  }, [user?.employee_no, bydKmsForm.user_id]);
-
-  const isBydKb = activeKbMeta?.source_type === "byd_kms";
-
-  const openCreateModal = (preset: KbSourceType = "local") => {
-    setSourceType(preset);
-    setBydKmsForm({ ...EMPTY_BYD_KMS, user_id: user?.employee_no || "" });
+  const openCreateModal = () => {
     setShowCreate(true);
-  };
-
-  const openSettings = () => {
-    if (!activeKbMeta?.byd_kms) return;
-    setSettingsBydForm({
-      api_url: activeKbMeta.byd_kms.api_url || DEFAULT_BYD_KMS_URL,
-      user_id: activeKbMeta.byd_kms.user_id || "",
-      api_key: "",
-    });
-    setShowSettings(true);
-  };
-
-  const runBydTest = async (cfg: BydKmsForm) => {
-    if (!cfg.user_id.trim()) {
-      toast.error(lang === "zh" ? "请填写 User ID" : "User ID is required");
-      return;
-    }
-    setTestingByd(true);
-    try {
-      const { data } = await knowledgeApi.testBydKms({
-        api_url: cfg.api_url.trim() || DEFAULT_BYD_KMS_URL,
-        user_id: cfg.user_id.trim(),
-        api_key: cfg.api_key.trim() || undefined,
-        test_query: lang === "zh" ? "你好" : "hello",
-      });
-      if (data.ok) {
-        const extra = data.preview ? `: ${String(data.preview).slice(0, 80)}` : "";
-        toast.success(`${k.bydKmsTestOk[lang]} (${data.latency_ms}ms)${extra}`);
-      } else {
-        toast.error(data.message ? `${k.bydKmsTestFail[lang]}: ${data.message}` : k.bydKmsTestFail[lang]);
-      }
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ? `${k.bydKmsTestFail[lang]}: ${detail}` : k.bydKmsTestFail[lang]);
-    } finally {
-      setTestingByd(false);
-    }
-  };
-
-  const saveBydSettings = async () => {
-    if (!activeKb) return;
-    if (!settingsBydForm.user_id.trim()) {
-      toast.error(lang === "zh" ? "请填写 User ID" : "User ID is required");
-      return;
-    }
-    setSavingSettings(true);
-    try {
-      const payload: Record<string, unknown> = {
-        byd_kms: {
-          api_url: settingsBydForm.api_url.trim() || DEFAULT_BYD_KMS_URL,
-          user_id: settingsBydForm.user_id.trim(),
-        },
-      };
-      if (settingsBydForm.api_key.trim()) {
-        (payload.byd_kms as Record<string, string>).api_key = settingsBydForm.api_key.trim();
-      }
-      const { data } = await knowledgeApi.update(activeKb, payload);
-      setActiveKbMeta(data);
-      setKbs((prev) => prev.map((item) => (item.id === data.id ? data : item)));
-      toast.success(k.bydKmsSaveOk[lang]);
-      setShowSettings(false);
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ? `${k.bydKmsSaveFail[lang]}: ${detail}` : k.bydKmsSaveFail[lang]);
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  const testActiveKbConnection = async () => {
-    if (!activeKb) return;
-    setTestingByd(true);
-    try {
-      const { data } = await knowledgeApi.testConnection(activeKb);
-      if (data.ok) {
-        const extra = data.preview ? `: ${String(data.preview).slice(0, 80)}` : "";
-        toast.success(`${k.bydKmsTestOk[lang]} (${data.latency_ms}ms)${extra}`);
-      } else {
-        toast.error(data.message ? `${k.bydKmsTestFail[lang]}: ${data.message}` : k.bydKmsTestFail[lang]);
-      }
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ? `${k.bydKmsTestFail[lang]}: ${detail}` : k.bydKmsTestFail[lang]);
-    } finally {
-      setTestingByd(false);
-    }
   };
 
   const closeViewer = () => {
@@ -265,35 +182,145 @@ export default function KnowledgePage() {
     }
   };
 
+  const openShare = async (kb: KB) => {
+    setShareOpen(true);
+    setShareQuery("");
+    setShareUsers([]);
+    setShareDeptId("");
+    try {
+      const [{ data: access }, { data: targets }] = await Promise.all([
+        knowledgeApi.access(kb.id),
+        knowledgeApi.shareTargets(""),
+      ]);
+      const row = access as { visibility?: string; grants?: KbGrant[] };
+      const targetRow = targets as { departments?: { id: string; name: string }[] };
+      setShareVisibility(row.visibility === "public" ? "public" : "private");
+      setShareGrants(row.grants || []);
+      setShareDepts(targetRow.departments || []);
+    } catch {
+      toast.error(lang === "zh" ? "权限加载失败" : "Failed to load access");
+      setShareOpen(false);
+    }
+  };
+
+  const findPeople = async () => {
+    if (!shareQuery.trim()) return;
+    const { data } = await knowledgeApi.shareTargets(shareQuery.trim());
+    setShareUsers((data as { users?: { id: string; display_name: string; employee_no?: string | null }[] }).users || []);
+  };
+
+  const addGrant = (grant: KbGrant) => {
+    setShareGrants((items) => (
+      items.some((item) => item.grantee_type === grant.grantee_type && item.grantee_id === grant.grantee_id)
+        ? items
+        : [...items, grant]
+    ));
+  };
+
+  const saveShare = async () => {
+    if (!activeKb) return;
+    setShareSaving(true);
+    try {
+      await knowledgeApi.saveAccess(activeKb, {
+        visibility: shareVisibility,
+        grants: shareGrants.map((item) => ({ grantee_type: item.grantee_type, grantee_id: item.grantee_id })),
+      });
+      toast.success(lang === "zh" ? "权限已保存" : "Access saved");
+      setShareOpen(false);
+      await load();
+      setActiveKbMeta((meta) => meta ? {
+        ...meta,
+        visibility: shareVisibility,
+        grant_count: shareGrants.length,
+      } : meta);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || (lang === "zh" ? "保存失败" : "Save failed"));
+    } finally {
+      setShareSaving(false);
+    }
+  };
+
+  const retryDoc = async (docId: string) => {
+    if (!activeKb) return;
+    try {
+      await knowledgeApi.retryDocument(activeKb, docId);
+      toast.success(lang === "zh" ? "已重新解析" : "Reindexed");
+      const { data } = await knowledgeApi.listDocuments(activeKb);
+      setDocs(data);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || (lang === "zh" ? "重建失败" : "Retry failed"));
+    }
+  };
+
+  const openFaq = async () => {
+    if (!activeKb) return;
+    setFaqOpen(true);
+    const { data } = await knowledgeApi.listFaq(activeKb);
+    setFaqRows(data || []);
+  };
+
+  const saveFaq = async () => {
+    if (!activeKb || !faqQuestion.trim() || !faqAnswer.trim()) return;
+    await knowledgeApi.createFaq(activeKb, {
+      standard_question: faqQuestion.trim(),
+      similar_questions: faqSimilar.split(/\n+/).map((item) => item.trim()).filter(Boolean),
+      negative_questions: faqNegative.split(/\n+/).map((item) => item.trim()).filter(Boolean),
+      answer: faqAnswer.trim(),
+      enabled: true,
+    });
+    setFaqQuestion("");
+    setFaqSimilar("");
+    setFaqNegative("");
+    setFaqAnswer("");
+    const { data } = await knowledgeApi.listFaq(activeKb);
+    setFaqRows(data || []);
+  };
+
+  const openWecom = async () => {
+    if (!activeKb) return;
+    setWecomOpen(true);
+    const { data } = await knowledgeApi.wecomDocs(activeKb);
+    setWecomEnabled(Boolean(data.enabled));
+    setWecomCorp(data.corp_id || "");
+    setWecomSecret("");
+    setWecomDocsText((data.doc_ids || []).join("\n"));
+    setWecomStatus(data.last_error || data.last_status || "");
+  };
+
+  const saveWecom = async (syncNow: boolean) => {
+    if (!activeKb) return;
+    const docIds = wecomDocsText.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+    await knowledgeApi.saveWecomDocs(activeKb, {
+      enabled: wecomEnabled,
+      corp_id: wecomCorp.trim(),
+      secret: wecomSecret,
+      doc_ids: docIds,
+    });
+    if (syncNow) {
+      const { data } = await knowledgeApi.syncWecomDocs(activeKb);
+      setWecomStatus(data.last_error || data.last_status || "");
+      const docs = await knowledgeApi.listDocuments(activeKb);
+      setDocs(docs.data);
+    }
+    toast.success(lang === "zh" ? "企微文档已保存" : "Saved");
+  };
+
   const create = async () => {
     if (!form.name.trim()) { toast.error(k.nameRequired[lang]); return; }
-    if (sourceType === "byd_kms" && !bydKmsForm.user_id.trim()) {
-      toast.error(lang === "zh" ? "请填写 User ID" : "User ID is required");
-      return;
-    }
     setCreating(true);
     try {
-      const payload: Record<string, unknown> = {
+      await knowledgeApi.create({
         name: form.name,
         description: form.description || undefined,
-        source_type: sourceType,
         embedding_model: form.embedding_model,
         chunk_size: form.chunk_size,
         chunk_overlap: form.chunk_overlap,
-      };
-      if (sourceType === "byd_kms") {
-        payload.byd_kms = {
-          api_url: bydKmsForm.api_url.trim() || DEFAULT_BYD_KMS_URL,
-          user_id: bydKmsForm.user_id.trim(),
-          ...(bydKmsForm.api_key.trim() ? { api_key: bydKmsForm.api_key.trim() } : {}),
-        };
-      }
-      await knowledgeApi.create(payload);
+      });
       toast.success(k.created[lang]);
       setShowCreate(false);
       setForm((f) => ({ ...f, name: "", description: "" }));
-      setSourceType("local");
-      setBydKmsForm({ ...EMPTY_BYD_KMS, user_id: user?.employee_no || "" });
       load();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -367,8 +394,8 @@ export default function KnowledgePage() {
 
   const filteredKbs = useMemo(() => {
     let list = kbs;
-    if (listFilter !== "all") {
-      list = list.filter((kb) => (kb.source_type || "local") === listFilter);
+    if (listFilter === "local") {
+      list = list.filter((kb) => (kb.source_type || "local") === "local");
     }
     const q = kbFilterSearch.trim().toLowerCase();
     if (q) {
@@ -381,9 +408,6 @@ export default function KnowledgePage() {
     return list;
   }, [kbs, listFilter, kbFilterSearch]);
 
-  const localKbs = filteredKbs.filter((kb) => kb.source_type !== "byd_kms");
-  const enterpriseKbs = filteredKbs.filter((kb) => kb.source_type === "byd_kms");
-
   const renderKbItem = (kb: KB) => (
     <button
       key={kb.id}
@@ -391,20 +415,18 @@ export default function KnowledgePage() {
       onClick={() => openKb(kb)}
       className={`knowledge-kb-item${activeKb === kb.id ? " knowledge-kb-item-active" : ""}`}
     >
-      <div className={`knowledge-kb-icon ${kb.source_type === "byd_kms" ? "knowledge-kb-icon-enterprise" : "knowledge-kb-icon-local"}`}>
-        {kb.source_type === "byd_kms" ? <Building2 className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+      <div className="knowledge-kb-icon knowledge-kb-icon-local">
+        <FolderOpen className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <p className="line-clamp-1 text-xs font-medium theme-text">{kb.name}</p>
-          <span className={`knowledge-kb-badge ${kb.source_type === "byd_kms" ? "knowledge-kb-badge-enterprise" : "knowledge-kb-badge-local"}`}>
-            {kb.source_type === "byd_kms" ? k.enterpriseBadge[lang] : k.localBadge[lang]}
+          <span className="knowledge-kb-badge knowledge-kb-badge-local">
+            {accessText(kb)}
           </span>
         </div>
         <p className="text-[10px] theme-muted">
-          {kb.source_type === "byd_kms"
-            ? k.sourceBydKms[lang]
-            : `${kb.document_count} ${k.documents[lang]}`}
+          {`${kb.document_count} ${k.documents[lang]}`}
         </p>
       </div>
     </button>
@@ -412,7 +434,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="knowledge-hub flex h-[calc(100vh-0px)] min-h-0">
-      {/* Sidebar — grouped by source */}
+      {/* Sidebar */}
       <div className="knowledge-sidebar">
         <div className="knowledge-sidebar-head">
           <div>
@@ -425,14 +447,14 @@ export default function KnowledgePage() {
         </div>
 
         <div className="knowledge-filter-tabs">
-          {(["all", "local", "byd_kms"] as ListFilter[]).map((f) => (
+          {(["all", "local"] as ListFilter[]).map((f) => (
             <button
               key={f}
               type="button"
               onClick={() => setListFilter(f)}
               className={`knowledge-filter-tab${listFilter === f ? " knowledge-filter-tab-active" : ""}`}
             >
-              {f === "all" ? k.tabAll[lang] : f === "local" ? k.tabLocal[lang] : k.tabEnterprise[lang]}
+              {f === "all" ? k.tabAll[lang] : k.tabLocal[lang]}
             </button>
           ))}
         </div>
@@ -453,32 +475,10 @@ export default function KnowledgePage() {
           ) : filteredKbs.length === 0 ? (
             <div className="knowledge-sidebar-empty">
               <p className="text-xs theme-muted">{k.noKB[lang]}</p>
-              <button type="button" onClick={() => openCreateModal("local")} className="knowledge-quick-link">
+              <button type="button" onClick={() => openCreateModal()} className="knowledge-quick-link">
                 <HardDrive className="h-3.5 w-3.5" /> {k.tabLocal[lang]}
               </button>
-              <button type="button" onClick={() => openCreateModal("byd_kms")} className="knowledge-quick-link">
-                <Building2 className="h-3.5 w-3.5" /> {k.tabEnterprise[lang]}
-              </button>
             </div>
-          ) : listFilter === "all" ? (
-            <>
-              {localKbs.length > 0 && (
-                <div className="knowledge-sidebar-section">
-                  <p className="knowledge-sidebar-section-title">
-                    <FolderOpen className="h-3.5 w-3.5" /> {k.sectionLocal[lang]}
-                  </p>
-                  {localKbs.map(renderKbItem)}
-                </div>
-              )}
-              {enterpriseKbs.length > 0 && (
-                <div className="knowledge-sidebar-section">
-                  <p className="knowledge-sidebar-section-title">
-                    <Building2 className="h-3.5 w-3.5" /> {k.sectionEnterprise[lang]}
-                  </p>
-                  {enterpriseKbs.map(renderKbItem)}
-                </div>
-              )}
-            </>
           ) : (
             filteredKbs.map(renderKbItem)
           )}
@@ -493,17 +493,11 @@ export default function KnowledgePage() {
             <Database className="mb-4 h-12 w-12 opacity-30" />
             <p className="mb-6 theme-muted">{k.selectKB[lang]}</p>
             <div className="knowledge-source-cards">
-              <button type="button" className="knowledge-source-card knowledge-source-local" onClick={() => openCreateModal("local")}>
+              <button type="button" className="knowledge-source-card knowledge-source-local" onClick={() => openCreateModal()}>
                 <div className="knowledge-source-card-icon"><FolderOpen className="h-6 w-6" /></div>
                 <h3>{k.sourceLocal[lang]}</h3>
                 <p>{k.sourceLocalDesc[lang]}</p>
                 <span className="knowledge-source-formats">{k.localFormats[lang]}</span>
-              </button>
-              <button type="button" className="knowledge-source-card knowledge-source-enterprise" onClick={() => openCreateModal("byd_kms")}>
-                <div className="knowledge-source-card-icon"><Building2 className="h-6 w-6" /></div>
-                <h3>{k.sourceBydKms[lang]}</h3>
-                <p>{k.sourceEnterpriseDesc[lang]}</p>
-                <span className="knowledge-source-formats">BYD KMS · RAG API</span>
               </button>
             </div>
           </div>
@@ -513,50 +507,34 @@ export default function KnowledgePage() {
               <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className={`knowledge-kb-icon-lg ${isBydKb ? "knowledge-kb-icon-enterprise" : "knowledge-kb-icon-local"}`}>
-                      {isBydKb ? <Building2 className="h-5 w-5" /> : <FolderOpen className="h-5 w-5" />}
+                    <div className="knowledge-kb-icon-lg knowledge-kb-icon-local">
+                      <FolderOpen className="h-5 w-5" />
                     </div>
                     <h2 className="text-lg font-semibold theme-text">{activeKbMeta.name}</h2>
-                    <span className={`knowledge-kb-badge ${isBydKb ? "knowledge-kb-badge-enterprise" : "knowledge-kb-badge-local"}`}>
-                      {isBydKb ? k.enterpriseBadge[lang] : k.localBadge[lang]}
+                    <span className="knowledge-kb-badge knowledge-kb-badge-local">
+                      {accessText(activeKbMeta)}
                     </span>
+                    {activeKbMeta.can_manage && (
+                      <button type="button" className="agents-btn-secondary px-2 py-1 text-xs" onClick={() => void openShare(activeKbMeta)}>
+                        <Shield className="h-3.5 w-3.5" /> {lang === "zh" ? "权限" : "Access"}
+                      </button>
+                    )}
+                    {activeKbMeta.can_manage && (
+                      <button type="button" className="agents-btn-secondary px-2 py-1 text-xs" onClick={() => void openFaq()}>
+                        {lang === "zh" ? "问答" : "FAQ"}
+                      </button>
+                    )}
+                    {activeKbMeta.can_manage && (
+                      <button type="button" className="agents-btn-secondary px-2 py-1 text-xs" onClick={() => void openWecom()}>
+                        {lang === "zh" ? "企微文档" : "WeCom"}
+                      </button>
+                    )}
                   </div>
                   {activeKbMeta.description && (
                     <p className="mt-1 text-sm text-slate-400">{activeKbMeta.description}</p>
                   )}
-                  {!isBydKb && (
-                    <p className="mt-1 text-xs text-slate-500">{activeKbMeta.embedding_model}</p>
-                  )}
-                  {isBydKb && activeKbMeta.byd_kms && (
-                    <p className="mt-1 text-xs text-slate-500">
-                      User ID: {activeKbMeta.byd_kms.user_id} · {activeKbMeta.byd_kms.api_url}
-                    </p>
-                  )}
-                  {isBydKb && (
-                    <p className="mt-2 text-xs text-slate-500">{k.bydKmsExternalHint[lang]}</p>
-                  )}
+                  <p className="mt-1 text-xs text-slate-500">{activeKbMeta.embedding_model}</p>
                 </div>
-                {isBydKb && (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={testActiveKbConnection}
-                      disabled={testingByd}
-                      className="flex items-center gap-1.5 rounded-lg border border-[#2d2d4e] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50"
-                    >
-                      {testingByd ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
-                      {testingByd ? k.bydKmsTesting[lang] : k.bydKmsTest[lang]}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={openSettings}
-                      className="flex items-center gap-1.5 rounded-lg border border-[#2d2d4e] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5"
-                    >
-                      <Settings className="h-3.5 w-3.5" />
-                      {k.bydKmsSettings[lang]}
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
@@ -573,12 +551,12 @@ export default function KnowledgePage() {
                 {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 {k.search[lang]}
               </button>
-              {!isBydKb && (
-                <button type="button" onClick={() => fileRef.current?.click()} className="agents-btn-secondary">
-                  <Upload className="h-4 w-4" /> {k.upload[lang]}
-                </button>
+              {activeKbMeta?.can_manage && (
+              <button type="button" onClick={() => fileRef.current?.click()} className="agents-btn-secondary">
+                <Upload className="h-4 w-4" /> {k.upload[lang]}
+              </button>
               )}
-              <input ref={fileRef} type="file" className="hidden" accept=".pdf,.docx,.txt,.md,.html" onChange={upload} />
+              <input ref={fileRef} type="file" className="hidden" accept=".pdf,.docx,.txt,.md,.html,.png,.jpg,.jpeg,.webp" onChange={upload} />
             </div>
 
             {searchResults.length > 0 && (
@@ -598,8 +576,6 @@ export default function KnowledgePage() {
               </div>
             )}
 
-            {!isBydKb && (
-              <>
             <h3 className="mb-3 text-sm font-semibold text-white">
               {k.documents[lang]} ({docs.length})
             </h3>
@@ -638,8 +614,13 @@ export default function KnowledgePage() {
                         <Eye className="h-3.5 w-3.5" /> {k.viewContent[lang]}
                       </span>
                       <span className={`rounded-full px-2 py-0.5 text-xs ${doc.status === "ready" ? "bg-green-500/20 text-green-400" : doc.status === "processing" ? "bg-yellow-500/20 text-yellow-400" : "bg-red-500/20 text-red-400"}`}>
-                        {doc.status}
+                        {doc.stage === "ready" ? "就绪" : doc.stage === "error" ? "失败" : doc.status}
                       </span>
+                      {doc.stage_error && <span className="max-w-[140px] truncate text-xs text-red-300" title={doc.stage_error}>{doc.stage_error}</span>}
+                      {activeKbMeta?.can_manage && (
+                        <button type="button" className="text-xs text-slate-400 hover:text-white" onClick={(e) => { e.stopPropagation(); void retryDoc(doc.id); }}>重建</button>
+                      )}
+                      {activeKbMeta?.can_manage && (
                       <button
                         type="button"
                         disabled={deletingDocId === doc.id}
@@ -653,6 +634,7 @@ export default function KnowledgePage() {
                           <Trash2 className="h-4 w-4" />
                         )}
                       </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -661,8 +643,6 @@ export default function KnowledgePage() {
 
             {!activeDoc && docs.length > 0 && (
               <p className="mt-4 text-xs text-slate-500">{k.clickToView[lang]}</p>
-            )}
-              </>
             )}
           </div>
         )}
@@ -703,32 +683,111 @@ export default function KnowledgePage() {
         </div>
       )}
 
+
+      {faqOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-3 text-lg font-semibold theme-text">问答条目</h2>
+            <input className="theme-input mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="标准问" value={faqQuestion} onChange={(e) => setFaqQuestion(e.target.value)} />
+            <textarea className="theme-input mb-2 w-full rounded-lg px-3 py-2 text-sm" rows={2} placeholder="相似问，一行一条" value={faqSimilar} onChange={(e) => setFaqSimilar(e.target.value)} />
+            <textarea className="theme-input mb-2 w-full rounded-lg px-3 py-2 text-sm" rows={2} placeholder="反例问，一行一条。命中后不使用这条答案" value={faqNegative} onChange={(e) => setFaqNegative(e.target.value)} />
+            <textarea className="theme-input mb-3 w-full rounded-lg px-3 py-2 text-sm" rows={3} placeholder="答案" value={faqAnswer} onChange={(e) => setFaqAnswer(e.target.value)} />
+            <button type="button" className="agents-btn-primary mb-3" onClick={() => void saveFaq()}>添加</button>
+            <div className="flex flex-col gap-2">
+              {faqRows.map((row) => (
+                <div key={row.id} className="flex items-start justify-between gap-2 text-sm">
+                  <span className="theme-text">{row.standard_question}</span>
+                  <button type="button" className="text-xs text-slate-400" onClick={() => { if (activeKb) { void knowledgeApi.deleteFaq(activeKb, row.id).then(() => setFaqRows((items) => items.filter((item) => item.id !== row.id))); } }}>删除</button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button type="button" className="text-sm theme-muted" onClick={() => setFaqOpen(false)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {wecomOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="theme-card w-full max-w-lg p-6">
+            <h2 className="mb-3 text-lg font-semibold theme-text">同步企业微信文档</h2>
+            <label className="mb-2 flex items-center gap-2 text-sm theme-text">
+              <input type="checkbox" checked={wecomEnabled} onChange={(e) => setWecomEnabled(e.target.checked)} /> 启用，每 15 分钟同步一次
+            </label>
+            <input className="theme-input mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="企业 ID" value={wecomCorp} onChange={(e) => setWecomCorp(e.target.value)} />
+            <input className="theme-input mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="文档应用 Secret，留空则保持原值" type="password" value={wecomSecret} onChange={(e) => setWecomSecret(e.target.value)} />
+            <textarea className="theme-input mb-2 w-full rounded-lg px-3 py-2 text-sm" rows={4} placeholder="文档 ID，一行一个" value={wecomDocsText} onChange={(e) => setWecomDocsText(e.target.value)} />
+            {wecomStatus && <p className="mb-2 text-xs theme-muted">{wecomStatus}</p>}
+            <div className="flex justify-end gap-3">
+              <button type="button" className="text-sm theme-muted" onClick={() => setWecomOpen(false)}>关闭</button>
+              <button type="button" className="agents-btn-secondary" onClick={() => void saveWecom(false)}>保存</button>
+              <button type="button" className="agents-btn-primary" onClick={() => void saveWecom(true)}>保存并同步</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {shareOpen && activeKbMeta && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-1 text-lg font-semibold theme-text">{lang === "zh" ? "资料库权限" : "Library access"}</h2>
+            <p className="mb-4 text-xs theme-muted">{activeKbMeta.name}</p>
+            <div className="mb-4 flex gap-2">
+              <button type="button" className={`rounded-lg px-3 py-1.5 text-sm ${shareVisibility === "private" ? "bg-blue-600 text-white" : "border theme-border theme-text"}`} onClick={() => setShareVisibility("private")}>
+                {lang === "zh" ? "私有" : "Private"}
+              </button>
+              <button type="button" className={`rounded-lg px-3 py-1.5 text-sm ${shareVisibility === "public" ? "bg-blue-600 text-white" : "border theme-border theme-text"}`} onClick={() => setShareVisibility("public")}>
+                {lang === "zh" ? "公开" : "Public"}
+              </button>
+            </div>
+            <p className="mb-3 text-xs theme-muted">
+              {lang === "zh"
+                ? "私有时只有自己和下面的个人、部门能看。公开后所有登录用户都能看。"
+                : "Private libraries are visible to you and the people or departments below. Public libraries are visible to every signed-in user."}
+            </p>
+            <div className="mb-3 flex gap-2">
+              <input className="theme-input flex-1 rounded-lg px-3 py-2 text-sm" placeholder={lang === "zh" ? "搜索姓名或工号" : "Name or employee no"} value={shareQuery} onChange={(e) => setShareQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void findPeople()} />
+              <button type="button" className="agents-btn-secondary" onClick={() => void findPeople()}>{lang === "zh" ? "查找" : "Find"}</button>
+            </div>
+            {shareUsers.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {shareUsers.map((person) => (
+                  <button key={person.id} type="button" className="rounded-full border theme-border px-2 py-1 text-xs theme-text" onClick={() => addGrant({ grantee_type: "user", grantee_id: person.id, label: person.employee_no ? `${person.display_name}（${person.employee_no}）` : person.display_name })}>
+                    {person.display_name}{person.employee_no ? ` ${person.employee_no}` : ""}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="mb-3 flex gap-2">
+              <select className="theme-input flex-1 rounded-lg px-3 py-2 text-sm" value={shareDeptId} onChange={(e) => setShareDeptId(e.target.value)}>
+                <option value="">{lang === "zh" ? "选择部门" : "Department"}</option>
+                {shareDepts.map((dept) => <option key={dept.id} value={dept.id}>{dept.name}</option>)}
+              </select>
+              <button type="button" className="agents-btn-secondary" onClick={() => {
+                const dept = shareDepts.find((item) => item.id === shareDeptId);
+                if (dept) addGrant({ grantee_type: "department", grantee_id: dept.id, label: dept.name });
+              }}>{lang === "zh" ? "添加部门" : "Add"}</button>
+            </div>
+            <div className="mb-4 flex flex-wrap gap-2">
+              {shareGrants.length === 0 ? <span className="text-xs theme-muted">{lang === "zh" ? "还没有共享对象" : "No grants"}</span> : shareGrants.map((grant) => (
+                <button key={`${grant.grantee_type}-${grant.grantee_id}`} type="button" className="rounded-full bg-blue-600/15 px-2 py-1 text-xs text-blue-300" onClick={() => setShareGrants((items) => items.filter((item) => !(item.grantee_type === grant.grantee_type && item.grantee_id === grant.grantee_id)))}>
+                  {grant.grantee_type === "department" ? (lang === "zh" ? "部门 " : "Dept ") : ""}{grant.label} ×
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setShareOpen(false)} className="text-sm theme-muted">{c.cancel[lang]}</button>
+              <button type="button" onClick={() => void saveShare()} disabled={shareSaving} className="agents-btn-primary disabled:opacity-50">
+                {shareSaving ? c.loading[lang] : (lang === "zh" ? "保存" : "Save")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
-            <h2 className="mb-1 text-lg font-semibold theme-text">{k.newKB[lang]}</h2>
-            <p className="mb-4 text-xs theme-muted">{k.pickSource[lang]}</p>
-            <div className="mb-4 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setSourceType("local")}
-                className={`knowledge-source-pick${sourceType === "local" ? " knowledge-source-pick-active" : ""}`}
-              >
-                <FolderOpen className="h-5 w-5" />
-                <span>{k.sourceLocal[lang]}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setSourceType("byd_kms")}
-                className={`knowledge-source-pick${sourceType === "byd_kms" ? " knowledge-source-pick-active" : ""}`}
-              >
-                <Building2 className="h-5 w-5" />
-                <span>{k.sourceBydKms[lang]}</span>
-              </button>
-            </div>
-            <p className="mb-3 text-[11px] theme-muted">
-              {sourceType === "local" ? k.sourceLocalDesc[lang] : k.sourceEnterpriseDesc[lang]}
-            </p>
+            <h2 className="mb-4 text-lg font-semibold theme-text">{k.newKB[lang]}</h2>
             <div className="space-y-3">
               <div>
                 <label className="mb-1 block text-xs text-slate-400">{c.name[lang]}</label>
@@ -738,117 +797,19 @@ export default function KnowledgePage() {
                 <label className="mb-1 block text-xs text-slate-400">{c.description[lang]}</label>
                 <input type="text" className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
               </div>
-              {sourceType === "local" ? (
-                <div>
-                  <label className="mb-1 block text-xs text-slate-400">{k.embeddingModel[lang]}</label>
-                  <select className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" value={form.embedding_model} onChange={(e) => setForm((f) => ({ ...f, embedding_model: e.target.value }))}>
-                    {embedOptions.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 space-y-3">
-                  <p className="text-xs font-medium text-blue-300">{k.bydKmsTitle[lang]}</p>
-                  <p className="text-[11px] text-slate-500">{k.bydKmsExternalHint[lang]}</p>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-400">{k.bydKmsUserId[lang]}</label>
-                    <input
-                      type="text"
-                      className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                      value={bydKmsForm.user_id}
-                      onChange={(e) => setBydKmsForm((f) => ({ ...f, user_id: e.target.value }))}
-                      placeholder={lang === "zh" ? "工号 / User ID" : "Employee no. / User ID"}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-400">{k.bydKmsApiUrl[lang]}</label>
-                    <input
-                      type="url"
-                      className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                      value={bydKmsForm.api_url}
-                      onChange={(e) => setBydKmsForm((f) => ({ ...f, api_url: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-400">{k.bydKmsApiKey[lang]}</label>
-                    <input
-                      type="password"
-                      className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                      value={bydKmsForm.api_key}
-                      onChange={(e) => setBydKmsForm((f) => ({ ...f, api_key: e.target.value }))}
-                      placeholder={k.bydKmsApiKeyHint[lang]}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => runBydTest(bydKmsForm)}
-                    disabled={testingByd}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#2d2d4e] px-3 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50"
-                  >
-                    {testingByd ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
-                    {testingByd ? k.bydKmsTesting[lang] : k.bydKmsTest[lang]}
-                  </button>
-                </div>
-              )}
+              <div>
+                <label className="mb-1 block text-xs text-slate-400">{k.embeddingModel[lang]}</label>
+                <select className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" value={form.embedding_model} onChange={(e) => setForm((f) => ({ ...f, embedding_model: e.target.value }))}>
+                  {embedOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button type="button" onClick={() => setShowCreate(false)} className="text-sm theme-muted">{c.cancel[lang]}</button>
               <button type="button" onClick={create} disabled={creating} className="agents-btn-primary disabled:opacity-50">
                 {creating ? c.loading[lang] : c.create[lang]}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-6">
-            <h2 className="mb-4 text-lg font-semibold text-white">{k.bydKmsSettings[lang]}</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs text-slate-400">{k.bydKmsUserId[lang]}</label>
-                <input
-                  type="text"
-                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                  value={settingsBydForm.user_id}
-                  onChange={(e) => setSettingsBydForm((f) => ({ ...f, user_id: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-slate-400">{k.bydKmsApiUrl[lang]}</label>
-                <input
-                  type="url"
-                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                  value={settingsBydForm.api_url}
-                  onChange={(e) => setSettingsBydForm((f) => ({ ...f, api_url: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-slate-400">{k.bydKmsApiKey[lang]}</label>
-                <input
-                  type="password"
-                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                  value={settingsBydForm.api_key}
-                  onChange={(e) => setSettingsBydForm((f) => ({ ...f, api_key: e.target.value }))}
-                  placeholder={activeKbMeta?.byd_kms?.has_api_key ? (lang === "zh" ? "留空则不修改" : "Leave empty to keep current") : k.bydKmsApiKeyHint[lang]}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => runBydTest(settingsBydForm)}
-                disabled={testingByd}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#2d2d4e] px-3 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50"
-              >
-                {testingByd ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
-                {testingByd ? k.bydKmsTesting[lang] : k.bydKmsTest[lang]}
-              </button>
-            </div>
-            <div className="mt-6 flex justify-end gap-3">
-              <button onClick={() => setShowSettings(false)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">{c.cancel[lang]}</button>
-              <button onClick={saveBydSettings} disabled={savingSettings} className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
-                {savingSettings ? c.loading[lang] : c.save[lang]}
               </button>
             </div>
           </div>

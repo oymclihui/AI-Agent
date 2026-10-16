@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     # Redis — optional; leave empty to disable Celery/Redis features
     REDIS_URL: str = ""
 
+    # Redis 缓存/限流专用连接（DB1，与 Celery broker 的 DB0 分离）；留空则自动从 REDIS_URL 推导 DB1
+    REDIS_CACHE_URL: str = ""
+
     # ChromaDB — "local" uses embedded persistent client, no server needed
     CHROMA_MODE: str = "local"           # "local" | "server"
     CHROMA_HOST: str = "localhost"
@@ -136,8 +139,8 @@ class Settings(BaseSettings):
     WEB_SEARCH_TIMEOUT: float = 10.0
 
     # Default model settings (fallback when DB has no reachable model yet)
-    DEFAULT_LLM_PROVIDER: str = "ollama"
-    DEFAULT_LLM_MODEL: str = "qwen3.6:35b"
+    DEFAULT_LLM_PROVIDER: str = "openai"
+    DEFAULT_LLM_MODEL: str = "qwen-plus"
     DEFAULT_EMBEDDING_MODEL: str = "nomic-embed-text"
     # On startup, probe active models and set the first reachable one as default
     AUTO_PICK_DEFAULT_MODEL: bool = True
@@ -162,11 +165,6 @@ class Settings(BaseSettings):
     BYD_DEEPSEEK_32B_BASE_URL: str = (
         "https://eisapi.byd.com/open-api/1.0/llm/v1/deepseek/stream"
     )
-
-    # BYD corporate KMS RAG (unit knowledge base)
-    BYD_KMS_DEFAULT_URL: str = "https://kms-api.byd.com/open-api/1.0/llm/v1/rag-qa"
-    BYD_KMS_API_KEY: Optional[str] = None
-    BYD_KMS_TIMEOUT_SECONDS: int = 30
 
     # Desktop automation (OpenAdapt sidecar)
     DESKTOP_REQUIRE_CONFIRMATION: bool = True
@@ -203,9 +201,9 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""
     SMTP_FROM_NAME: str = "AI-AGENT"
 
-    # Default IMAP for user mailbox tool (BYD corporate mail)
-    IMAP_HOST: str = "imap.byd.com"
-    IMAP_PORT: int = 1993
+    # Default IMAP for user mailbox tool (WeCom exmail)
+    IMAP_HOST: str = "imap.exmail.qq.com"
+    IMAP_PORT: int = 993
     IMAP_USE_SSL: bool = True
 
     # CORS
@@ -216,6 +214,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3001",
         "http://localhost:80",
     ]
+
+    # Anti-hallucination guardrail: injects a hard no-fabrication system message
+    ANTI_HALLUCINATION_ENABLED: bool = True
 
     class Config:
         env_file = str(_BACKEND_DIR / ".env")

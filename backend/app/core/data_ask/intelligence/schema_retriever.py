@@ -30,9 +30,17 @@ def rank_tables(question: str, tables: list[dict[str, Any]], *, top_k: int = 5) 
             cname = str(col.get("name") if isinstance(col, dict) else col).lower()
             if cname in qtok or any(tok in cname for tok in qtok):
                 score += 1.0
-            desc = str(col.get("description") or "").lower() if isinstance(col, dict) else ""
+            desc = ""
+            if isinstance(col, dict):
+                desc = str(col.get("description") or col.get("comment") or "").lower()
             if desc and any(tok in desc for tok in qtok):
-                score += 0.5
+                score += 0.8
+            if isinstance(col, dict):
+                for example in col.get("examples") or []:
+                    text = str(example).lower()
+                    if text and any(tok in text for tok in qtok):
+                        score += 1.2
+                        break
         for m in t.get("metrics") or []:
             if isinstance(m, dict):
                 for field in ("name", "definition"):

@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.config import settings
 from app.core.chat.export import (
@@ -408,7 +409,10 @@ JSON schema:
     meta = dict(conv.metadata_ or {})
     meta["deposit_draft"] = draft_record
     _set_conv_metadata(conv, meta)
-    await db.flush()
+    try:
+        await db.flush()
+    except StaleDataError as exc:
+        raise ValueError("对话已被删除或清空，无法保存沉淀结果。请重新打开对话后再分析。") from exc
 
     tasks_preview = []
     emp = draft_body.get("employee") if isinstance(draft_body.get("employee"), dict) else {}
@@ -671,5 +675,8 @@ async def confirm_conversation_deposit(
         "result": {k: v for k, v in result.items() if v is not None},
     }
     _set_conv_metadata(conv, meta)
-    await db.flush()
+    try:
+        await db.flush()
+    except StaleDataError as exc:
+        raise ValueError("对话已被删除或清空，无法保存沉淀结果。请重新打开对话后再确认。") from exc
     return result

@@ -75,5 +75,13 @@ class DataConnector(ABC):
     async def execute_select(self, sql: str, *, limit: int = 5000, timeout_s: int = 30) -> QueryResult:
         ...
 
+    async def find_shared_keys(
+        self,
+        columns: list[str],
+        exclude_tables: list[str],
+    ) -> list[dict[str, str]]:
+        """Other tables that contain one of these key columns. Default: none."""
+        return []
+
     async def close(self) -> None:
         pass

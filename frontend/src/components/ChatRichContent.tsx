@@ -14,6 +14,14 @@ import {
   stripIncompleteQaBlocks,
 } from "@/lib/qaIntentProtocol";
 
+/** Convert ```chart fenced blocks to [chart:{...}] inline notation. */
+function preprocessChartBlocks(content: string): string {
+  return content.replace(
+    /```chart\s*\n?(\{[\s\S]*?\})\s*```/g,
+    "[chart:$1]"
+  );
+}
+
 interface ChatRichContentProps {
   children: string;
   size?: MarkdownViewSize;
@@ -34,17 +42,18 @@ export default function ChatRichContent({
   choicesDisabled = false,
 }: ChatRichContentProps) {
   const raw = streaming ? stripIncompleteQaBlocks(children) : children;
-  if (!raw?.trim()) return null;
+  const processed = preprocessChartBlocks(raw);
+  if (!processed?.trim()) return null;
 
-  if (!hasQaIntentBlocks(raw)) {
+  if (!hasQaIntentBlocks(processed)) {
     return (
       <MarkdownView size={size} highlight={highlight}>
-        {raw}
+        {processed}
       </MarkdownView>
     );
   }
 
-  const segments = parseQaIntentContent(raw);
+  const segments = parseQaIntentContent(processed);
 
   return (
     <div className="chat-rich-content">

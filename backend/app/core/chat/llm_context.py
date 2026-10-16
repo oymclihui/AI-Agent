@@ -21,6 +21,18 @@ async def get_llm_for_conversation(
 ) -> BaseChatModel:
     meta = conv.metadata_ or {}
     style = response_style or meta.get("response_style")
+    personal_provider = meta.get("personal_provider")
+    personal_model = meta.get("personal_model_id")
+    if personal_provider and personal_model:
+        return await ModelRouter.get_llm(
+            provider=str(personal_provider),
+            model=str(personal_model),
+            db=db,
+            user_id=user_id,
+            temperature=temperature,
+            response_style=style,
+            streaming=streaming,
+        )
     model_config_id = meta.get("model_config_id")
     if model_config_id:
         cfg = await db.get(ModelConfig, str(model_config_id))
@@ -53,6 +65,13 @@ async def model_label_for_conversation(
     conv: Conversation,
 ) -> dict[str, Any]:
     meta = conv.metadata_ or {}
+    if meta.get("personal_provider") and meta.get("personal_model_id"):
+        return {
+            "id": None,
+            "name": f"我的 {meta.get('personal_provider')}/{meta.get('personal_model_id')}",
+            "provider": meta.get("personal_provider"),
+            "model_id": meta.get("personal_model_id"),
+        }
     model_config_id = meta.get("model_config_id")
     if model_config_id:
         cfg = await db.get(ModelConfig, str(model_config_id))

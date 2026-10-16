@@ -564,7 +564,7 @@ async def run_agent(
     task = Task(description=payload.task)
 
     from app.core.auth.context import set_current_user_id, reset_current_user_id
-    from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+    from app.core.harness.context import HarnessContext, ensure_session_directory, reset_harness_context, set_harness_context
 
     ctx = set_current_user_id(user.id)
 
@@ -578,7 +578,7 @@ async def run_agent(
     await db.flush()
 
     harness_token = set_harness_context(
-        HarnessContext(user_id=user.id, source="agent", source_id=execution.id)
+        HarnessContext(user_id=user.id, source="agent", source_id=execution.id, working_directory=ensure_session_directory(execution.id))
     )
 
     if payload.stream:

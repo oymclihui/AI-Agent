@@ -185,6 +185,13 @@ class DataSourceTestOut(BaseModel):
 class SchemaGraphOut(BaseModel):
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
+    related: list[dict[str, Any]] = Field(default_factory=list)
+    keys: list[str] = Field(default_factory=list)
+
+
+class DataAskHistoryTurn(BaseModel):
+    role: str = "user"
+    content: str = ""
 
 
 class DataAskQueryIn(BaseModel):
@@ -195,6 +202,7 @@ class DataAskQueryIn(BaseModel):
     execute: bool = True
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    history: list[DataAskHistoryTurn] = Field(default_factory=list)
 
 
 class DataAskQueryOut(BaseModel):
@@ -207,9 +215,13 @@ class DataAskQueryOut(BaseModel):
     row_count: int = 0
     truncated: bool = False
     chart: Optional[dict[str, Any]] = None
+    charts: Optional[list[dict[str, Any]]] = None
     generated_only: bool = False
     analysis_mode: str = "sql"
     files_released: bool = False
+    standalone_question: str = ""
+    clarification: str = ""
+    trace_id: Optional[int] = None
 
 
 class DataAskAuditLogOut(BaseModel):

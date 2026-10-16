@@ -24,6 +24,9 @@ _FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 
+# This runner only sees the frames it was given. It does not change the process directory.
+SANDBOX_SCOPE = "excel-frames-only"
+
 
 def load_frames(source_id: str, filenames: list[str]) -> dict[str, pd.DataFrame]:
     from app.core.data_ask.excel.introspect import _read_excel
@@ -120,6 +123,7 @@ def run_python_analysis(
             "row_count": int(len(result)),
             "truncated": len(result) > 500,
             "summary": "",
+            "sandbox": SANDBOX_SCOPE,
         }
 
     if not isinstance(result, dict):
@@ -135,4 +139,5 @@ def run_python_analysis(
         "row_count": len(rows),
         "truncated": bool(result.get("truncated", False)),
         "summary": summary,
+        "sandbox": SANDBOX_SCOPE,
     }

@@ -1,0 +1,903 @@
+"use client";
+
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  Ban,
+  CheckCircle2,
+  ClipboardList,
+  Gauge,
+  Hammer,
+  History,
+  Lightbulb,
+  Play,
+  Plus,
+  RefreshCw,
+  Trash2,
+  TrendingUp,
+  XCircle,
+} from "lucide-react";
+import toast from "react-hot-toast";
+import { dataSourcesApi, dsEvalApi, socraticApi, formatApiError } from "@/lib/api";
+import { ChartRenderer, type ChatChartData } from "@/components/ChartRenderer";
+import { useLangStore } from "@/lib/langStore";
+import { useClientAuth } from "@/hooks/useClientAuth";
+
+/* ── 类型：与后端 schemas/ds_eval.py 对齐 ─────────────── */
+interface DataSourceItem {
+  id: string;
+  name: string;
+  can_manage?: boolean;
+  agent_id?: string | null;
+}
+
+interface EvalSetItem {
+  id: string;
+  question: string;
+  category: string;
+  source: string;
+  difficulty: string;
+  active: boolean;
+  expected_signature: string | null;
+  signature_source: string | null;
+  expected_row_count: number | null;
+  note: string | null;
+  created_at: string | null;
+}
+
+interface EvalRun {
+  id: number;
+  agent_version: number | null;
+  trigger: string;
+  status: string;
+  note: string | null;
+  total: number;
+  passed: number;
+  sql_success_rate: number | null;
+  consistency_rate: number | null;
+  judge_score: number | null;
+  overall_score: number | null;
+  weak_categories: { category: string; total: number; fails: number }[];
+  error_message: string | null;
+  duration_ms: number | null;
+  created_at: string | null;
+}
+
+interface EvalRunItem {
+  qid: string;
+  question: string;
+  category: string;
+  sql_ok: boolean;
+  consistency: string | null;
+  judge_score: number | null;
+  judge_reason: string | null;
+  row_count: number | null;
+  expected_row_count: number | null;
+  duration_ms: number | null;
+  error: string | null;
+}
+
+interface Quality {
+  eval_set_size: number;
+  latest_run: EvalRun | null;
+  trend: {
+    run_id: number;
+    created_at: string | null;
+    overall_score: number | null;
+    sql_success_rate: number | null;
+    consistency_rate: number | null;
+    judge_score: number | null;
+  }[];
+  weak_categories: { category: string; total: number; fails: number }[];
+  promotion_gate: { sql_success_rate?: number; consistency_rate?: number; min_eval_set_size?: number };
+}
+
+interface Gaps {
+  trace_count: number;
+  eval_set_size: number;
+  categories: {
+    category: string;
+    trace_count: number;
+    eval_count: number;
+    status: string;
+    sample_metrics: string[];
+  }[];
+  suggestions: string[];
+}
+
+const CATEGORY_LABELS: Record<string, { zh: string; en: string }> = {
+  aggregation: { zh: "聚合汇总", en: "Aggregation" },
+  trend: { zh: "趋势变化", en: "Trend" },
+  comparison: { zh: "对比分析", en: "Comparison" },
+  ranking: { zh: "排名 TopN", en: "Ranking" },
+  ratio: { zh: "占比比率", en: "Ratio" },
+  detail: { zh: "明细查询", en: "Detail" },
+  forecast: { zh: "预测", en: "Forecast" },
+  ml: { zh: "机器学习", en: "ML" },
+};
+
+const GAP_STATUS_STYLES: Record<string, string> = {
+  covered: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  eval_gap: "bg-amber-50 text-amber-700 border-amber-300",
+  unexplored: "bg-gray-50 text-gray-500 border-gray-200",
+};
+
+const RUN_STATUS_STYLES: Record<string, string> = {
+  done: "bg-emerald-100 text-emerald-700 border-emerald-300",
+  running: "bg-blue-100 text-blue-700 border-blue-300",
+  pending: "bg-gray-100 text-gray-500 border-gray-300",
+  failed: "bg-red-100 text-red-600 border-red-300",
+};
+
+function pct(v: number | null | undefined): string {
+  return v === null || v === undefined ? "—" : `${(v * 100).toFixed(1)}%`;
+}
+
+export default function AgentQualityPage() {
+  const { lang } = useLangStore();
+  const { ready } = useClientAuth();
+
+  const [sources, setSources] = useState<DataSourceItem[]>([]);
+  const [sid, setSid] = useState("");
+  const [quality, setQuality] = useState<Quality | null>(null);
+  const [gaps, setGaps] = useState<Gaps | null>(null);
+  const [evalSet, setEvalSet] = useState<EvalSetItem[]>([]);
+  const [runs, setRuns] = useState<EvalRun[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [building, setBuilding] = useState(false);
+  const [runningEval, setRunningEval] = useState(false);
+  const [runningWeekly, setRunningWeekly] = useState(false);
+  const [expandedRun, setExpandedRun] = useState<number | null>(null);
+  const [runItems, setRunItems] = useState<EvalRunItem[]>([]);
+  const [newQuestion, setNewQuestion] = useState("");
+  /* ── S4 苏格拉底反问质量 ── */
+  const [socraticQuality, setSocraticQuality] = useState<any>(null);
+  const [socraticRuns, setSocraticRuns] = useState<any[]>([]);
+
+  const loadSocratic = useCallback(async () => {
+    try {
+      const { data } = await socraticApi.quality();
+      setSocraticQuality(data);
+    } catch { /* 静默 */ }
+  }, []);
+
+  const loadSocraticRuns = useCallback(async () => {
+    try {
+      const { data } = await socraticApi.runs();
+      setSocraticRuns((data as any[]) || []);
+    } catch { /* 静默 */ }
+  }, []);
+
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const t = lang === "zh" ? {
+    title: "质量看板",
+    subtitle: "回归考题库 · 自动评估流水线 · 弱项定位 · 每周进化闭环",
+    ds: "数据源",
+    build: "构建考题库",
+    building: "构建中...",
+    run: "跑回归评估",
+    running: "评估中...",
+    weekly: "每周进化",
+    weeklyRunning: "已提交",
+    kpiOverall: "综合质量分",
+    kpiSql: "SQL 成功率",
+    kpiCons: "结果一致率",
+    kpiJudge: "LLM 评分",
+    kpiSet: "考题数",
+    gate: "晋升门槛",
+    trend: "质量趋势",
+    weak: "弱项分布",
+    noWeak: "暂无弱项 — 全部类目通过",
+    gaps: "主动学习缺口",
+    traceCount: "近 90 天真实问数",
+    covered: "已覆盖",
+    evalGap: "考题缺口",
+    unexplored: "待探索",
+    relatedMetrics: "关联指标",
+    evalSetTitle: "回归考题库",
+    addPlaceholder: "手工补题：输入一个真实业务问题...",
+    add: "补题",
+    qCol: "考题",
+    catCol: "类目",
+    srcCol: "来源",
+    sigCol: "基线",
+    runsTitle: "评估运行历史",
+    noRuns: "暂无评估记录 — 构建考题库后点击「跑回归评估」",
+    noSet: "考题库为空 — 点击「构建考题库」从 golden 查询与正例自动扩充",
+    noQuality: "暂无质量数据",
+    firstRound: "首轮评估仅建立签名基线，下轮起验证一致性",
+    colId: "#",
+    colTrigger: "触发",
+    colStatus: "状态",
+    colTotal: "题数",
+    colPassed: "通过",
+    colSql: "SQL",
+    colCons: "一致性",
+    colJudge: "评分",
+    colOverall: "综合",
+    colDuration: "耗时",
+    colTime: "时间",
+    detailQuestion: "考题",
+    detailResult: "结果",
+    detailCons: "一致性",
+    detailJudge: "评分理由",
+    consExact: "一致",
+    consBaseline: "建基线",
+    consMismatch: "退化",
+    pass: "通过",
+    fail: "失败",
+    baseline: "已建基线",
+    noBaseline: "未建",
+    loading: "加载中...",
+    buildOk: "考题库构建完成",
+    runOk: "回归评估已提交，异步执行中",
+    weeklyOk: "每周进化闭环已提交（蒸馏→候选→回归→达标晋升）",
+    deleted: "已删除",
+    toggled: "已更新",
+    added: "已补题",
+    disable: "停用",
+    enable: "启用",
+  } : {
+    title: "Agent Quality",
+    subtitle: "Regression eval set · Auto eval pipeline · Weakness radar · Weekly evolution loop",
+    ds: "Data Source",
+    build: "Build Eval Set",
+    building: "Building...",
+    run: "Run Regression",
+    running: "Evaluating...",
+    weekly: "Weekly Evolution",
+    weeklyRunning: "Submitted",
+    kpiOverall: "Overall Score",
+    kpiSql: "SQL Success",
+    kpiCons: "Consistency",
+    kpiJudge: "LLM Judge",
+    kpiSet: "Eval Set Size",
+    gate: "Promotion Gate",
+    trend: "Quality Trend",
+    weak: "Weak Categories",
+    noWeak: "No weak categories — all passed",
+    gaps: "Active Learning Gaps",
+    traceCount: "Real queries (90d)",
+    covered: "Covered",
+    evalGap: "Eval Gap",
+    unexplored: "Unexplored",
+    relatedMetrics: "Related metrics",
+    evalSetTitle: "Regression Eval Set",
+    addPlaceholder: "Add a real business question...",
+    add: "Add",
+    qCol: "Question",
+    catCol: "Category",
+    srcCol: "Source",
+    sigCol: "Baseline",
+    runsTitle: "Eval Run History",
+    noRuns: "No runs yet — build the eval set, then click \"Run Regression\"",
+    noSet: "Eval set is empty — click \"Build Eval Set\" to grow from golden queries and positive examples",
+    noQuality: "No quality data yet",
+    firstRound: "First run only establishes signature baselines; consistency is verified from the next run",
+    colId: "#",
+    colTrigger: "Trigger",
+    colStatus: "Status",
+    colTotal: "Total",
+    colPassed: "Passed",
+    colSql: "SQL",
+    colCons: "Cons.",
+    colJudge: "Judge",
+    colOverall: "Overall",
+    colDuration: "Duration",
+    colTime: "Time",
+    detailQuestion: "Question",
+    detailResult: "Result",
+    detailCons: "Consistency",
+    detailJudge: "Judge Reason",
+    consExact: "Exact",
+    consBaseline: "Baseline",
+    consMismatch: "Mismatch",
+    pass: "Pass",
+    fail: "Fail",
+    baseline: "Baseline set",
+    noBaseline: "None",
+    loading: "Loading...",
+    buildOk: "Eval set built",
+    runOk: "Regression submitted, running asynchronously",
+    weeklyOk: "Weekly evolution submitted (distill → candidate → regression → promote)",
+    deleted: "Deleted",
+    toggled: "Updated",
+    added: "Added",
+    disable: "Disable",
+    enable: "Enable",
+  };
+
+  const catLabel = (c: string) => CATEGORY_LABELS[c]?.[lang] || c;
+
+  /* ── 数据源列表 ── */
+  useEffect(() => {
+    if (!ready) return;
+    dataSourcesApi
+      .list()
+      .then(({ data }) => {
+        const items = (data as { items: DataSourceItem[] }).items || [];
+        setSources(items);
+        if (items.length > 0) setSid((prev) => prev || items[0].id);
+      })
+      .catch(() => toast.error(lang === "zh" ? "数据源加载失败" : "Failed to load data sources"));
+  }, [ready, lang]);
+
+  /* ── 聚合加载（考题库 + 运行历史 + 质量 + 缺口）── */
+  const loadAll = useCallback(
+    async (silent = false) => {
+      if (!sid) return;
+      if (!silent) setLoading(true);
+      try {
+        const [setRes, runRes, qRes, gRes] = await Promise.all([
+          dsEvalApi.evalSet(sid),
+          dsEvalApi.runs(sid),
+          dsEvalApi.quality(sid),
+          dsEvalApi.gaps(sid),
+        ]);
+        setEvalSet((setRes.data as EvalSetItem[]) || []);
+        const runList = (runRes.data as EvalRun[]) || [];
+        setRuns(runList);
+        setQuality(qRes.data as Quality);
+        setGaps(gRes.data as Gaps);
+        // 有 pending/running 轮次则继续轮询
+        const active = runList.some((r) => r.status === "pending" || r.status === "running");
+        if (pollRef.current) clearTimeout(pollRef.current);
+        if (active) pollRef.current = setTimeout(() => loadAll(true), 5000);
+      } catch {
+        /* 列表页静默失败，保留旧数据 */
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [sid],
+  );
+
+  useEffect(() => {
+    loadAll();
+    loadSocratic();
+    loadSocraticRuns();
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, [loadAll, loadSocratic, loadSocraticRuns]);
+
+
+  /* ── 动作 ── */
+  const handleBuild = async () => {
+    setBuilding(true);
+    try {
+      const { data } = await dsEvalApi.buildEvalSet(sid);
+      const d = data as { created: number; set_size: number };
+      toast.success(`${t.buildOk}：+${d.created} / ${t.kpiSet} ${d.set_size}`);
+      await loadAll(true);
+    } catch (e) {
+      toast.error(formatApiError(e, "Build failed"));
+    } finally {
+      setBuilding(false);
+    }
+  };
+
+  const handleRun = async () => {
+    setRunningEval(true);
+    try {
+      await dsEvalApi.runEval(sid);
+      toast.success(t.runOk);
+      if (pollRef.current) clearTimeout(pollRef.current);
+      pollRef.current = setTimeout(() => loadAll(true), 3000);
+    } catch (e) {
+      toast.error(formatApiError(e, "Run failed"));
+    } finally {
+      setRunningEval(false);
+    }
+  };
+
+  const handleWeekly = async () => {
+    setRunningWeekly(true);
+    try {
+      await dsEvalApi.weekly();
+      toast.success(t.weeklyOk);
+    } catch (e) {
+      toast.error(formatApiError(e, "Weekly failed"));
+    } finally {
+      setRunningWeekly(false);
+    }
+  };
+
+  const handleAddQuestion = async () => {
+    const q = newQuestion.trim();
+    if (!q) return;
+    try {
+      await dsEvalApi.createEvalItem(sid, { question: q });
+      toast.success(t.added);
+      setNewQuestion("");
+      await loadAll(true);
+    } catch (e) {
+      toast.error(formatApiError(e, "Add failed"));
+    }
+  };
+
+  const handleToggle = async (item: EvalSetItem) => {
+    try {
+      await dsEvalApi.updateEvalItem(item.id, { active: !item.active });
+      toast.success(t.toggled);
+      await loadAll(true);
+    } catch (e) {
+      toast.error(formatApiError(e, "Update failed"));
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await dsEvalApi.deleteEvalItem(id);
+      toast.success(t.deleted);
+      await loadAll(true);
+    } catch (e) {
+      toast.error(formatApiError(e, "Delete failed"));
+    }
+  };
+
+  const handleExpandRun = async (rid: number) => {
+    if (expandedRun === rid) {
+      setExpandedRun(null);
+      setRunItems([]);
+      return;
+    }
+    setExpandedRun(rid);
+    try {
+      const { data } = await dsEvalApi.runDetail(rid);
+      setRunItems(((data as { items?: EvalRunItem[] }).items || []) as EvalRunItem[]);
+    } catch {
+      setRunItems([]);
+    }
+  };
+
+  const latest = quality?.latest_run || null;
+  const gate = quality?.promotion_gate || {};
+
+  /* ── 趋势图数据 ── */
+  const trend = quality?.trend || [];
+  const trendChart: ChatChartData = {
+    type: "line",
+    title: t.trend,
+    labels: trend.map((p) => `#${p.run_id}`),
+    datasets: [
+      { label: t.kpiOverall, data: trend.map((p) => Number((p.overall_score ?? 0).toFixed(4))) },
+      { label: t.kpiSql, data: trend.map((p) => Number((p.sql_success_rate ?? 0).toFixed(4))) },
+      { label: t.kpiCons, data: trend.map((p) => Number((p.consistency_rate ?? 0).toFixed(4))) },
+      { label: t.kpiJudge, data: trend.map((p) => Number((p.judge_score ?? 0).toFixed(4))) },
+    ],
+  };
+
+  /* ── 弱项图数据 ── */
+  const weak = quality?.weak_categories || [];
+  const weakChart: ChatChartData = {
+    type: "bar",
+    horizontal: true,
+    title: t.weak,
+    labels: weak.map((w) => catLabel(w.category)),
+    datasets: [{ label: t.fail, data: weak.map((w) => w.fails) }],
+  };
+
+  if (loading && sources.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-gray-400 text-lg">{t.loading}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl p-6 space-y-6">
+      {/* Header + 动作按钮 */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold">
+            <Gauge className="h-7 w-7 text-indigo-500" />
+            {t.title}
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">{t.subtitle}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleBuild}
+            disabled={building || !sid}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-300 text-indigo-600 text-sm hover:bg-indigo-50 disabled:opacity-50"
+          >
+            <Hammer className="h-4 w-4" />
+            {building ? t.building : t.build}
+          </button>
+          <button
+            onClick={handleRun}
+            disabled={runningEval || !sid || (quality?.eval_set_size ?? 0) === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500 text-white text-sm hover:bg-indigo-600 disabled:opacity-50"
+          >
+            <Play className="h-4 w-4" />
+            {runningEval ? t.running : t.run}
+          </button>
+          <button
+            onClick={handleWeekly}
+            disabled={runningWeekly}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-600 text-sm hover:bg-emerald-50 disabled:opacity-50"
+          >
+            <RefreshCw className="h-4 w-4" />
+            {runningWeekly ? t.weeklyRunning : t.weekly}
+          </button>
+        </div>
+      </div>
+
+      {/* 数据源选择器 */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-sm text-gray-500">{t.ds}:</span>
+        {sources.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSid(s.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+              sid === s.id ? "bg-indigo-50 border-indigo-300 text-indigo-600" : "border-gray-200 hover:border-indigo-200"
+            }`}
+          >
+            {s.name}
+            {s.agent_id ? " · Agent" : ""}
+          </button>
+        ))}
+      </div>
+
+      {/* KPI 卡 */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {[
+          { label: t.kpiOverall, value: latest ? pct(latest.overall_score) : "—", icon: Gauge },
+          { label: t.kpiSql, value: latest ? pct(latest.sql_success_rate) : "—", icon: CheckCircle2 },
+          { label: t.kpiCons, value: latest ? pct(latest.consistency_rate) : "—", icon: Activity },
+          { label: t.kpiJudge, value: latest ? pct(latest.judge_score) : "—", icon: Lightbulb },
+          { label: t.kpiSet, value: String(quality?.eval_set_size ?? 0), icon: ClipboardList },
+        ].map(({ label, value, icon: Icon }) => (
+          <div key={label} className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+              <Icon className="h-3.5 w-3.5 text-indigo-400" />
+              {label}
+            </div>
+            <div className="mt-1.5 text-2xl font-bold text-gray-800">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 晋升门槛提示 */}
+      {latest && (
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-2.5 text-sm text-indigo-700 flex items-center gap-2 flex-wrap">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            {t.gate}: SQL ≥ {pct(gate.sql_success_rate ?? null)} · {t.kpiCons} ≥ {pct(gate.consistency_rate ?? null)} · {t.kpiSet} ≥ {gate.min_eval_set_size ?? "—"}
+          </span>
+          {latest.consistency_rate === null && latest.status === "done" && (
+            <span className="text-amber-600">· {t.firstRound}</span>
+          )}
+        </div>
+      )}
+
+      {/* 趋势 + 弱项 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="rounded-xl border border-gray-200 bg-white p-5">
+          <h2 className="flex items-center gap-2 text-lg font-semibold mb-4">
+            <TrendingUp className="h-5 w-5 text-indigo-500" />
+            {t.trend}
+          </h2>
+          {trend.length > 0 ? (
+            <ChartRenderer chart={trendChart} />
+          ) : (
+            <div className="flex items-center justify-center h-48 text-gray-400 text-sm">{t.noQuality}</div>
+          )}
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-5">
+          <h2 className="flex items-center gap-2 text-lg font-semibold mb-4">
+            <AlertTriangle className="h-5 w-5 text-amber-500" />
+            {t.weak}
+          </h2>
+          {weak.length > 0 ? (
+            <ChartRenderer chart={weakChart} />
+          ) : (
+            <div className="flex items-center justify-center h-48 text-gray-400 text-sm">{t.noWeak}</div>
+          )}
+        </div>
+      </div>
+
+      {/* 主动学习缺口 */}
+      {gaps && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5">
+          <h2 className="flex items-center gap-2 text-lg font-semibold mb-1">
+            <Lightbulb className="h-5 w-5 text-indigo-500" />
+            {t.gaps}
+            <span className="text-sm font-normal text-gray-400">
+              · {t.traceCount} {gaps.trace_count}
+            </span>
+          </h2>
+          <div className="flex flex-wrap gap-2 mt-3">
+            {gaps.categories.map((c) => (
+              <div
+                key={c.category}
+                className={`px-3 py-1.5 rounded-lg border text-sm ${GAP_STATUS_STYLES[c.status] || ""}`}
+                title={
+                  c.sample_metrics.length > 0
+                    ? `${t.relatedMetrics}: ${c.sample_metrics.join(", ")}`
+                    : undefined
+                }
+              >
+                {catLabel(c.category)}
+                <span className="ml-1.5 text-xs opacity-75">
+                  {c.trace_count}Q / {c.eval_count}E ·{" "}
+                  {c.status === "covered" ? t.covered : c.status === "eval_gap" ? t.evalGap : t.unexplored}
+                </span>
+              </div>
+            ))}
+          </div>
+          {gaps.suggestions.length > 0 && (
+            <ul className="mt-3 space-y-1 text-sm text-amber-700">
+              {gaps.suggestions.map((s, i) => (
+                <li key={i} className="flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  {s}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* 考题库管理 */}
+      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <h2 className="flex items-center gap-2 text-lg font-semibold p-5 pb-3">
+          <ClipboardList className="h-5 w-5 text-indigo-500" />
+          {t.evalSetTitle}
+          <span className="text-sm font-normal text-gray-400">({evalSet.length})</span>
+        </h2>
+        <div className="flex items-center gap-2 px-5 pb-3">
+          <input
+            value={newQuestion}
+            onChange={(e) => setNewQuestion(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAddQuestion()}
+            placeholder={t.addPlaceholder}
+            className="flex-1 rounded-lg border border-gray-200 px-3 py-1.5 text-sm focus:border-indigo-300 focus:outline-none"
+          />
+          <button
+            onClick={handleAddQuestion}
+            disabled={!newQuestion.trim()}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-500 text-white text-sm hover:bg-indigo-600 disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" />
+            {t.add}
+          </button>
+        </div>
+        {evalSet.length === 0 ? (
+          <div className="px-5 pb-5 text-sm text-gray-400">{t.noSet}</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-t border-gray-100 text-left text-gray-500">
+                  <th className="px-4 py-2 font-medium">{t.qCol}</th>
+                  <th className="px-4 py-2 font-medium">{t.catCol}</th>
+                  <th className="px-4 py-2 font-medium">{t.srcCol}</th>
+                  <th className="px-4 py-2 font-medium">{t.sigCol}</th>
+                  <th className="px-4 py-2 font-medium w-24"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {evalSet.map((item) => (
+                  <tr key={item.id} className="border-t border-gray-50 hover:bg-gray-50">
+                    <td className="px-4 py-2 max-w-[360px] truncate" title={item.question}>
+                      {item.question}
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className="px-2 py-0.5 rounded-full text-xs bg-indigo-50 text-indigo-600 border border-indigo-200">
+                        {catLabel(item.category)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-gray-500 text-xs">{item.source}</td>
+                    <td className="px-4 py-2 text-xs">
+                      {item.expected_signature ? (
+                        <span className="text-emerald-600">{t.baseline} · {item.signature_source}</span>
+                      ) : (
+                        <span className="text-gray-400">{t.noBaseline}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button
+                          onClick={() => handleToggle(item)}
+                          className="p-1 rounded text-gray-400 hover:text-amber-600 hover:bg-amber-50"
+                          title={item.active ? t.disable : t.enable}
+                        >
+                          {item.active ? <Ban className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+                        </button>
+                        <button
+                          onClick={() => handleDelete(item.id)}
+                          className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 运行历史 */}
+      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <h2 className="flex items-center gap-2 text-lg font-semibold p-5 pb-3">
+          <History className="h-5 w-5 text-indigo-500" />
+          {t.runsTitle}
+          <span className="text-sm font-normal text-gray-400">({runs.length})</span>
+        </h2>
+        {runs.length === 0 ? (
+          <div className="px-5 pb-5 text-sm text-gray-400">{t.noRuns}</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-t border-gray-100 text-left text-gray-500">
+                  <th className="px-4 py-2 font-medium">{t.colId}</th>
+                  <th className="px-4 py-2 font-medium">{t.colTrigger}</th>
+                  <th className="px-4 py-2 font-medium">{t.colStatus}</th>
+                  <th className="px-4 py-2 font-medium">{t.colTotal}</th>
+                  <th className="px-4 py-2 font-medium">{t.colPassed}</th>
+                  <th className="px-4 py-2 font-medium">{t.colSql}</th>
+                  <th className="px-4 py-2 font-medium">{t.colCons}</th>
+                  <th className="px-4 py-2 font-medium">{t.colJudge}</th>
+                  <th className="px-4 py-2 font-medium">{t.colOverall}</th>
+                  <th className="px-4 py-2 font-medium">{t.colDuration}</th>
+                  <th className="px-4 py-2 font-medium">{t.colTime}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => (
+                  <Fragment key={r.id}>
+                    <tr
+                      onClick={() => r.status === "done" && handleExpandRun(r.id)}
+                      className={`border-t border-gray-50 ${r.status === "done" ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                    >
+                      <td className="px-4 py-2 text-gray-400">{r.id}</td>
+                      <td className="px-4 py-2 text-gray-600">
+                        {r.trigger}{r.agent_version ? ` · v${r.agent_version}` : ""}
+                        {r.note ? (
+                          <span
+                            className={`ml-1.5 inline-block max-w-[220px] truncate align-middle text-[11px] ${r.note.includes("P0A 候选") ? "text-indigo-500" : r.note.includes("P0A 基线") ? "text-emerald-600" : "text-gray-400"}`}
+                            title={r.note}
+                          >
+                            {r.note}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs border ${RUN_STATUS_STYLES[r.status] || ""}`}>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-gray-600">{r.total || "—"}</td>
+                      <td className="px-4 py-2 text-gray-600">{r.status === "done" ? r.passed : "—"}</td>
+                      <td className="px-4 py-2 font-mono text-gray-700">{pct(r.sql_success_rate)}</td>
+                      <td className="px-4 py-2 font-mono text-gray-700">{pct(r.consistency_rate)}</td>
+                      <td className="px-4 py-2 font-mono text-gray-700">{pct(r.judge_score)}</td>
+                      <td className="px-4 py-2 font-mono font-semibold text-indigo-600">{pct(r.overall_score)}</td>
+                      <td className="px-4 py-2 text-gray-600">{r.duration_ms ? `${(r.duration_ms / 1000).toFixed(1)}s` : "—"}</td>
+                      <td className="px-4 py-2 text-gray-400 whitespace-nowrap">
+                        {r.created_at?.slice(5, 19).replace("T", " ") ?? "—"}
+                      </td>
+                    </tr>
+                    {expandedRun === r.id && (
+                      <tr className="border-t border-gray-50 bg-gray-50/50">
+                        <td colSpan={11} className="px-4 py-3">
+                          <div className="space-y-1.5">
+                            {runItems.map((it) => (
+                              <div
+                                key={it.qid}
+                                className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs"
+                              >
+                                <span className={`mt-0.5 shrink-0 ${it.sql_ok ? "text-emerald-500" : "text-red-500"}`}>
+                                  {it.sql_ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-gray-700 truncate" title={it.question}>
+                                    {it.question}
+                                    <span className="ml-2 text-gray-400">{catLabel(it.category)}</span>
+                                  </div>
+                                  <div className="mt-0.5 text-gray-500 flex flex-wrap gap-x-3">
+                                    <span>
+                                      {t.detailCons}:{" "}
+                                      {it.consistency === "exact"
+                                        ? t.consExact
+                                        : it.consistency === "baseline"
+                                          ? t.consBaseline
+                                          : it.consistency === "mismatch"
+                                            ? t.consMismatch
+                                            : "—"}
+                                    </span>
+                                    <span>{t.detailResult}: {it.row_count ?? "—"} / {it.expected_row_count ?? "—"} rows</span>
+                                    {it.judge_score !== null && (
+                                      <span title={it.judge_reason || ""}>
+                                        {t.kpiJudge}: {it.judge_score}/10
+                                      </span>
+                                    )}
+                                    {it.error && <span className="text-red-500">{it.error}</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      {/* ── 苏格拉底反问质量 (S4) ── */}
+      <div className="mt-8 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+            <Lightbulb className="h-5 w-5 text-amber-500" />
+            苏格拉底反问质量
+          </h2>
+          <div className="flex gap-2">
+            <button onClick={() => socraticApi.buildEvalSet().then(() => { toast.success("考题库已蒸馏"); loadSocratic(); }).catch((e) => toast.error(formatApiError(e)))} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">蒸馏考题库</button>
+            <button onClick={() => socraticApi.runEval().then(() => { toast.success("评估已触发"); loadSocraticRuns(); }).catch((e) => toast.error(formatApiError(e)))} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">运行评估</button>
+            <button onClick={() => socraticApi.weekly().then(() => { toast.success("每周巡检完成"); loadSocratic(); }).catch((e) => toast.error(formatApiError(e)))} className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-600">每周进化</button>
+          </div>
+        </div>
+        {socraticQuality && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-4">
+            <div className="rounded-xl border border-gray-200 p-3">
+              <div className="text-xs text-gray-500">反问率</div>
+              <div className="text-xl font-semibold text-gray-800">{pct(socraticQuality.clarify_rate)}</div>
+              <div className="text-xs text-gray-400">{socraticQuality.total_clarify_events}/{socraticQuality.total_user_messages} 次</div>
+            </div>
+            <div className="rounded-xl border border-gray-200 p-3">
+              <div className="text-xs text-gray-500">澄清后解决率</div>
+              <div className="text-xl font-semibold text-gray-800">{pct(socraticQuality.resolve_rate)}</div>
+              <div className="text-xs text-gray-400">反问后有效补充</div>
+            </div>
+            <div className="rounded-xl border border-gray-200 p-3">
+              <div className="text-xs text-gray-500">误反问率</div>
+              <div className={`text-xl font-semibold ${socraticQuality.misclarify_rate <= 0.05 ? "text-emerald-600" : "text-red-600"}`}>{pct(socraticQuality.misclarify_rate)}</div>
+              <div className="text-xs text-gray-400">{socraticQuality.misclarify_rate <= 0.05 ? "达标 <=5%" : "超标"}</div>
+            </div>
+            <div className="rounded-xl border border-gray-200 p-3">
+              <div className="text-xs text-gray-500">平均收敛轮次</div>
+              <div className="text-xl font-semibold text-gray-800">{socraticQuality.avg_rounds.toFixed(2)}</div>
+              <div className="text-xs text-gray-400">轮</div>
+            </div>
+          </div>
+        )}
+        {socraticRuns.length > 0 && (
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 text-gray-500">
+                <tr><th className="px-3 py-2 text-left">Run</th><th className="px-3 py-2 text-left">状态</th><th className="px-3 py-2 text-left">通过/总数</th><th className="px-3 py-2 text-left">反问准确率</th><th className="px-3 py-2 text-left">直答准确率</th><th className="px-3 py-2 text-left">时间</th></tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {socraticRuns.map((r) => (
+                  <tr key={r.id} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 font-mono text-gray-600">#{r.id}</td>
+                    <td className="px-3 py-2"><span className={`rounded px-2 py-0.5 text-xs ${RUN_STATUS_STYLES[r.status] || RUN_STATUS_STYLES.pending}`}>{r.status}</span></td>
+                    <td className="px-3 py-2 font-mono">{r.passed}/{r.total}</td>
+                    <td className="px-3 py-2 font-mono text-indigo-600">{pct(r.clarify_accuracy)}</td>
+                    <td className="px-3 py-2 font-mono text-emerald-600">{pct(r.direct_accuracy)}</td>
+                    <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{r.created_at?.slice(5, 19).replace("T", " ") ?? "---"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      </div>
+    </div>
+  );
+}

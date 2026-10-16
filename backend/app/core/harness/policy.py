@@ -25,17 +25,37 @@ TOOL_RISK: dict[str, ToolRiskLevel] = {
     "web_search": ToolRiskLevel.L0_READ,
     "desktop_list_demos": ToolRiskLevel.L0_READ,
     "create_presentation": ToolRiskLevel.L1_PLATFORM,
+    "batch_parse_excel": ToolRiskLevel.L1_PLATFORM,
     "http_request": ToolRiskLevel.L2_EXTERNAL,
     "fetch_mail": ToolRiskLevel.L2_EXTERNAL,
     "desktop_replay": ToolRiskLevel.L2_EXTERNAL,
     "desktop_capture": ToolRiskLevel.L2_EXTERNAL,
 }
 
+# Declared scope for tools that touch the network, the desktop, or user files.
+TOOL_SANDBOX: dict[str, str] = {
+    "calculator": "read-only",
+    "get_datetime": "read-only",
+    "web_search": "read-only",
+    "desktop_list_demos": "read-only",
+    "create_presentation": "platform-files",
+    "batch_parse_excel": "excel-frames-only",
+    "http_request": "outbound-http-confirm",
+    "fetch_mail": "mailbox-confirm",
+    "desktop_replay": "desktop-confirm",
+    "desktop_capture": "desktop-confirm",
+}
+
 
 class ToolPolicy:
     @staticmethod
     def risk_for(tool_name: str) -> ToolRiskLevel:
-        return TOOL_RISK.get(tool_name, ToolRiskLevel.L1_PLATFORM)
+        # Unknown tools are external until someone classifies them.
+        return TOOL_RISK.get(tool_name, ToolRiskLevel.L2_EXTERNAL)
+
+    @staticmethod
+    def sandbox_for(tool_name: str) -> str:
+        return TOOL_SANDBOX.get(tool_name, "confirm-unknown")
 
     @staticmethod
     def requires_harness_confirmation(tool_name: str, *, auto_confirm: bool = False) -> bool:
@@ -50,7 +70,12 @@ class ToolPolicy:
 
     @staticmethod
     def list_tools_with_risk() -> list[dict[str, str]]:
+        names = sorted(set(TOOL_RISK) | set(TOOL_SANDBOX))
         return [
-            {"name": name, "risk_level": level.value}
-            for name, level in sorted(TOOL_RISK.items())
+            {
+                "name": name,
+                "risk_level": ToolPolicy.risk_for(name).value,
+                "sandbox": ToolPolicy.sandbox_for(name),
+            }
+            for name in names
         ]

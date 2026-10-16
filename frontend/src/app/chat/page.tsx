@@ -1,17 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe, Pencil, Download } from "lucide-react";
+import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe, Pencil, Download, Search } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
+import ClarifyCard from "@/components/chat/ClarifyCard";
+import DashboardCard, { type DashboardCardData } from "@/components/chat/DashboardCard";
+import { ChartRenderer, type ChatChartData } from "@/components/ChartRenderer";
 import { MessageCopyButton } from "@/components/MessageCopyButton";
+import { MessageTrainActions } from "@/components/MessageTrainActions";
 import { GroupChatPanel, getGroupConfigFromState } from "@/components/chat/GroupChatPanel";
 import { GroupChatMessageRow } from "@/components/chat/GroupChatMessageRow";
 import type { GroupChatTemplate, GroupOrchestration, GroupMessageMeta } from "@/lib/groupChat";
 import { buildGroupConfig } from "@/lib/groupChat";
-import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi, formatApiError, dataSourcesApi } from "@/lib/api";
+import { chatApi, agentsApi, streamChatResponse, streamChatResponseForm, knowledgeApi, skillsApi, modelsApi, authApi, desktopAutomationApi, harnessApi, formatApiError, dataSourcesApi, integrationsApi, type ClarifyPayload } from "@/lib/api";
 import { getAuthToken } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
@@ -50,7 +54,22 @@ interface Message {
   role: string;
   content: string;
   created_at: string;
-  metadata?: { attachments?: AttachmentMeta[]; thinking?: string } & GroupMessageMeta;
+  metadata?: {
+    attachments?: AttachmentMeta[];
+    thinking?: string;
+    citations?: { document_id?: string; document_name?: string; snippet?: string }[];
+    harness_trace?: HarnessTraceEvent[];
+    subtask_id?: string;
+    data_ask?: boolean;
+    data_source_id?: string;
+    question?: string;
+    sql?: string | null;
+    trace_id?: number | null;
+    memory_hits?: number;
+    dashboard_card?: DashboardCardData;
+  } & GroupMessageMeta;
+  chartData?: ChatChartData[] | null;
+  clarify?: ClarifyPayload | null;
 }
 
 interface Conversation {
@@ -109,6 +128,57 @@ interface DepositTaskPreview {
   prompt_preview?: string;
 }
 
+interface HarnessTraceEvent {
+  event: string;
+  tool?: string;
+  phase?: string;
+  status?: string;
+  preview?: string;
+}
+
+function harnessStepLabel(step: HarnessTraceEvent): string {
+  const names: Record<string, string> = {
+    "turn/start": "回合开始",
+    "request/header": "模型请求",
+    "tool/call": "调用工具",
+    "tool/execute": "执行工具",
+    "tool/result": "工具结果",
+    "tool/hold": "等待确认",
+    "turn/cancel": "已停止",
+    "turn/end": "回合结束",
+  };
+  const title = names[step.event] || step.event;
+  const tool = step.tool ? ` · ${step.tool}` : "";
+  const phases: Record<string, string> = {
+    "pre-execute": "执行前",
+    execute: "执行中",
+    "post-execute": "执行后",
+  };
+  const statuses: Record<string, string> = {
+    completed: "已完成",
+    cancelled: "已取消",
+    error: "出错",
+    running: "进行中",
+  };
+  const phase = step.phase ? ` · ${phases[step.phase] || step.phase}` : "";
+  const status = step.status ? ` · ${statuses[step.status] || step.status}` : "";
+  return `${title}${tool}${phase}${status}`;
+}
+
+function HarnessTraceBlock({ steps }: { steps: HarnessTraceEvent[] }) {
+  if (!steps.length) return null;
+  return (
+    <details className="mb-2 rounded-lg border border-slate-600/40 bg-black/20 px-3 py-2 text-xs text-slate-400">
+      <summary className="cursor-pointer select-none text-slate-300">工具过程</summary>
+      <ul className="mt-1 space-y-0.5">
+        {steps.map((step, index) => (
+          <li key={`${step.event}-${index}`}>{harnessStepLabel(step)}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function ThinkingBlock({
   content,
   lang,
@@ -163,6 +233,12 @@ interface DepositOffer {
   };
 }
 
+const EXCEL_SOURCE_DRIVERS = new Set(["excel_folder", "excel_template"]);
+
+function isExcelSourceDriver(driver?: string | null) {
+  return !!driver && EXCEL_SOURCE_DRIVERS.has(driver);
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -185,11 +261,15 @@ export default function ChatPage() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const suggestAbortRef = useRef<AbortController | null>(null);
+  const [memPool, setMemPool] = useState<string[]>([]);
+  const [memSugIdx, setMemSugIdx] = useState(-1);
+  const [memHide, setMemHide] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
   const userStoppedRef = useRef(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
+  const [streamingHarness, setStreamingHarness] = useState<HarnessTraceEvent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [chatMode, setChatMode] = useState<"single" | "group">("single");
   const [groupAgentIds, setGroupAgentIds] = useState<string[]>([]);
@@ -207,9 +287,10 @@ export default function ChatPage() {
   const [selectedKbId, setSelectedKbId] = useState<string>("");
   const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>("");
   const [selectedConnector, setSelectedConnector] = useState<string>("");
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [responseStyle, setResponseStyle] = useState<ResponseStyle>("balanced");
   const [modelConfigs, setModelConfigs] = useState<ModelConfigOption[]>([]);
+  const [personalModels, setPersonalModels] = useState<{ id: string; provider: string; model_id?: string | null; is_default?: boolean }[]>([]);
   const [mailboxSaved, setMailboxSaved] = useState<{
     email: string;
     imap_host: string;
@@ -218,6 +299,13 @@ export default function ChatPage() {
   const [connectorSetup, setConnectorSetup] = useState<ChatConnectorPreset | null>(null);
   const [connectorEmail, setConnectorEmail] = useState("");
   const [connectorPassword, setConnectorPassword] = useState("");
+  const [wecomEnabled, setWecomEnabled] = useState(false);
+  const [wecomBotId, setWecomBotId] = useState("");
+  const [wecomSecret, setWecomSecret] = useState("");
+  const [wecomSecretSet, setWecomSecretSet] = useState(false);
+  const [wecomChats, setWecomChats] = useState("");
+  const [wecomBindings, setWecomBindings] = useState("");
+  const [wecomSaving, setWecomSaving] = useState(false);
   const [depositOffer, setDepositOffer] = useState<DepositOffer | null>(null);
   const [depositLoading, setDepositLoading] = useState(false);
   const [depositConfirming, setDepositConfirming] = useState(false);
@@ -238,6 +326,36 @@ export default function ChatPage() {
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeOption[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [composerPad, setComposerPad] = useState(0);
+  const composerPadRef = useRef(0);
+
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    const apply = () => {
+      const next = Math.ceil(el.offsetHeight);
+      setComposerPad((prev) => (prev === next ? prev : next));
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const box = messagesRef.current;
+    const prev = composerPadRef.current;
+    const delta = composerPad - prev;
+    composerPadRef.current = composerPad;
+    if (!box || delta === 0) return;
+    const gap = box.scrollHeight - box.scrollTop - box.clientHeight;
+    if (gap < Math.abs(delta) + 96) {
+      box.scrollTop = box.scrollHeight;
+    }
+  }, [composerPad]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const CHAT_INPUT_MIN_HEIGHT = 40;
@@ -255,7 +373,9 @@ export default function ChatPage() {
   const [renameDraft, setRenameDraft] = useState("");
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
   const [excelLoadState, setExcelLoadState] = useState<Conversation["excel_load"] | null>(null);
+  const [excelSourceDriver, setExcelSourceDriver] = useState<string | null>(null);
   const excelPreloadRef = useRef<string | null>(null);
+  const sourceDriverRef = useRef<Record<string, string>>({});
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
 
@@ -323,10 +443,20 @@ export default function ChatPage() {
       setSkills((data as SkillOption[]).filter((s) => s.status === "active"));
     }).catch(() => {});
     knowledgeApi.list().then(({ data }) => setKnowledgeBases(data)).catch(() => {});
-    modelsApi.listConfigs().then(({ data }) => {
-      const configs = data as ModelConfigOption[];
+    Promise.all([
+      modelsApi.listConfigs(),
+      authApi.listModelKeys().catch(() => ({ data: [] })),
+    ]).then(([cfgRes, keyRes]) => {
+      const configs = Array.isArray(cfgRes.data) ? cfgRes.data : [];
+      const keys = (Array.isArray(keyRes.data) ? keyRes.data : []).filter((k: { model_id?: string | null }) => k.model_id);
       setModelConfigs(configs);
-      setSelectedModelConfigId((prev) => prev || configs.find((c) => c.is_default)?.id || "");
+      setPersonalModels(keys);
+      setSelectedModelConfigId((prev) => {
+        if (prev) return prev;
+        const mine = keys.find((k: { is_default?: boolean; model_id?: string | null; provider: string }) => k.is_default && k.model_id);
+        if (mine?.model_id) return `mine:${mine.provider}:${mine.model_id}`;
+        return configs.find((c: { is_default?: boolean; id: string }) => c.is_default)?.id || "";
+      });
     }).catch(() => {});
     authApi.getMailbox().then(({ data }) => {
       if (data) setMailboxSaved(data);
@@ -468,11 +598,14 @@ export default function ChatPage() {
 
   const searchParams = useSearchParams();
   const dataSourceFromUrl = searchParams.get("data_source_id");
+  const questionFromUrl = searchParams.get("question");
   const dataAskBootRef = useRef(false);
+  const urlQuestionPendingRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!dataSourceFromUrl || dataAskBootRef.current) return;
     dataAskBootRef.current = true;
+    if (questionFromUrl) urlQuestionPendingRef.current = questionFromUrl;
     chatApi
       .createConversation({
         title: lang === "zh" ? "问数对话" : "Data Ask",
@@ -483,35 +616,29 @@ export default function ChatPage() {
         setConversations((c) => [data, ...c]);
         setActiveConv(data.id);
         setMessages([]);
-        if (data.data_source_id) {
-          void dataSourcesApi.preloadExcel(data.data_source_id, data.id).then(({ data: status }) => {
-            setExcelLoadState(status);
-            setConversations((list) =>
-              list.map((c) => (c.id === data.id ? { ...c, excel_load: status } : c)),
-            );
-          }).catch(() => {});
-        }
       })
       .catch(() => {});
-  }, [dataSourceFromUrl, lang]);
+  }, [dataSourceFromUrl, questionFromUrl, lang]);
+
+  // 评测联动：URL 带 question 参数时，会话就绪后自动发送（一键就弱项提问）
+  useEffect(() => {
+    const q = urlQuestionPendingRef.current;
+    if (!q || !activeConv || streaming) return;
+    urlQuestionPendingRef.current = null;
+    void sendRef.current(q);
+  }, [activeConv, streaming]);
 
   useEffect(() => {
     const conv = conversationsRef.current.find((c) => c.id === activeConv);
     if (!conv?.data_source_id) {
+      setExcelSourceDriver(null);
       setExcelLoadState(null);
       excelPreloadRef.current = null;
       return;
     }
 
     const sourceId = conv.data_source_id;
-    const cacheKey = `${conv.id}:${sourceId}`;
-    if (excelPreloadRef.current === cacheKey && conv.excel_load?.status === "ready") {
-      setExcelLoadState(conv.excel_load);
-      return;
-    }
-
     let cancelled = false;
-    excelPreloadRef.current = cacheKey;
 
     const syncStatus = (status: NonNullable<Conversation["excel_load"]>) => {
       if (cancelled) return;
@@ -522,29 +649,60 @@ export default function ChatPage() {
     };
 
     const run = async () => {
-      try {
-        const { data } = await dataSourcesApi.preloadExcel(sourceId, conv.id);
-        if (cancelled) return;
-        syncStatus(data);
-        if (data.status === "ready") {
-          toast.success(t.excelReady[lang], { id: `excel-ready-${conv.id}` });
-        } else if (data.status === "loading") {
-          window.setTimeout(run, 2000);
-        } else if (data.status === "error") {
-          toast.error(data.error || t.excelLoadFailed[lang]);
+      let driver = sourceDriverRef.current[sourceId];
+      if (!driver) {
+        try {
+          const { data: source } = await dataSourcesApi.get(sourceId);
+          driver = String((source as { driver?: string }).driver || "");
+          if (driver) sourceDriverRef.current[sourceId] = driver;
+        } catch {
+          if (!cancelled) {
+            setExcelSourceDriver(null);
+            setExcelLoadState(null);
+          }
+          return;
         }
-      } catch {
-        if (!cancelled) toast.error(t.excelLoadFailed[lang]);
+      }
+      if (cancelled) return;
+      setExcelSourceDriver(driver);
+      if (!isExcelSourceDriver(driver)) {
+        setExcelLoadState(null);
+        return;
+      }
+
+      const cacheKey = `${conv.id}:${sourceId}`;
+      if (excelPreloadRef.current === cacheKey && conv.excel_load?.status === "ready") {
+        setExcelLoadState(conv.excel_load);
+        return;
+      }
+      excelPreloadRef.current = cacheKey;
+
+      const loadExcel = async () => {
+        try {
+          const { data } = await dataSourcesApi.preloadExcel(sourceId, conv.id);
+          if (cancelled) return;
+          syncStatus(data);
+          if (data.status === "ready") {
+            toast.success(t.excelReady[lang], { id: `excel-ready-${conv.id}` });
+          } else if (data.status === "loading") {
+            window.setTimeout(loadExcel, 2000);
+          } else if (data.status === "error") {
+            toast.error(data.error || t.excelLoadFailed[lang]);
+          }
+        } catch {
+          if (!cancelled) toast.error(t.excelLoadFailed[lang]);
+        }
+      };
+
+      if (conv.excel_load?.status === "ready") {
+        setExcelLoadState(conv.excel_load);
+      } else {
+        setExcelLoadState({ status: "loading" });
+        void loadExcel();
       }
     };
 
-    if (conv.excel_load?.status === "ready") {
-      setExcelLoadState(conv.excel_load);
-    } else {
-      setExcelLoadState({ status: "loading" });
-      void run();
-    }
-
+    void run();
     return () => {
       cancelled = true;
     };
@@ -557,10 +715,7 @@ export default function ChatPage() {
   const visibleCapsules = capsulesForScene(scene);
 
   const applyCapsule = (cap: QuickCapsule) => {
-    const conv = conversationsRef.current.find((c) => c.id === activeConv);
-    const blocked =
-      Boolean(conv?.data_source_id || conv?.chat_mode === "data_ask")
-      && excelLoadState?.status !== "ready";
+    const blocked = isExcelSourceDriver(excelSourceDriver) && excelLoadState?.status !== "ready";
     if (blocked) return;
     setInput(lang === "zh" ? cap.prompt.zh : cap.prompt.en);
     const agentId = matchAgentByHint(agents, cap.agentHint);
@@ -721,7 +876,7 @@ export default function ChatPage() {
 
   const onModelChange = (modelId: string) => {
     setSelectedModelConfigId(modelId);
-    if (modelId) {
+    if (modelId && !modelId.startsWith("mine:")) {
       void modelsApi.testConfigConnection(modelId).then(({ data }) => {
         if (!data.ok) {
           toast.error(
@@ -746,6 +901,24 @@ export default function ChatPage() {
     }
     const preset = CHAT_CONNECTORS.find((c) => c.id === connectorId);
     if (!preset) return;
+    if (preset.type === "wecom") {
+      setConnectorSetup(preset);
+      setWecomSecret("");
+      integrationsApi.wecom()
+        .then(({ data }) => {
+          const row = data as { enabled?: boolean; bot_id?: string; secret_set?: boolean; chat_ids?: string[]; bindings?: { wecom_userid?: string; login?: string }[] };
+          setWecomEnabled(!!row.enabled);
+          setWecomBotId(row.bot_id || "");
+          setWecomSecretSet(!!row.secret_set);
+          setWecomChats((row.chat_ids || []).join("\n"));
+          const binds = (row.bindings || []) as { wecom_userid?: string; login?: string }[];
+          setWecomBindings(binds.map((item) => `${item.wecom_userid}=${item.login}`).join("\n"));
+        })
+        .catch(() => {
+          toast.error(lang === "zh" ? "企业微信配置读取失败" : "Failed to load WeCom");
+        });
+      return;
+    }
     if (!connectorMatchesMailbox(connectorId, mailboxSaved)) {
       setConnectorSetup(preset);
       setConnectorEmail(mailboxSaved?.email || "");
@@ -756,7 +929,7 @@ export default function ChatPage() {
   };
 
   const saveConnectorSetup = async () => {
-    if (!connectorSetup) return;
+    if (!connectorSetup || connectorSetup.type !== "imap" || !connectorSetup.imap_host || connectorSetup.imap_port == null) return;
     if (!connectorPassword.trim() && !mailboxSaved) {
       toast.error(t.connectorNeedPassword[lang]);
       return;
@@ -780,6 +953,34 @@ export default function ChatPage() {
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(detail ? `${t.connectorSaveFailed[lang]}: ${detail}` : t.connectorSaveFailed[lang]);
+    }
+  };
+
+  const saveWecomConnector = async () => {
+    if (!connectorSetup || connectorSetup.type !== "wecom") return;
+    setWecomSaving(true);
+    try {
+      const chat_ids = wecomChats.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean);
+      const { data } = await integrationsApi.saveWecom({
+        enabled: wecomEnabled,
+        bot_id: wecomBotId.trim(),
+        secret: wecomSecret.trim() || undefined,
+        chat_ids,
+        bindings: wecomBindings.split(/\n+/).map((item) => item.trim()).filter(Boolean),
+      });
+      const row = data as { secret_set?: boolean; chat_ids?: string[] };
+      setWecomSecret("");
+      setWecomSecretSet(!!row.secret_set);
+      setWecomChats((row.chat_ids || chat_ids).join("\n"));
+      setSelectedConnector(connectorSetup.id);
+      setConnectorSetup(null);
+      toast.success(lang === "zh" ? "企业微信连接器已保存" : "WeCom connector saved");
+      void syncContextToServer({ connector_id: connectorSetup.id });
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || (lang === "zh" ? "企业微信保存失败" : "WeCom save failed"));
+    } finally {
+      setWecomSaving(false);
     }
   };
 
@@ -1037,13 +1238,15 @@ export default function ChatPage() {
     try {
       const { data: conv } = await chatApi.getConversation(convId);
       applyConversationContext(conv);
-      if (conv.data_source_id) {
+      if (conv.data_source_id && isExcelSourceDriver(sourceDriverRef.current[conv.data_source_id])) {
+        setExcelSourceDriver(sourceDriverRef.current[conv.data_source_id]);
         if (conv.excel_load?.status === "ready") {
           setExcelLoadState(conv.excel_load);
         } else {
           setExcelLoadState({ status: "loading" });
         }
       } else {
+        setExcelSourceDriver(conv.data_source_id ? sourceDriverRef.current[conv.data_source_id] || null : null);
         setExcelLoadState(null);
       }
       setConversations((list) => {
@@ -1056,7 +1259,7 @@ export default function ChatPage() {
     }
     try {
       const { data } = await chatApi.getMessages(convId);
-      setMessages(data);
+      setMessages(data.map((m: any) => ({ ...m, chartData: m.charts_data ?? m.chartData ?? null })));
     } catch {
       toast.error(t.loadFailed[lang]);
     }
@@ -1065,6 +1268,7 @@ export default function ChatPage() {
   const deleteConversation = async (convId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!confirm(t.deleteChatConfirm[lang])) return;
+    if (activeConv === convId) depositSuggestAbortRef.current?.abort();
     try {
       await chatApi.deleteConversation(convId);
       setConversations((c) => c.filter((x) => x.id !== convId));
@@ -1082,6 +1286,7 @@ export default function ChatPage() {
   const clearAllConversations = async () => {
     if (!conversations.length) return;
     if (!confirm(t.clearAllConfirm[lang])) return;
+    depositSuggestAbortRef.current?.abort();
     try {
       await chatApi.deleteAllConversations();
       setConversations([]);
@@ -1094,15 +1299,40 @@ export default function ChatPage() {
     }
   };
 
-  const appendAssistant = (content: string, thinking?: string) => {
+  function stripChartBlocks(text: string): string {
+  if (!text) return text;
+  return text.replace(/```chart\s*\n?\{[\s\S]*?\}\s*```/g, "").trim();
+}
+
+const appendAssistant = (content: string, thinking?: string, extras?: { chartData?: ChatChartData[] | null; harnessTrace?: HarnessTraceEvent[]; citations?: { document_name?: string; snippet?: string }[]; train?: { data_source_id?: string; question?: string; sql?: string | null; trace_id?: number | null; memory_hits?: number } | null }) => {
+    const trace = extras?.harnessTrace?.length ? extras.harnessTrace : undefined;
+    const train = extras?.train || null;
     setMessages((m) => [
       ...m,
       {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: content || t.emptyResponse[lang],
+        content: stripChartBlocks(content) || t.emptyResponse[lang],
+        chartData: extras?.chartData ?? null,
         created_at: new Date().toISOString(),
-        metadata: thinking ? { thinking } : undefined,
+        metadata:
+          thinking || trace || extras?.citations?.length || train
+            ? {
+                thinking,
+                harness_trace: trace,
+                citations: extras?.citations,
+                ...(train
+                  ? {
+                      data_ask: true,
+                      data_source_id: train.data_source_id,
+                      question: train.question,
+                      sql: train.sql ?? null,
+                      trace_id: train.trace_id ?? null,
+                      memory_hits: train.memory_hits || 0,
+                    }
+                  : {}),
+              }
+            : undefined,
       },
     ]);
   };
@@ -1166,10 +1396,7 @@ export default function ChatPage() {
     const hasFiles = pendingFiles.length > 0;
     if ((!hasText && !hasFiles) || streaming) return null;
 
-    const convForSend = conversations.find((c) => c.id === activeConv);
-    const excelBlocked =
-      Boolean(convForSend?.data_source_id || convForSend?.chat_mode === "data_ask")
-      && excelLoadState?.status !== "ready";
+    const excelBlocked = isExcelSourceDriver(excelSourceDriver) && excelLoadState?.status !== "ready";
     if (excelBlocked) {
       toast.error(t.excelLoading[lang], { id: "excel-blocked" });
       return null;
@@ -1233,6 +1460,7 @@ export default function ChatPage() {
     setStreaming(true);
     setStreamingContent("");
     setStreamingThinking("");
+    setStreamingHarness([]);
 
     chatAbortRef.current?.abort();
     const streamController = new AbortController();
@@ -1245,9 +1473,26 @@ export default function ChatPage() {
 
     let full = "";
     let thinking = "";
+    let clarifyEvent: ClarifyPayload | null = null;
+    const harnessTrace: HarnessTraceEvent[] = [];
+    const noteHarness = (event: { tool_call?: { name?: string }; tool_result?: { content?: string } }) => {
+      if (event.tool_call) {
+        harnessTrace.push({ event: "tool/call", tool: event.tool_call.name, phase: "pre-execute" });
+        setStreamingHarness([...harnessTrace]);
+      }
+      if (event.tool_result) {
+        harnessTrace.push({
+          event: "tool/result",
+          phase: "post-execute",
+          preview: (event.tool_result.content || "").slice(0, 120),
+        });
+        setStreamingHarness([...harnessTrace]);
+      }
+    };
     let streamError = "";
     let userStopped = false;
     let lastSynthesis = "";
+    let _chartData: ChatChartData[] = [];
     let currentStreamAgent: {
       id: string;
       name: string;
@@ -1268,6 +1513,8 @@ export default function ChatPage() {
       message_id?: string;
       content?: string;
       label?: string;
+      subtask_id?: string;
+      status?: string;
     }) => {
       const ev = event.event;
       if (ev === "error") {
@@ -1316,6 +1563,7 @@ export default function ChatPage() {
               agent_role: currentStreamAgent?.role || event.agent_role,
               round: event.round,
               thinking: thinking || undefined,
+              subtask_id: event.subtask_id,
             },
           },
         ]);
@@ -1345,6 +1593,10 @@ export default function ChatPage() {
       }
     };
 
+    let streamCitations: { document_name?: string; snippet?: string }[] = [];
+    let streamSql: string | null = null;
+    let streamTraceId: number | null = null;
+    let streamMemoryHits = 0;
     try {
       if (filesToSend.length > 0) {
         const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true, messageExtras());
@@ -1356,6 +1608,9 @@ export default function ChatPage() {
           if (isGroupChat) {
             processGroupEvent(event);
           } else {
+            if (event.citations) {
+              streamCitations = event.citations;
+            }
             if (event.thinking) {
               thinking += event.thinking;
               setStreamingThinking(thinking);
@@ -1364,6 +1619,25 @@ export default function ChatPage() {
               full += event.token;
               setStreamingContent(full);
             }
+            if (event.event === "clarify" && event.questions) {
+              clarifyEvent = {
+                questions: event.questions,
+                round: event.round ?? 1,
+                max_rounds: event.max_rounds ?? 3,
+                fallback: event.fallback,
+              };
+            }
+            if (event.chart_data) {
+              _chartData.push(event.chart_data as ChatChartData);
+            }
+            if (event.event === "sql" && event.sql) {
+              streamSql = event.sql;
+            }
+            if (event.event === "done") {
+              if (typeof event.trace_id === "number") streamTraceId = event.trace_id;
+              streamMemoryHits = Number(event.memory_hits || 0);
+            }
+            noteHarness(event);
           }
         }
       } else {
@@ -1379,6 +1653,9 @@ export default function ChatPage() {
           if (isGroupChat) {
             processGroupEvent(event);
           } else {
+            if (event.citations) {
+              streamCitations = event.citations;
+            }
             if (event.thinking) {
               thinking += event.thinking;
               setStreamingThinking(thinking);
@@ -1387,6 +1664,25 @@ export default function ChatPage() {
               full += event.token;
               setStreamingContent(full);
             }
+            if (event.event === "clarify" && event.questions) {
+              clarifyEvent = {
+                questions: event.questions,
+                round: event.round ?? 1,
+                max_rounds: event.max_rounds ?? 3,
+                fallback: event.fallback,
+              };
+            }
+            if (event.chart_data) {
+              _chartData.push(event.chart_data as ChatChartData);
+            }
+            if (event.event === "sql" && event.sql) {
+              streamSql = event.sql;
+            }
+            if (event.event === "done") {
+              if (typeof event.trace_id === "number") streamTraceId = event.trace_id;
+              streamMemoryHits = Number(event.memory_hits || 0);
+            }
+            noteHarness(event);
           }
         }
       }
@@ -1405,13 +1701,13 @@ export default function ChatPage() {
       if (isGroupChat && convId) {
         try {
           const { data } = await chatApi.getMessages(convId);
-          setMessages(data);
+          setMessages(data.map((m: any) => ({ ...m, chartData: m.charts_data ?? m.chartData ?? null })));
         } catch {
           /* ignore */
         }
         toast(t.generationStopped[lang], { icon: "⏹" });
       } else if (full || thinking) {
-        appendAssistant(full, thinking || undefined);
+        appendAssistant(full, thinking || undefined, { chartData: _chartData.length > 0 ? _chartData : null, harnessTrace, citations: streamCitations, train: streamTraceId ? { data_source_id: activeConversation?.data_source_id || dataSourceFromUrl || undefined, question: msg, sql: streamSql, trace_id: streamTraceId, memory_hits: streamMemoryHits } : null });
       } else {
         toast(t.generationStopped[lang], { icon: "⏹" });
       }
@@ -1443,6 +1739,24 @@ export default function ChatPage() {
       return depositText.trim() ? depositText : null;
     }
 
+    if (clarifyEvent) {
+      const _clarifyPayload = clarifyEvent;
+      setMessages((m) => [
+        ...m,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "",
+          clarify: _clarifyPayload,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      setStreamingContent("");
+      setStreamingThinking("");
+      setStreaming(false);
+      return null;
+    }
+
     if (!full) {
       if (streamError) {
         toast.error(`${t.replyFailed[lang]}: ${streamError}`);
@@ -1471,10 +1785,12 @@ export default function ChatPage() {
           }
           const data = await response.json();
           full = data?.content ?? "";
+          _chartData = (data as any)?.charts_data ?? [];
           thinking = data?.thinking ?? thinking;
         } else {
           const { data } = await chatApi.sendMessage(convId!, { message: msg, stream: false, ...messageExtras() });
           full = data?.content ?? "";
+          _chartData = (data as any)?.charts_data ?? [];
           thinking = data?.thinking ?? thinking;
         }
       } catch (err: unknown) {
@@ -1490,7 +1806,7 @@ export default function ChatPage() {
       }
     }
 
-    appendAssistant(full, thinking || undefined);
+    appendAssistant(full, thinking || undefined, { chartData: _chartData.length > 0 ? _chartData : null, harnessTrace, citations: streamCitations, train: streamTraceId ? { data_source_id: activeConversation?.data_source_id || dataSourceFromUrl || undefined, question: msg, sql: streamSql, trace_id: streamTraceId, memory_hits: streamMemoryHits } : null });
     setStreamingContent("");
     setStreamingThinking("");
     setStreaming(false);
@@ -1538,10 +1854,62 @@ export default function ChatPage() {
   };
 
   const activeConversation = conversations.find((c) => c.id === activeConv);
-  const isExcelAskSession = Boolean(
+  const isDataAskSession = Boolean(
     activeConversation?.data_source_id || activeConversation?.chat_mode === "data_ask",
   );
+  const isExcelAskSession = isExcelSourceDriver(excelSourceDriver);
   const excelInputBlocked = isExcelAskSession && excelLoadState?.status !== "ready";
+
+  // 输入联想：随输入实时匹配“历史提问”（数据源金标 + 推荐问题），点选/回车填入
+  const composerDsId = activeConversation?.data_source_id || dataSourceFromUrl || "";
+  useEffect(() => {
+    if (!composerDsId) {
+      setMemPool([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const pool: string[] = [];
+      const push = (q: unknown) => {
+        const s = String(q ?? "").trim();
+        if (s && !pool.includes(s)) pool.push(s);
+      };
+      try {
+        const [rec, gold] = await Promise.all([
+          dataSourcesApi.recommendedQuestions(composerDsId).catch(() => null),
+          dataSourcesApi.goldenQueries(composerDsId).catch(() => null),
+        ]);
+        const recQs = rec?.data?.questions;
+        if (Array.isArray(recQs)) recQs.forEach(push);
+        const items = gold?.data?.items;
+        if (Array.isArray(items)) items.forEach((it) => push(it?.question));
+      } catch {
+        /* 联想源不可用时静默降级，不影响正常提问 */
+      }
+      if (!cancelled) setMemPool(pool);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [composerDsId]);
+
+  const memQuery = input.trim().toLowerCase();
+  const memMatches = memQuery
+    ? [
+        ...memPool.filter((q) => q.toLowerCase().startsWith(memQuery)),
+        ...memPool.filter(
+          (q) => !q.toLowerCase().startsWith(memQuery) && q.toLowerCase().includes(memQuery),
+        ),
+      ].slice(0, 6)
+    : [];
+  const showMemSug = !memHide && !streaming && memMatches.length > 0;
+
+  const applyMemSuggestion = (q: string) => {
+    setInput(q);
+    setMemSugIdx(-1);
+    setMemHide(true);
+    inputRef.current?.focus();
+  };
 
   const handleQaChoice = (text: string) => {
     if (streaming || excelInputBlocked) return;
@@ -1560,7 +1928,7 @@ export default function ChatPage() {
         )
       : messages;
 
-  const responseStyleLocked = isExcelAskSession;
+  const responseStyleLocked = isDataAskSession;
   const effectiveResponseStyle: ResponseStyle = responseStyleLocked ? "precise" : responseStyle;
 
   const activeConvTitle =
@@ -1802,7 +2170,12 @@ export default function ChatPage() {
             </button>
           </div>
         )}
-        <div className="flex-1 space-y-4 overflow-y-auto p-3 md:p-6">
+        <div className="relative min-h-0 flex-1">
+        <div
+          ref={messagesRef}
+          className="h-full space-y-4 overflow-y-auto p-3 md:p-6"
+          style={messages.length > 0 || streaming ? { paddingBottom: composerPad } : undefined}
+        >
           {messages.length === 0 && !streaming && (
             <div className="flex h-full flex-col items-center justify-center px-4 text-center">
               <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-500/10">
@@ -1849,6 +2222,7 @@ export default function ChatPage() {
                 />
               );
             }
+            const trainDataSourceId = msg.metadata?.data_source_id || activeConversation?.data_source_id || "";
             return (
             <div key={msg.id} className={clsx("group flex gap-1.5", msg.role === "user" ? "justify-end" : "justify-start")}>
               {msg.role === "assistant" && (
@@ -1856,10 +2230,11 @@ export default function ChatPage() {
               )}
               <div
                 className={clsx(
-                  "relative max-w-2xl rounded-2xl px-4 py-3 text-sm",
+                  "relative max-w-2xl rounded-2xl px-4 py-3 text-base",
                   msg.role === "user"
                     ? "rounded-br-sm bg-blue-600 text-white"
-                    : "rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] text-slate-200"
+                    : "rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] text-slate-200",
+                  msg.role === "assistant" && msg.chartData && msg.chartData.length > 0 && "bubble-with-chart"
                 )}
               >
                 {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
@@ -1879,18 +2254,61 @@ export default function ChatPage() {
                     ))}
                   </div>
                 )}
+                {msg.role === "assistant" && msg.metadata?.harness_trace && msg.metadata.harness_trace.length > 0 && (
+                  <HarnessTraceBlock steps={msg.metadata.harness_trace} />
+                )}
                 {msg.role === "assistant" && msg.metadata?.thinking && (
                   <ThinkingBlock content={msg.metadata.thinking} lang={lang} />
                 )}
                 {msg.role === "assistant" ? (
-                  <ChatRichContent
-                    size="sm"
-                    lang={lang}
-                    onChoiceSelect={handleQaChoice}
-                    choicesDisabled={streaming}
-                  >
-                    {msg.content}
-                  </ChatRichContent>
+                  <>
+                    {msg.clarify ? (
+                      <ClarifyCard
+                        payload={msg.clarify}
+                        lang={lang}
+                        disabled={streaming}
+                        onSelect={(opt) => { void sendRef.current?.(opt); }}
+                      />
+                    ) : (
+                    <ChatRichContent
+                      size="sm"
+                      lang={lang}
+                      onChoiceSelect={handleQaChoice}
+                      choicesDisabled={streaming}
+                    >
+                      {msg.content}
+                    </ChatRichContent>
+                    )}
+                    {msg.metadata?.citations && msg.metadata.citations.length > 0 && (
+                      <div className="mt-2 flex flex-col gap-1">
+                        {msg.metadata.citations.map((item, index) => (
+                          <div key={`${item.document_id || index}`} className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-400">
+                            {item.document_name || "资料"}：{item.snippet}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {msg.chartData && msg.chartData.length > 0 && (
+                      <div className="chat-chart-stack">
+                        {msg.chartData.map((chart, idx) => (
+                          <ChartRenderer key={idx} chart={chart} />
+                        ))}
+                      </div>
+                    )}
+                    {msg.metadata?.data_ask && trainDataSourceId && (
+                      <MessageTrainActions
+                        dataSourceId={trainDataSourceId}
+                        traceId={msg.metadata?.trace_id ?? null}
+                        question={msg.metadata?.question || ""}
+                        originalSql={msg.metadata?.sql ?? null}
+                        memoryHits={msg.metadata?.memory_hits || 0}
+                        lang={lang}
+                      />
+                    )}
+                    {msg.metadata?.dashboard_card && (
+                      <DashboardCard card={msg.metadata.dashboard_card} lang={lang} />
+                    )}
+                  </>
                 ) : msg.content}
               </div>
               {msg.role === "user" && (
@@ -1922,7 +2340,7 @@ export default function ChatPage() {
                   </div>
                 )}
                 {streamingContent ? (
-                  <div className="rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-200">
+                  <div className="rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-base text-slate-200">
                     <ChatRichContent size="sm" lang={lang} streaming highlight={false}>
                       {streamingContent}
                     </ChatRichContent>
@@ -1950,13 +2368,25 @@ export default function ChatPage() {
           )}
           {streaming && !groupStreamAgent && !streamingContent && !streamingThinking && (
             <div className="flex justify-start">
-              <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-400">
-                <span className="flex gap-1">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:0ms]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:150ms]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:300ms]" />
-                </span>
-                <span className="text-xs text-slate-500">{t.thinking[lang]}</span>
+              <div className="max-w-2xl min-w-0 flex-1">
+                {streamingHarness.length > 0 && (
+                  <div className="mb-2 rounded-lg border border-slate-600/40 bg-black/20 px-3 py-2 text-xs text-slate-400">
+                    <div className="mb-1 text-slate-300">工具过程</div>
+                    <ul className="space-y-0.5">
+                      {streamingHarness.map((step, index) => (
+                        <li key={`${step.event}-${index}`}>{harnessStepLabel(step)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-[#2d2d4e] bg-[#1a1a2e] px-4 py-3 text-sm text-slate-400">
+                  <span className="flex gap-1">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:0ms]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:150ms]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:300ms]" />
+                  </span>
+                  <span className="text-xs text-slate-500">{t.thinking[lang]}</span>
+                </div>
               </div>
             </div>
           )}
@@ -1979,7 +2409,7 @@ export default function ChatPage() {
           <div ref={bottomRef} />
         </div>
 
-        <div className="shrink-0 border-t border-[#2d2d4e] bg-[#1a1a2e] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:p-4">
+        <div ref={composerRef} className="absolute inset-x-0 bottom-0 z-10 border-t border-[#2d2d4e] bg-[#1a1a2e] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:p-4">
           {messages.length > 0 && (
             <div className="mb-3 flex items-center gap-2">
               <SegmentedControl
@@ -2230,6 +2660,11 @@ export default function ChatPage() {
                     {m.name}{m.is_default ? " ★" : ""}
                   </option>
                 ))}
+                {personalModels.map((k) => (
+                  <option key={k.id} value={`mine:${k.provider}:${k.model_id}`}>
+                    {(lang === "zh" ? "我的 " : "Mine ")}{k.provider}/{k.model_id}{k.is_default ? " ★" : ""}
+                  </option>
+                ))}
               </select>
               <Bot className="h-3.5 w-3.5 text-slate-500" />
               {chatMode !== "group" && (
@@ -2267,7 +2702,7 @@ export default function ChatPage() {
                 <option value="">{t.noWorkspace[lang]}</option>
                 {knowledgeBases.map((kb) => (
                   <option key={kb.id} value={kb.id}>
-                    {kb.name}{kb.source_type === "byd_kms" ? (lang === "zh" ? " · 企业" : " · Ent") : (lang === "zh" ? " · 本地" : " · Local")}
+                    {kb.name}{lang === "zh" ? " · 本地" : " · Local"}
                   </option>
                 ))}
               </select>
@@ -2329,7 +2764,7 @@ export default function ChatPage() {
                 <span>{t.webSearch[lang]}</span>
               </button>
             </div>
-            <div className="flex items-end gap-2 px-3 py-3">
+            <div className="relative flex items-end gap-2 px-3 py-3">
             <input
               ref={fileInputRef}
               type="file"
@@ -2397,14 +2832,37 @@ export default function ChatPage() {
             <textarea
               ref={inputRef}
               className="chat-input-textarea flex-1 resize-none bg-transparent py-2 text-sm leading-relaxed text-white placeholder-slate-500 focus:outline-none disabled:opacity-50"
-              rows={2}
+              rows={1}
               placeholder={excelInputBlocked ? t.excelLoading[lang] : t.placeholder[lang]}
               value={input}
               readOnly={excelInputBlocked}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setMemSugIdx(-1);
+                setMemHide(false);
+              }}
               onKeyDown={(e) => {
+                if (showMemSug && e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMemSugIdx((i) => (i + 1) % memMatches.length);
+                  return;
+                }
+                if (showMemSug && e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMemSugIdx((i) => (i <= 0 ? memMatches.length - 1 : i - 1));
+                  return;
+                }
+                if (showMemSug && e.key === "Escape") {
+                  setMemHide(true);
+                  setMemSugIdx(-1);
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
+                  if (memSugIdx >= 0 && memMatches[memSugIdx]) {
+                    applyMemSuggestion(memMatches[memSugIdx]);
+                    return;
+                  }
                   if (canSend) void send();
                 }
               }}
@@ -2421,6 +2879,34 @@ export default function ChatPage() {
             >
               {streaming ? <Square className="h-4 w-4 fill-current" /> : <Send className="h-4 w-4" />}
             </button>
+            {showMemSug && (
+              <div className="absolute bottom-full left-3 right-3 z-30 mb-2 overflow-hidden rounded-xl border border-[#2d2d4e] bg-[#0d0d1a] shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+                <div className="flex items-center gap-1.5 border-b border-[#2d2d4e] px-3 py-1.5 text-[11px] text-slate-500">
+                  <Search className="h-3 w-3" />
+                  <span>{lang === "zh" ? "历史提问联想" : "Historical questions"}</span>
+                </div>
+                <ul className="max-h-56 overflow-y-auto py-1">
+                  {memMatches.map((q, i) => (
+                    <li key={`${i}-${q.slice(0, 24)}`}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => applyMemSuggestion(q)}
+                        className={clsx(
+                          "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
+                          i === memSugIdx
+                            ? "bg-blue-600/20 text-blue-200"
+                            : "text-slate-200 hover:bg-white/5",
+                        )}
+                      >
+                        <Search className="h-3.5 w-3.5 shrink-0 opacity-50" />
+                        <span className="truncate">{q}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             </div>
           </div>
           {contextSummary() && (
@@ -2441,6 +2927,7 @@ export default function ChatPage() {
                     : `${t.hint[lang]} · ${t.fileTypesHint[lang]}`}
           </p>
         </div>
+        </div>
       </div>
 
       {connectorSetup && (
@@ -2448,12 +2935,17 @@ export default function ChatPage() {
           <div className="w-full max-w-md rounded-xl border border-[#2d2d4e] bg-[#1a1a2e] p-5 shadow-xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold text-white">{t.connectorSetupTitle[lang]}</h3>
-                <p className="mt-1 text-xs text-slate-400">{t.connectorSetupDesc[lang]}</p>
+                <h3 className="text-base font-semibold text-white">{connectorSetup.type === "wecom" ? (lang === "zh" ? "配置企业微信" : "WeCom") : t.connectorSetupTitle[lang]}</h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  {connectorSetup.type === "wecom"
+                    ? (lang === "zh"
+                      ? "填写 BotID、Secret。企业微信里发给机器人的文字会进入平台对话；userid 要先绑定平台工号或邮箱。"
+                      : "Save the bot id, secret, and recipients for employee report push.")
+                    : t.connectorSetupDesc[lang]}
+                </p>
                 <p className="mt-2 text-xs text-blue-300">
                   {lang === "zh" ? connectorSetup.label.zh : connectorSetup.label.en}
-                  {" · "}
-                  {connectorSetup.imap_host}:{connectorSetup.imap_port}
+                  {connectorSetup.type === "imap" && connectorSetup.imap_host ? ` · ${connectorSetup.imap_host}:${connectorSetup.imap_port}` : ""}
                 </p>
               </div>
               <button
@@ -2465,6 +2957,39 @@ export default function ChatPage() {
                 <X className="h-4 w-4" />
               </button>
             </div>
+            {connectorSetup.type === "wecom" ? (
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-sm text-slate-200">
+                  <input type="checkbox" checked={wecomEnabled} onChange={(e) => setWecomEnabled(e.target.checked)} />
+                  {lang === "zh" ? "启用推送" : "Enable push"}
+                </label>
+                <input
+                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50"
+                  placeholder="BotID"
+                  value={wecomBotId}
+                  onChange={(e) => setWecomBotId(e.target.value)}
+                />
+                <input
+                  type="password"
+                  className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50"
+                  placeholder={wecomSecretSet ? (lang === "zh" ? "Secret 已保存，留空则不修改" : "Secret saved") : "Secret"}
+                  value={wecomSecret}
+                  onChange={(e) => setWecomSecret(e.target.value)}
+                />
+                <textarea
+                  className="min-h-[88px] w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50"
+                  placeholder={lang === "zh" ? "接收人 userid，一行一个" : "Recipient user ids"}
+                  value={wecomChats}
+                  onChange={(e) => setWecomChats(e.target.value)}
+                />
+                <textarea
+                  className="min-h-[88px] w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50"
+                  placeholder={lang === "zh" ? "账号绑定：企业微信userid=平台工号或邮箱" : "userid=login"}
+                  value={wecomBindings}
+                  onChange={(e) => setWecomBindings(e.target.value)}
+                />
+              </div>
+            ) : (
             <div className="space-y-3">
               <input
                 type="email"
@@ -2481,6 +3006,7 @@ export default function ChatPage() {
                 onChange={(e) => setConnectorPassword(e.target.value)}
               />
             </div>
+            )}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -2491,10 +3017,13 @@ export default function ChatPage() {
               </button>
               <button
                 type="button"
-                onClick={saveConnectorSetup}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+                onClick={connectorSetup.type === "wecom" ? saveWecomConnector : saveConnectorSetup}
+                disabled={connectorSetup.type === "wecom" && wecomSaving}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-40"
               >
-                {t.connectorSave[lang]}
+                {connectorSetup.type === "wecom" && wecomSaving
+                  ? (lang === "zh" ? "保存中…" : "Saving…")
+                  : t.connectorSave[lang]}
               </button>
             </div>
           </div>

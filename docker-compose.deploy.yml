@@ -1,0 +1,234 @@
+# AI-AGENT 生产部署 — 三台服务器分离架构
+# 118: litellm + chromadb + milvus + ollama + backend + celery + frontend + nginx
+# 120: PostgreSQL (外部)   119: Redis (外部)
+# 用法: docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: aiagnet_litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: --config /app/config.yaml --port 4000 --num_workers 4
+    env_file: .env.deploy
+    depends_on:
+      chromadb:
+        condition: service_started
+
+  chromadb:
+    image: docker.m.daocloud.io/chromadb/chroma:0.5.20
+    container_name: aiagnet_chromadb
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  # ── Milvus 向量数据库（standalone 模式）──
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: aiagnet_milvus_etcd
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus_etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: docker.m.daocloud.io/minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: aiagnet_milvus_minio
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - milvus_minio:/minio_data
+    command: minio server /minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: docker.m.daocloud.io/milvusdb/milvus:v2.5.4
+    container_name: aiagnet_milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: minioadmin
+      MINIO_SECRET_ACCESS_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+
+  # ── Ollama Embedding 服务 ──
+  ollama:
+    image: docker.m.daocloud.io/ollama/ollama:latest
+    container_name: aiagnet_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: aiagnet-backend:prod
+    container_name: aiagnet_backend
+    restart: unless-stopped
+    env_file: .env.deploy
+    environment:
+      APP_NAME: AI-AGENT
+      DEBUG: "false"
+      VECTOR_STORE_TYPE: milvus
+      MILVUS_URI: http://milvus:19530
+      MILVUS_DB: default
+      OLLAMA_BASE_URL: http://ollama:11434
+      CHROMA_MODE: server
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      LOCAL_UPLOADS_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+      - ./models:/app/models
+    depends_on:
+      chromadb:
+        condition: service_started
+      litellm:
+        condition: service_started
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 120s
+
+  celery_worker:
+    image: aiagnet-backend:prod
+    container_name: aiagnet_celery
+    restart: unless-stopped
+    env_file: .env.deploy
+    environment:
+      RUN_WECOM_LINK: "0"
+      WECOM_RELAY_URL: http://backend:8000/api/v1/integrations/wecom/relay
+      VECTOR_STORE_TYPE: milvus
+      MILVUS_URI: http://milvus:19530
+      MILVUS_DB: default
+      OLLAMA_BASE_URL: http://ollama:11434
+      CHROMA_MODE: server
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      LOCAL_UPLOADS_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+      - ./models:/app/models
+    depends_on:
+      backend:
+        condition: service_started
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command: celery -A app.worker worker --loglevel=info --concurrency=4
+
+  celery_beat:
+    image: aiagnet-backend:prod
+    container_name: aiagnet_celery_beat
+    restart: unless-stopped
+    env_file: .env.deploy
+    environment:
+      RUN_WECOM_LINK: "0"
+      WECOM_RELAY_URL: http://backend:8000/api/v1/integrations/wecom/relay
+      VECTOR_STORE_TYPE: milvus
+      MILVUS_URI: http://milvus:19530
+      MILVUS_DB: default
+      OLLAMA_BASE_URL: http://ollama:11434
+      CHROMA_MODE: server
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      LOCAL_UPLOADS_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+      - ./models:/app/models
+    depends_on:
+      backend:
+        condition: service_started
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command: celery -A app.worker beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_URL: http://backend:8000
+    image: aiagnet-frontend:prod
+    container_name: aiagnet_frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: docker.m.daocloud.io/library/nginx:alpine
+    container_name: aiagnet_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+volumes:
+  chroma_data:
+  backend_uploads:
+  milvus_etcd:
+  milvus_minio:
+  milvus_data:
+  ollama_data:

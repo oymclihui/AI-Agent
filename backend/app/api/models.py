@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.db.models import ModelConfig, User
 from app.db.base import generate_uuid
 from app.models_hub.router import ModelRouter
-from app.core.auth.deps import get_current_user
+from app.core.auth.deps import get_current_admin_user, get_current_user
 from app.schemas.model import (
     ModelConfigCreate,
     ModelConfigUpdate,
@@ -19,6 +19,32 @@ from app.schemas.model import (
 )
 
 router = APIRouter(prefix="/models", tags=["Model Hub"])
+
+def _seal_optional(raw):
+    text = (raw or "").strip()
+    if not text:
+        return None
+    from app.models_hub.user_credentials import seal_secret
+    return seal_secret(text)
+
+
+def _enterprise_endpoint(provider, model_id, base_url, api_key, *, creating: bool):
+    from app.models_hub.catalog import normalize_catalog_choice, provider_of
+
+    provider = (provider or "").strip().lower()
+    if not provider_of(provider):
+        return provider, (model_id or "").strip(), (base_url or "").strip() or None
+    try:
+        provider, model_id, base_url = normalize_catalog_choice(
+            provider, model_id, base_url, require_model=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if creating and not (api_key or "").strip():
+        raise HTTPException(status_code=400, detail="企业接入 DeepSeek、千问或智谱时需要填写 API Key")
+    return provider, model_id, base_url
+
+
 
 
 def _to_response(cfg: ModelConfig) -> ModelConfigResponse:
@@ -60,6 +86,18 @@ async def list_available_models():
     return await ModelRouter.list_available_models()
 
 
+@router.get("/providers")
+async def list_model_providers(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.models_hub.catalog import catalog_payload
+
+    result = await db.execute(select(ModelConfig.model_id).where(ModelConfig.is_active == True))
+    ready = {row[0] for row in result.all() if row[0]}
+    return catalog_payload(ready)
+
+
 @router.get("/configs", response_model=list[ModelConfigResponse])
 async def list_model_configs(
     db: AsyncSession = Depends(get_db),
@@ -77,20 +115,24 @@ async def list_model_configs(
 async def create_model_config(
     payload: ModelConfigCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_admin_user),
 ):
     dup = await db.execute(select(ModelConfig).where(ModelConfig.name == payload.name))
     if dup.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"Model config name already exists: {payload.name}")
+    provider, model_id, base_url = _enterprise_endpoint(
+        payload.provider, payload.model_id, payload.base_url, payload.api_key, creating=True,
+    )
 
     merged_config = build_config_payload(payload.config, payload.inference_params)
 
     cfg = ModelConfig(
         id=generate_uuid(),
         name=payload.name.strip(),
-        provider=payload.provider.strip().lower(),
-        model_id=payload.model_id.strip(),
-        base_url=(payload.base_url or "").strip() or None,
+        provider=provider,
+        model_id=model_id,
+        base_url=base_url,
+        api_key_encrypted=_seal_optional(payload.api_key),
         context_window=payload.context_window,
         cost_per_1k_input=payload.cost_per_1k_input,
         cost_per_1k_output=payload.cost_per_1k_output,
@@ -117,12 +159,14 @@ async def update_model_config(
     config_id: str,
     payload: ModelConfigUpdate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_admin_user),
 ):
     cfg = await db.get(ModelConfig, config_id)
     if not cfg or not cfg.is_active:
         raise HTTPException(status_code=404, detail="Model config not found")
 
     data = payload.model_dump(exclude_unset=True)
+    raw_key = data.pop("api_key", None)
     if "name" in data and data["name"] != cfg.name:
         dup = await db.execute(
             select(ModelConfig).where(ModelConfig.name == data["name"], ModelConfig.id != config_id)
@@ -134,6 +178,8 @@ async def update_model_config(
     data.pop("inference_params", None)
     config_override = data.pop("config", None)
 
+    if raw_key and str(raw_key).strip():
+        cfg.api_key_encrypted = _seal_optional(str(raw_key))
     for field, value in data.items():
         if field == "provider" and isinstance(value, str):
             value = value.strip().lower()
@@ -161,7 +207,11 @@ async def update_model_config(
 
 
 @router.post("/configs/{config_id}/set-default", response_model=ModelConfigResponse)
-async def set_default_model_config(config_id: str, db: AsyncSession = Depends(get_db)):
+async def set_default_model_config(
+    config_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_admin_user),
+):
     cfg = await db.get(ModelConfig, config_id)
     if not cfg or not cfg.is_active:
         raise HTTPException(status_code=404, detail="Model config not found")
@@ -177,7 +227,7 @@ async def set_default_model_config(config_id: str, db: AsyncSession = Depends(ge
 async def test_model_connection_preview(
     payload: ModelConnectionTestRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_admin_user),
 ):
     from app.models_hub.connectivity import test_model_connection
 
@@ -186,7 +236,7 @@ async def test_model_connection_preview(
         model_id=payload.model_id,
         base_url=(payload.base_url or "").strip() or None,
         db=db,
-        user_id=user.id,
+        user_id=None,
     )
     return ModelConnectionTestResponse(**result)
 
@@ -195,7 +245,7 @@ async def test_model_connection_preview(
 async def test_model_config_connection(
     config_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_admin_user),
 ):
     from app.models_hub.connectivity import test_model_connection
 
@@ -208,13 +258,17 @@ async def test_model_config_connection(
         model_id=cfg.model_id,
         base_url=cfg.base_url,
         db=db,
-        user_id=user.id,
+        user_id=None,
     )
     return ModelConnectionTestResponse(**result)
 
 
 @router.delete("/configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_model_config(config_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_model_config(
+    config_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_admin_user),
+):
     cfg = await db.get(ModelConfig, config_id)
     if not cfg or not cfg.is_active:
         raise HTTPException(status_code=404, detail="Model config not found")

@@ -79,8 +79,6 @@ async def export_run_to_knowledge(
             raise ValueError("Knowledge base not found")
         if kb.owner_id is None:
             raise ValueError("Cannot write to shared knowledge base")
-        if str((kb.metadata_ or {}).get("source_type") or "") == "byd_kms":
-            raise ValueError("API knowledge bases do not support local document upload")
     else:
         name = kb_name or f"数字员工报告-{employee_name[:20]}"
         kb = KnowledgeBase(

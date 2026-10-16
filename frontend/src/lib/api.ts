@@ -3,7 +3,7 @@ import type { DashboardOverview } from "@/lib/dashboardTypes";
 import { getAuthToken, useAuthStore } from "@/lib/authStore";
 
 /** Extract a human-readable message from an axios/API error. */
-export function formatApiError(err: unknown, fallback: string): string {
+export function formatApiError(err: unknown, fallback = "请求失败"): string {
   const ax = err as { response?: { data?: { detail?: unknown } }; message?: string };
   const detail = ax.response?.data?.detail;
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -145,6 +145,7 @@ export const authApi = {
   testMailbox: () => api.post("/auth/me/mailbox/test"),
   listModelKeys: () => api.get("/auth/me/model-keys"),
   saveModelKey: (data: object) => api.post("/auth/me/model-keys", data),
+  testModelKey: (data: object) => api.post("/auth/me/model-keys/test", data),
   deleteModelKey: (id: string) => api.delete(`/auth/me/model-keys/${id}`),
 };
 
@@ -352,13 +353,22 @@ export const knowledgeApi = {
     api.delete(`/knowledge/${kbId}/documents/${docId}`),
   search: (kbId: string, data: object) => api.post(`/knowledge/${kbId}/search`, data),
   update: (id: string, data: object) => api.patch(`/knowledge/${id}`, data),
-  testBydKms: (data: object) => api.post("/knowledge/test-byd-kms", data),
-  testConnection: (kbId: string) => api.post(`/knowledge/${kbId}/test-connection`),
+  access: (id: string) => api.get(`/knowledge/${id}/access`),
+  saveAccess: (id: string, data: object) => api.put(`/knowledge/${id}/access`, data),
+  shareTargets: (q: string) => api.get("/knowledge/share-targets", { params: { q } }),
+  retryDocument: (kbId: string, docId: string) => api.post(`/knowledge/${kbId}/documents/${docId}/retry`),
+  listFaq: (kbId: string) => api.get(`/knowledge/${kbId}/faq`),
+  createFaq: (kbId: string, data: object) => api.post(`/knowledge/${kbId}/faq`, data),
+  deleteFaq: (kbId: string, entryId: string) => api.delete(`/knowledge/${kbId}/faq/${entryId}`),
+  wecomDocs: (kbId: string) => api.get(`/knowledge/${kbId}/wecom-docs`),
+  saveWecomDocs: (kbId: string, data: object) => api.put(`/knowledge/${kbId}/wecom-docs`, data),
+  syncWecomDocs: (kbId: string) => api.post(`/knowledge/${kbId}/wecom-docs/sync`),
 };
 
 // ── Models ────────────────────────────────────────────
 export const modelsApi = {
   listAvailable: () => api.get("/models/available"),
+  listProviders: () => api.get("/models/providers"),
   listConfigs: () => api.get("/models/configs"),
   createConfig: (data: object) => api.post("/models/configs", data),
   updateConfig: (id: string, data: object) => api.patch(`/models/configs/${id}`, data),
@@ -484,6 +494,9 @@ export const organizationApi = {
 export const integrationsApi = {
   status: () => api.get("/integrations/status"),
   adminStatus: () => api.get("/integrations/admin/status"),
+  wecom: () => api.get("/integrations/wecom"),
+  saveWecom: (data: object) => api.put("/integrations/wecom", data),
+  testWecom: () => api.post("/integrations/wecom/test"),
 };
 
 export const databaseApi = {
@@ -532,6 +545,7 @@ export const dataSourcesApi = {
   create: (data: object) => api.post("/data-sources/", data),
   get: (id: string) => api.get(`/data-sources/${id}`),
   update: (id: string, data: object) => api.patch(`/data-sources/${id}`, data),
+  duplicate: (id: string) => api.post(`/data-sources/${id}/duplicate`),
   delete: (id: string) => api.delete(`/data-sources/${id}`),
   test: (data: object) => api.post("/data-sources/test", data),
   testSaved: (id: string) => api.post(`/data-sources/${id}/test`),
@@ -544,6 +558,7 @@ export const dataSourcesApi = {
   auditLogs: (id: string, params?: { limit?: number; offset?: number }) =>
     api.get(`/data-sources/${id}/audit-logs`, { params }),
   goldenQueries: (id: string) => api.get(`/data-sources/${id}/golden-queries`),
+  recommendedQuestions: (id: string) => api.get(`/data-sources/${id}/recommended-questions`),
   saveGoldenQuery: (id: string, data: object) => api.post(`/data-sources/${id}/golden-queries`, data),
   schemaGraph: (id: string) => api.get(`/data-sources/${id}/schema-graph`),
   blueprint: (id: string, data: object) => api.post(`/data-sources/${id}/blueprint`, data),
@@ -574,6 +589,91 @@ export const dataSourcesApi = {
 
 export const dataAskApi = {
   query: (data: object) => api.post("/data-ask/query", data),
+  feedback: (data: object) => api.post("/data-ask/feedback", data),
+  trainTask: (id: number | string) => api.get(`/data-ask/train/tasks/${id}`),
+};
+
+// ── 经营分析看板技能（Dashboard Skill P0）──
+export const dsDashboardApi = {
+  generate: (sid: string, data: { conversation_id?: string; title?: string; template?: string }) =>
+    api.post(`/data-sources/${sid}/dashboards/generate`, data, { timeout: 30000 }),
+  task: (tid: string) => api.get(`/dashboards/tasks/${tid}`),
+  viewUrl: (id: string) => `/api/v1/dashboards/${id}/view`,
+};
+
+export const dsDistillApi = {
+  stats: (id: string) => api.get(`/data-sources/${id}/distill/stats`),
+  examples: (id: string, kind?: string) =>
+    api.get(`/data-sources/${id}/examples`, { params: kind ? { kind } : {} }),
+  distillExamples: (id: string) => api.post(`/data-sources/${id}/examples/distill`),
+  deleteExample: (eid: string) => api.delete(`/examples/${eid}`),
+  templates: (id: string) => api.get(`/data-sources/${id}/templates`),
+  mineTemplates: (id: string) => api.post(`/data-sources/${id}/templates/mine`),
+  updateTemplate: (tid: string, data: object) => api.patch(`/templates/${tid}`, data),
+  rules: (id: string) => api.get(`/data-sources/${id}/rules`),
+  mineRules: (id: string) => api.post(`/data-sources/${id}/rules/mine`),
+  updateRule: (rid: string, data: object) => api.patch(`/rules/${rid}`, data),
+  activateRule: (rid: string) => api.post(`/rules/${rid}/activate`),
+  rejectRule: (rid: string) => api.post(`/rules/${rid}/reject`),
+  trainPreview: (data: { data_source_id: string; sql: string; limit?: number }) =>
+    api.post("/data-ask/train/preview", data),
+  trainMetrics: (id: string, days = 30) =>
+    api.get(`/data-sources/${id}/train/metrics`, { params: { days } }),
+  materializeMetrics: (id: string, days = 7) =>
+    api.post(`/data-sources/${id}/train/metrics/materialize`, null, { params: { days } }),
+  // P2：影子对比 / 效果归因 / 进化闭环 / 训练 SSE
+  shadowCompare: (id: string, question: string) =>
+    api.post(`/data-sources/${id}/shadow-compare`, { question }),
+  attribution: (id: string, days = 30) =>
+    api.get(`/data-sources/${id}/attribution`, { params: { days } }),
+  evolve: (id: string) => api.post(`/data-sources/${id}/evolve`),
+};
+
+export const dsFactoryApi = {
+  coach: (id: string) => api.get(`/data-sources/${id}/factory/coach`),
+  generate: (id: string, data: { nl_prompt?: string; name?: string }) =>
+    api.post(`/data-sources/${id}/factory/generate`, data),
+  publish: (id: string, data: object) => api.post(`/data-sources/${id}/factory/publish`, data),
+  regenerate: (id: string) => api.post(`/data-sources/${id}/factory/regenerate`),
+  trial: (id: string, question: string) =>
+    api.post(`/data-sources/${id}/factory/trial`, { question }),
+  versions: (aid: string) => api.get(`/agents/${aid}/versions`),
+  diff: (aid: string, vid: number, base?: number) =>
+    api.get(`/agents/${aid}/versions/${vid}/diff`, { params: base != null ? { base } : {} }),
+  rollback: (aid: string, vid: number, note?: string) =>
+    api.post(`/agents/${aid}/versions/${vid}/rollback`, { note }),
+  releases: (aid: string) => api.get(`/agents/${aid}/releases`),
+  release: (aid: string, data: object) => api.post(`/agents/${aid}/releases`, data),
+};
+
+// ── Agent Evolution 阶段四 L4：回归评估与质量看板 ──
+export const dsEvalApi = {
+  evalSet: (sid: string, includeInactive = false) =>
+    api.get(`/data-sources/${sid}/eval/set`, { params: includeInactive ? { include_inactive: true } : {} }),
+  createEvalItem: (sid: string, data: object) => api.post(`/data-sources/${sid}/eval/set`, data),
+  buildEvalSet: (sid: string) => api.post(`/data-sources/${sid}/eval/set/build`),
+  updateEvalItem: (qid: string, data: object) => api.patch(`/eval-set/${qid}`, data),
+  deleteEvalItem: (qid: string) => api.delete(`/eval-set/${qid}`),
+  runEval: (sid: string) => api.post(`/data-sources/${sid}/eval/run`),
+  runs: (sid: string, limit = 20) => api.get(`/data-sources/${sid}/eval/runs`, { params: { limit } }),
+  runDetail: (rid: number) => api.get(`/eval-runs/${rid}`),
+  quality: (sid: string) => api.get(`/data-sources/${sid}/eval/quality`),
+  gaps: (sid: string) => api.get(`/data-sources/${sid}/eval/gaps`),
+  weekly: () => api.post(`/eval/weekly`),
+};
+
+// ── 苏格拉底反问评估 (S4) ────────────────────────────
+export const socraticApi = {
+  evalSet: (agentId = null) => api.get("/agents/socratic/eval/set", { params: agentId ? { agent_id: agentId } : {} }),
+  buildEvalSet: (agentId = null) => api.post("/agents/socratic/eval/set/build", agentId ? { agent_id: agentId } : {}),
+  createEvalItem: (data: unknown) => api.post("/agents/socratic/eval/set", data),
+  updateEvalItem: (qid: string | number, data: unknown) => api.patch(`/socratic-eval-set/${qid}`, data),
+  deleteEvalItem: (qid: string | number) => api.delete(`/socratic-eval-set/${qid}`),
+  runEval: (agentId = null) => api.post("/agents/socratic/eval/run", agentId ? { agent_id: agentId } : {}),
+  runs: (agentId = null, limit = 20) => api.get("/agents/socratic/eval/runs", { params: agentId ? { agent_id: agentId, limit } : { limit } }),
+  runDetail: (rid: string | number) => api.get(`/socratic-eval-runs/${rid}`),
+  quality: (agentId = null, windowDays = 30) => api.get("/agents/socratic/quality", { params: agentId ? { agent_id: agentId, window_days: windowDays } : { window_days: windowDays } }),
+  weekly: () => api.post("/agents/socratic/weekly"),
 };
 
 // ── Digital Employees ───────────────────────────────
@@ -604,9 +704,26 @@ export const employeesApi = {
 };
 
 // ── Streaming helper ──────────────────────────────────
+export interface ClarifyQuestion {
+  text: string;
+  options?: string[];
+  why?: string;
+}
+
+export interface ClarifyPayload {
+  questions: ClarifyQuestion[];
+  round: number;
+  max_rounds: number;
+  fallback?: string;
+}
+
 export interface ChatStreamEvent {
+  questions?: ClarifyQuestion[];
+  max_rounds?: number;
+  fallback?: string;
   token?: string;
   thinking?: string;
+  citations?: { document_id?: string; document_name?: string; snippet?: string }[];
   error?: string;
   event?: string;
   agent_id?: string;
@@ -618,6 +735,16 @@ export interface ChatStreamEvent {
   content?: string;
   label?: string;
   mode?: string;
+  chart_data?: { type?: string; title?: string; labels?: string[]; datasets?: { label: string; data: number[] }[] } | null;
+  tool_call?: { name?: string; args?: Record<string, unknown> };
+  tool_result?: { content?: string; tool_call_id?: string };
+  subtask_id?: string;
+  status?: string;
+  sql?: string | null;
+  display_sql?: string | null;
+  row_count?: number;
+  trace_id?: number | null;
+  memory_hits?: number;
 }
 
 export async function* streamChatResponse(
@@ -700,11 +827,12 @@ async function* readChatSseStream(response: Response): AsyncGenerator<ChatStream
         if (parsed.token) event.token = parsed.token;
         if (parsed.thinking) event.thinking = parsed.thinking;
         if (parsed.error) event.error = parsed.error;
+        if (parsed.chart_data) event.chart_data = parsed.chart_data;
         if (parsed.event) {
           Object.assign(event, parsed);
         }
         if (event.error) throw new Error(event.error);
-        if (event.token || event.thinking || event.event) yield event;
+        if (event.token || event.thinking || event.event || event.chart_data) yield event;
       } catch (e) {
         if (e instanceof SyntaxError) continue;
         throw e;

@@ -1,7 +1,7 @@
 FROM docker.m.daocloud.io/library/node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm config set strict-ssl false && npm ci
 
 FROM docker.m.daocloud.io/library/node:20-alpine AS builder
 WORKDIR /app

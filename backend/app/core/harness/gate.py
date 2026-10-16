@@ -60,6 +60,9 @@ async def execute_tool(
     skip_gate: bool = False,
 ) -> str:
     hooks = get_default_hooks()
+    if ctx is not None and ctx.cancelled:
+        return "Tool skipped: the turn was cancelled."
+
     await hooks.run_before(tool.name, tool_args)
 
     if (
@@ -69,9 +72,25 @@ async def execute_tool(
         and ToolPolicy.requires_harness_confirmation(tool.name, auto_confirm=ctx.auto_confirm)
     ):
         action = await create_pending_action(db, ctx, tool_name=tool.name, tool_args=tool_args)
+        ctx.record(
+            "tool/hold",
+            tool=tool.name,
+            phase="pre-execute",
+            action_id=action.id,
+            sandbox=ToolPolicy.sandbox_for(tool.name),
+        )
         result = pending_message(action)
         await hooks.run_after(tool.name, tool_args, result)
         return result
+
+    if ctx is not None:
+        ctx.record(
+            "tool/execute",
+            tool=tool.name,
+            phase="execute",
+            risk=ToolPolicy.risk_for(tool.name).value,
+            sandbox=ToolPolicy.sandbox_for(tool.name),
+        )
 
     try:
         result = await tool.arun(tool_args)

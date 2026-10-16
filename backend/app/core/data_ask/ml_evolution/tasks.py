@@ -1,0 +1,116 @@
+"""
+ML 进化引擎 · Celery 异步任务（阶段二 LSTM + 阶段三 CNN）
+
+- schedule_evolution: 每次问数后触发（data_sources.py query 端点挂钩），不阻塞问数响应
+- 依次执行 LSTM 进化 + CNN 进化，各自独立 try/except，互不影响
+- Celery 进程中 asyncio.run 每次新建事件循环，必须用 NullPool 独立引擎，防止跨 loop 连接复用报错
+- torch 延迟导入：数据不足跳过路径无需 torch
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, List, Optional
+
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from app.config import settings
+from app.core.tasks_runtime import run_in_persistent_loop
+from app.worker import celery_app
+
+logger = logging.getLogger("ml_evolution")
+
+# 独立 NullPool 引擎（每条连接用完即弃，跨 loop 安全）
+_evo_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+EvoSessionLocal = async_sessionmaker(_evo_engine, expire_on_commit=False)
+
+from app.core.data_ask.ml_evolution import registry as _registry  # noqa: E402
+
+_registry.set_session_factory(EvoSessionLocal)
+
+
+def _jsonable(v: Any) -> Any:
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+@celery_app.task(name="ml_evolution.schedule_evolution", ignore_result=True, max_retries=0)
+def schedule_evolution(
+    data_source_id: str,
+    columns: Optional[List[str]] = None,
+    rows: Optional[List[Any]] = None,
+    question: str = "",
+    query_id: Optional[str] = None,
+) -> None:
+    rows = rows or []
+    if len(rows) > 5000:
+        rows = rows[:5000]
+    rows = [[_jsonable(v) for v in r] if isinstance(r, (list, tuple)) else _jsonable(r) for r in rows]
+    columns = [str(c) for c in (columns or [])]
+
+    from app.core.data_ask.ml_evolution.evolution import evolve_after_query, evolve_cnn_after_query
+
+    # LSTM 进化（阶段二）
+    try:
+        res = run_in_persistent_loop(
+            evolve_after_query(str(data_source_id), columns, rows, question or "")
+        )
+        logger.info("ml_evolution[lstm] ds=%s result=%s", data_source_id, res)
+    except Exception:
+        logger.exception("ml_evolution[lstm] task failed ds=%s", data_source_id)
+
+    # CNN 进化（阶段三）
+    try:
+        res_cnn = run_in_persistent_loop(
+            evolve_cnn_after_query(str(data_source_id), columns, rows, question or "")
+        )
+        logger.info("ml_evolution[cnn] ds=%s result=%s", data_source_id, res_cnn)
+    except Exception:
+        logger.exception("ml_evolution[cnn] task failed ds=%s", data_source_id)
+
+
+
+@celery_app.task(name="ml_evolution.nightly_retrain", ignore_result=True, max_retries=0)
+def nightly_retrain(
+    data_source_id: str,
+    columns: Optional[List[str]] = None,
+    rows: Optional[List[Any]] = None,
+    question: str = "",
+) -> None:
+    """慢进化：网格搜索全量重训（手动触发或夜间调度）
+
+    与 schedule_evolution 的区别：
+    - schedule_evolution: 固定超参增量 fine-tune（快进化，每次问数后触发）
+    - nightly_retrain: 网格搜索 18 组超参选最优（慢进化，手动/夜间触发）
+    """
+    rows = rows or []
+    if len(rows) > 5000:
+        rows = rows[:5000]
+    rows = [[_jsonable(v) for v in r] if isinstance(r, (list, tuple)) else _jsonable(r) for r in rows]
+    columns = [str(c) for c in (columns or [])]
+
+    from app.core.data_ask.ml_evolution.evolution import grid_search_evolve, evolve_cnn_after_query
+
+    # LSTM 网格搜索（慢进化核心）
+    try:
+        res = run_in_persistent_loop(
+            grid_search_evolve(str(data_source_id), columns, rows, question or "")
+        )
+        logger.info("ml_evolution[nightly_retrain lstm] ds=%s result=%s", data_source_id, res)
+    except Exception:
+        logger.exception("ml_evolution[nightly_retrain lstm] task failed ds=%s", data_source_id)
+
+    # CNN 也走一遍常规进化（CNN 不做网格搜索，形态识别足够）
+    try:
+        res_cnn = run_in_persistent_loop(
+            evolve_cnn_after_query(str(data_source_id), columns, rows, question or "")
+        )
+        logger.info("ml_evolution[nightly_retrain cnn] ds=%s result=%s", data_source_id, res_cnn)
+    except Exception:
+        logger.exception("ml_evolution[nightly_retrain cnn] task failed ds=%s", data_source_id)

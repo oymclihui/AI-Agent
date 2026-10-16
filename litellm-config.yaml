@@ -1,0 +1,74 @@
+model_list:
+  # ── 千问 MaaS 统一端点（OpenAI 兼容）──
+  - model_name: qwen3.8-flash
+    litellm_params:
+      model: openai/qwen3.8-flash
+      api_base: https://maas.qianwenaiapi.com/compatible-mode/v1
+      api_key: os.environ/QWEN_MASS_KEY
+
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openai/qwen-turbo
+      api_base: https://maas.qianwenaiapi.com/compatible-mode/v1
+      api_key: os.environ/QWEN_MASS_KEY
+
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://maas.qianwenaiapi.com/compatible-mode/v1
+      api_key: os.environ/QWEN_MASS_KEY
+
+  - model_name: qwen-max
+    litellm_params:
+      model: openai/qwen-max
+      api_base: https://maas.qianwenaiapi.com/compatible-mode/v1
+      api_key: os.environ/QWEN_MASS_KEY
+
+  # ── Agnes-AI (待密钥验证后启用) ──
+  - model_name: agnes-3.0-flash
+    litellm_params:
+      model: openai/agnes-3.0-flash
+      api_base: https://api.agnes-ai.cn/v1
+      api_key: os.environ/AGNES_API_KEY
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openai/qwen-turbo
+      api_base: https://maas.qianwenaiapi.com/compatible-mode/v1
+      api_key: os.environ/QWEN_MASS_KEY
+
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://maas.qianwenaiapi.com/compatible-mode/v1
+      api_key: os.environ/QWEN_MASS_KEY
+
+  # ── DeepSeek（预留，填入真实 Key 后生效）──
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-reasoner
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # ── 智谱 GLM（预留，填入真实 Key 后生效）──
+  - model_name: glm-4
+    litellm_params:
+      model: zhipu/glm-4
+      api_key: os.environ/ZHIPU_API_KEY
+  - model_name: glm-4-flash
+    litellm_params:
+      model: zhipu/glm-4-flash
+      api_key: os.environ/ZHIPU_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
+  num_retries: 2
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: postgresql://postgres:Pg%40123456@172.16.120.120:5432/litellm
+  redis_url: redis://:Redis%40123456@172.16.120.119:6379/1
+  allow_virtual_keys: true

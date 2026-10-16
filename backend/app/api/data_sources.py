@@ -1,7 +1,9 @@
 """Data source management and data ask APIs."""
 from __future__ import annotations
 
+import copy
 import json
+import shutil
 from datetime import datetime, timezone
 
 import structlog
@@ -49,7 +51,7 @@ from app.core.data_ask.govern.access import (
 from app.core.auth.permissions import resolve_data_scope
 from app.core.data_ask.intelligence.query_memory import save_golden_query
 from app.core.data_ask.schema.drift import detect_schema_drift
-from app.core.data_ask.schema.introspect import infer_join_graph, introspect_tables
+from app.core.data_ask.schema.introspect import catalog_related_tables, infer_join_graph, introspect_tables, is_key_column
 from app.core.data_ask.semantic.mdl import default_semantic_model, validate_semantic_model
 from app.core.data_ask.service import run_data_ask, stream_data_ask
 from app.core.excel_parser.service import create_parse_job
@@ -276,6 +278,124 @@ async def update_data_source(
     await db.commit()
     await db.refresh(source, ["tables"])
     return _source_out(source)
+
+
+def _copy_excel_tree(src_id: str, dest_id: str) -> None:
+    src = excel_folder(src_id)
+    dest = excel_folder(dest_id)
+    for child in src.iterdir():
+        target = dest / child.name
+        if child.is_dir():
+            shutil.copytree(child, target, dirs_exist_ok=True)
+        elif child.is_file():
+            shutil.copy2(child, target)
+
+
+async def _unique_copy_name(db: AsyncSession, base: str) -> str:
+    stem = (base or "数据源").strip() or "数据源"
+    candidate = f"{stem} 副本"
+    for n in range(2, 51):
+        found = await db.execute(select(DataSource.id).where(DataSource.name == candidate))
+        if found.scalar_one_or_none() is None:
+            return candidate[:255]
+        candidate = f"{stem} 副本 {n}"
+    return f"{stem} 副本 {generate_uuid()[:8]}"[:255]
+
+
+@router.post("/{source_id}/duplicate", response_model=DataSourceOut, status_code=status.HTTP_201_CREATED)
+async def duplicate_data_source(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Copy connection, tables, semantic model and confirmed SQL. Bindings stay on the original."""
+    source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
+    new_id = generate_uuid()
+    perm_id = source.permission_source_id
+    if perm_id == source.id:
+        perm_id = new_id
+    cloned = DataSource(
+        id=new_id,
+        owner_id=user.id,
+        name=await _unique_copy_name(db, source.name),
+        driver=source.driver,
+        host=source.host,
+        port=source.port,
+        username=source.username,
+        password_enc=source.password_enc or "",
+        database=source.database,
+        db_schema=source.db_schema,
+        ssl=source.ssl,
+        permission_rules=copy.deepcopy(source.permission_rules or {}),
+        permission_source_id=perm_id,
+        semantic_model=copy.deepcopy(source.semantic_model or {}),
+        agent_id=None,
+        employee_id=None,
+        chat_enabled=source.chat_enabled,
+        report_enabled=source.report_enabled,
+        status=DataSourceStatus.active,
+        metadata_=copy.deepcopy(source.metadata_ or {}),
+    )
+    db.add(cloned)
+    for table in list(source.tables or []):
+        db.add(
+            DataSourceTable(
+                id=generate_uuid(),
+                data_source_id=new_id,
+                table_name=table.table_name,
+                role=table.role,
+                object_type=table.object_type,
+                column_meta=copy.deepcopy(table.column_meta or {}),
+                join_keys=copy.deepcopy(table.join_keys or {}),
+                sample_rows=copy.deepcopy(table.sample_rows or []),
+            )
+        )
+    golden_rows = await db.execute(
+        select(DataAskGoldenQuery)
+        .where(DataAskGoldenQuery.data_source_id == source.id)
+        .order_by(DataAskGoldenQuery.use_count.desc())
+        .limit(100)
+    )
+    for row in golden_rows.scalars().all():
+        db.add(
+            DataAskGoldenQuery(
+                id=generate_uuid(),
+                data_source_id=new_id,
+                question=row.question,
+                sql_text=row.sql_text,
+                confirmed_by=row.confirmed_by,
+                use_count=row.use_count or 1,
+            )
+        )
+    grant_rows = await db.execute(
+        select(DataSourceGrant).where(DataSourceGrant.data_source_id == source.id)
+    )
+    for grant in grant_rows.scalars().all():
+        if grant.user_id == user.id:
+            continue
+        db.add(
+            DataSourceGrant(
+                id=generate_uuid(),
+                data_source_id=new_id,
+                user_id=grant.user_id,
+                can_ask=grant.can_ask,
+                can_manage=grant.can_manage,
+            )
+        )
+    if is_excel_driver(str(source.driver)):
+        try:
+            _copy_excel_tree(source.id, new_id)
+        except Exception as exc:
+            try:
+                remove_excel_folder(new_id)
+            except Exception:
+                logger.exception("duplicate_excel_cleanup_failed", source_id=new_id)
+            raise HTTPException(status_code=400, detail=f"复制 Excel 文件失败: {exc}") from exc
+    await db.commit()
+    await db.refresh(cloned, ["tables"])
+    manage = await user_can_manage_data_source(db, cloned, user)
+    return _source_out(cloned, can_manage=manage)
 
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -808,6 +928,18 @@ async def create_golden_query(
     )
 
 
+@router.get("/{source_id}/recommended-questions")
+async def recommended_questions(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await _get_source(db, source_id, user)
+    from app.core.data_ask.intelligence.query_memory import recommend_questions as _recommend
+
+    return {"questions": await _recommend(db, data_source_id=source_id)}
+
+
 @router.get("/{source_id}/schema-graph", response_model=SchemaGraphOut)
 async def schema_graph(
     source_id: str,
@@ -824,7 +956,22 @@ async def schema_graph(
         if t.role == DataSourceTableRole.data
     ]
     graph = infer_join_graph(tables)
-    return SchemaGraphOut(**graph)
+    related = await catalog_related_tables(source, tables)
+    keys: list[str] = []
+    seen: set[str] = set()
+    for table in tables:
+        for column in table.get("columns") or []:
+            name = str(column.get("name") or "") if isinstance(column, dict) else ""
+            if name and is_key_column(name) and name.lower() not in seen:
+                seen.add(name.lower())
+                keys.append(name)
+    columns_by_name = {str(table["table_name"]): table.get("columns") or [] for table in tables}
+    nodes = []
+    for node in graph["nodes"]:
+        enriched = dict(node)
+        enriched["columns"] = columns_by_name.get(str(node.get("id") or "")) or []
+        nodes.append(enriched)
+    return SchemaGraphOut(nodes=nodes, edges=graph["edges"], related=related, keys=keys)
 
 
 @router.post("/{source_id}/blueprint", response_model=GenerateBlueprintOut)
@@ -977,10 +1124,29 @@ async def data_ask_query(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Redis 限流：每用户每分钟 N 次（Redis 不可用自动放行）
+    try:
+        from app.core.cache.redis_cache import rate_limit_check, DATAASK_RATELIMIT_PER_MIN
+        _ok, _cnt = await rate_limit_check(f"ratelimit:dataask:{user.id}", limit=DATAASK_RATELIMIT_PER_MIN)
+        if not _ok:
+            raise HTTPException(
+                status_code=429,
+                detail=f"问数请求过于频繁（每分钟限 {DATAASK_RATELIMIT_PER_MIN} 次），请稍后再试",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     source = await db.get(DataSource, payload.data_source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     await assert_data_source_access(db, source, user, require_chat=True)
+    history = [
+        {"role": item.role or "user", "content": (item.content or "")[:500]}
+        for item in (payload.history or [])
+        if (item.content or "").strip()
+    ]
 
     if payload.stream and payload.execute:
         async def sse():
@@ -994,12 +1160,37 @@ async def data_ask_query(
                     llm_provider=payload.llm_provider,
                     llm_model=payload.llm_model,
                     execute=True,
+                    history=history,
                 ):
                     yield f"data: {line.strip()}\n\n"
             except Exception as exc:
                 yield f"data: {json.dumps({'event': 'error', 'error': str(exc)}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(sse(), media_type="text/event-stream")
+
+    # Redis 缓存：相同问题（含历史/参数）300 秒内直接返回
+    _cache_key = None
+    try:
+        from app.core.cache.redis_cache import make_dataask_cache_key, cache_get_json
+        _cache_key = make_dataask_cache_key(
+            data_source_id=payload.data_source_id, question=payload.question,
+            sql_override=payload.sql_override, llm_provider=payload.llm_provider,
+            llm_model=payload.llm_model, execute=payload.execute, history=history,
+        )
+        _cached = await cache_get_json(_cache_key)
+        if _cached is not None:
+            try:
+                from app.core.data_ask.service import write_ask_trace
+                _tid = await write_ask_trace(
+                    db, data_source_id=payload.data_source_id, question=payload.question,
+                    user=user, result=_cached, cached=True,
+                )
+                _cached["trace_id"] = _tid
+            except Exception:
+                pass
+            return DataAskQueryOut(**_cached)
+    except Exception:
+        _cache_key = None
 
     try:
         result = await run_data_ask(
@@ -1011,10 +1202,42 @@ async def data_ask_query(
             llm_provider=payload.llm_provider,
             llm_model=payload.llm_model,
             execute=payload.execute,
+            history=history,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("data_ask_query_failed")
         raise HTTPException(status_code=500, detail=str(exc)[:500]) from exc
+    if result.get("clarification"):
+        return DataAskQueryOut(**result)
+
+    # 缓存写入（非流式成功结果，TTL 默认 300s）
+    if _cache_key:
+        try:
+            from app.core.cache.redis_cache import cache_set_json, DATAASK_CACHE_TTL
+            _cache_payload = {k: v for k, v in result.items() if k != "trace_id"}
+            await cache_set_json(_cache_key, _cache_payload, ttl=DATAASK_CACHE_TTL)
+        except Exception:
+            pass
+
+    # ML Evolution：每次问数都是一次训练机会（Celery 异步，不阻塞响应）
+    try:
+        from app.core.data_ask.ml_evolution.tasks import schedule_evolution
+        from app.core.data_ask.utils.json_safe import json_safe_value
+
+        _evo_rows = (result.get("rows") or [])[:5000]
+        _evo_rows = [
+            [json_safe_value(v) for v in r] if isinstance(r, (list, tuple)) else json_safe_value(r)
+            for r in _evo_rows
+        ]
+        schedule_evolution.delay(
+            data_source_id=str(payload.data_source_id),
+            columns=[str(c) for c in (result.get("columns") or [])],
+            rows=_evo_rows,
+            question=payload.question,
+        )
+    except Exception:
+        logger.exception("schedule_evolution_failed")
+
     return DataAskQueryOut(**result)

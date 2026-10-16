@@ -1,14 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, FileSpreadsheet, MessageSquare, Play, RefreshCw, Save, Trash2, Upload, Wand2 } from "lucide-react";
+import { ArrowLeft, Copy, FileSpreadsheet, MessageSquare, Pencil, Play, RefreshCw, Save, Search, Star, ThumbsDown, ThumbsUp, Trash2, Upload, Wand2 } from "lucide-react";
 import toast from "react-hot-toast";
 import { dataAskApi, dataSourcesApi, excelParserApi } from "@/lib/api";
+import { ChartRenderer, type ChatChartData } from "@/components/ChartRenderer";
 import { useLangStore } from "@/lib/langStore";
 import { useClientAuth } from "@/hooks/useClientAuth";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import ClarifyCard from "@/components/chat/ClarifyCard";
+
+const ErDiagram = dynamic(() => import("./ErDiagram").then((mod) => mod.ErDiagram), { ssr: false });
 
 type Tab = "overview" | "files" | "ask" | "semantic" | "audit" | "drift" | "access";
 
@@ -17,12 +22,47 @@ interface DataSourceDetail {
   name: string;
   driver: string;
   host: string;
+  port?: number;
+  username?: string;
+  password_set?: boolean;
   database: string;
+  db_schema?: string;
+  ssl?: string;
+  chat_enabled?: boolean;
+  report_enabled?: boolean;
   agent_id?: string | null;
   employee_id?: string | null;
   can_manage?: boolean;
   tables: { table_name: string; role: string; object_type?: string; column_meta?: { columns?: { name: string; type: string }[] } }[];
   semantic_model?: Record<string, unknown>;
+}
+
+interface EditForm {
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  database: string;
+  db_schema: string;
+  ssl: string;
+  chat_enabled: boolean;
+  report_enabled: boolean;
+}
+
+function formFromSource(ds: DataSourceDetail): EditForm {
+  return {
+    name: ds.name || "",
+    host: ds.host || "",
+    port: String(ds.port ?? ""),
+    username: ds.username || "",
+    password: "",
+    database: ds.database || "",
+    db_schema: ds.db_schema || "",
+    ssl: ds.ssl || "prefer",
+    chat_enabled: ds.chat_enabled !== false,
+    report_enabled: ds.report_enabled !== false,
+  };
 }
 
 interface GrantRow {
@@ -36,7 +76,9 @@ interface GrantRow {
 
 interface GraphData {
   nodes: { id: string; label: string }[];
-  edges: { from: string; to: string; label: string }[];
+  edges: { from: string; to: string; label: string; kind?: string }[];
+  related?: { from: string; to: string; label: string; kind?: string }[];
+  keys?: string[];
 }
 
 interface AuditRow {
@@ -68,6 +110,25 @@ const DEFAULT_MDL = `{
   "notes": ["只统计权限范围内数据"]
 }`;
 
+function toAskChart(chart: {
+  type?: string;
+  labels: string[];
+  values?: number[];
+  series?: string;
+  datasets?: { label: string; data: number[] }[];
+  horizontal?: boolean;
+  title?: string;
+} | null | undefined): ChatChartData | null {
+  if (!chart?.labels?.length) return null;
+  const datasets = chart.datasets?.length
+    ? chart.datasets
+    : [{ label: chart.series || "value", data: chart.values || [] }];
+  const type = chart.type === "line" || chart.type === "pie" || chart.type === "area" || chart.type === "scatter"
+    ? chart.type
+    : "bar";
+  return { type, title: chart.title, labels: chart.labels, datasets, horizontal: Boolean(chart.horizontal) };
+}
+
 export default function DataSourceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -77,6 +138,7 @@ export default function DataSourceDetailPage() {
   const [ds, setDs] = useState<DataSourceDetail | null>(null);
   const [graph, setGraph] = useState<GraphData | null>(null);
   const [question, setQuestion] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [editSql, setEditSql] = useState("");
   const [askResult, setAskResult] = useState<{
     answer?: string;
@@ -85,9 +147,22 @@ export default function DataSourceDetailPage() {
     explanation?: string;
     columns?: string[];
     rows?: unknown[][];
-    chart?: { labels: string[]; values: number[]; series: string };
+    chart?: {
+      type?: string;
+      labels: string[];
+      values?: number[];
+      series?: string;
+      datasets?: { label: string; data: number[] }[];
+      horizontal?: boolean;
+      title?: string;
+    };
+    clarification?: string;
     files_released?: boolean;
+    trace_id?: number | null;
   } | null>(null);
+  const [fbState, setFbState] = useState<{ traceId: number; type: string } | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionSql, setCorrectionSql] = useState("");
   const [asking, setAsking] = useState(false);
   const [mdlText, setMdlText] = useState(DEFAULT_MDL);
   const [savingMdl, setSavingMdl] = useState(false);
@@ -115,6 +190,19 @@ export default function DataSourceDetailPage() {
   const [grantCanManage, setGrantCanManage] = useState(false);
   const [savingGrants, setSavingGrants] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const openedEdit = useRef(false);
+  const [editing, setEditing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [editingTables, setEditingTables] = useState(false);
+  const [remoteRels, setRemoteRels] = useState<{ name: string; object_type: string }[]>([]);
+  const [selDataTables, setSelDataTables] = useState<string[]>([]);
+  const [selPermTable, setSelPermTable] = useState("");
+  const [tblSearch, setTblSearch] = useState("");
+  const [tblLoading, setTblLoading] = useState(false);
+  const [tblSaving, setTblSaving] = useState(false);
+  const [editForm, setEditForm] = useState<EditForm | null>(null);
 
   const loadTemplateStatus = useCallback(() => {
     if (!id) return;
@@ -207,7 +295,12 @@ export default function DataSourceDetailPage() {
     if (tab === "drift") loadDrift();
     if (tab === "files") loadExcelFiles();
     if (tab === "access" && ds?.can_manage) loadGrants();
-  }, [tab, loadAudit, loadDrift, loadExcelFiles, loadGrants, ds?.can_manage]);
+    if (tab === "ask" && id) {
+      void dataSourcesApi.recommendedQuestions(id).then(({ data }) => {
+        setSuggestions((data as { questions?: string[] }).questions || []);
+      }).catch(() => setSuggestions([]));
+    }
+  }, [tab, loadAudit, loadDrift, loadExcelFiles, loadGrants, ds?.can_manage, id]);
 
   const onGenerateSql = async () => {
     if (!id || !question.trim()) return;
@@ -218,10 +311,17 @@ export default function DataSourceDetailPage() {
         question: question.trim(),
         execute: false,
       });
-      const payload = data as { sql?: string; display_sql?: string; explanation?: string };
+      const payload = data as { sql?: string; display_sql?: string; explanation?: string; answer?: string; clarification?: string };
       setEditSql(payload.display_sql || payload.sql || "");
-      setAskResult({ explanation: payload.explanation, sql: payload.sql });
-      toast.success(t("SQL 已生成，可编辑后执行", "SQL generated — edit then run"));
+      setAskResult({
+        explanation: payload.explanation,
+        sql: payload.sql,
+        answer: payload.clarification ? "" : payload.answer,
+        clarification: payload.clarification,
+      });
+      toast.success(payload.clarification
+        ? t("需要补充问题", "Need a more specific question")
+        : t("SQL 已生成，可编辑后执行", "SQL generated — edit then run"));
     } catch (e: unknown) {
       toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Error"));
     } finally {
@@ -262,6 +362,47 @@ export default function DataSourceDetailPage() {
       toast.success(t("已保存为记忆问答", "Saved to query memory"));
     } catch {
       toast.error(t("保存失败", "Save failed"));
+    }
+  };
+
+  const onFeedback = async (type: "like" | "dislike" | "example") => {
+    if (!id || !askResult?.trace_id) return;
+    try {
+      const { data } = await dataAskApi.feedback({
+        data_source_id: id,
+        feedback_type: type,
+        trace_id: askResult.trace_id,
+        question: question.trim(),
+        original_sql: askResult.sql || "",
+      });
+      setFbState({ traceId: askResult.trace_id, type });
+      toast.success((data as { message?: string })?.message || t("反馈已保存", "Feedback saved"));
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("反馈失败", "Feedback failed")));
+    }
+  };
+
+  const openCorrection = () => {
+    setCorrectionSql(askResult?.sql || editSql || "");
+    setCorrectionOpen(true);
+  };
+
+  const onSubmitCorrection = async () => {
+    if (!id || !askResult?.trace_id || !correctionSql.trim()) return;
+    try {
+      const { data } = await dataAskApi.feedback({
+        data_source_id: id,
+        feedback_type: "correction",
+        trace_id: askResult.trace_id,
+        question: question.trim(),
+        original_sql: askResult.sql || "",
+        corrected_sql: correctionSql.trim(),
+      });
+      setFbState({ traceId: askResult.trace_id, type: "correction" });
+      setCorrectionOpen(false);
+      toast.success((data as { message?: string })?.message || t("纠正已保存", "Correction saved"));
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("提交失败", "Submit failed")));
     }
   };
 
@@ -341,10 +482,83 @@ export default function DataSourceDetailPage() {
     }
   };
 
+  useEffect(() => {
+    if (!ds || openedEdit.current || typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("edit") !== "1") return;
+    openedEdit.current = true;
+    setEditForm(formFromSource(ds));
+    setEditing(true);
+  }, [ds]);
+
+  const openEdit = () => {
+    if (!ds) return;
+    setEditForm(formFromSource(ds));
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!id || !editForm) return;
+    const name = editForm.name.trim();
+    if (!name) {
+      toast.error(t("请填写名称", "Name is required"));
+      return;
+    }
+    const body: Record<string, unknown> = { name };
+    if (!["excel_folder", "excel_template"].includes(ds?.driver || "")) {
+      const port = Number(editForm.port);
+      if (!editForm.host.trim() || !editForm.database.trim() || !Number.isFinite(port)) {
+        toast.error(t("请填写主机、端口和数据库", "Host, port and database are required"));
+        return;
+      }
+      body.host = editForm.host.trim();
+      body.port = port;
+      body.username = editForm.username.trim();
+      body.database = editForm.database.trim();
+      body.db_schema = editForm.db_schema.trim();
+      body.ssl = editForm.ssl || "prefer";
+      body.chat_enabled = editForm.chat_enabled;
+      body.report_enabled = editForm.report_enabled;
+      if (editForm.password) body.password = editForm.password;
+    }
+    setSavingEdit(true);
+    try {
+      await dataSourcesApi.update(id, body);
+      toast.success(t("已保存", "Saved"));
+      setEditing(false);
+      load();
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("保存失败", "Save failed")));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const onCopy = async () => {
+    if (!id) return;
+    setCopying(true);
+    try {
+      const { data } = await dataSourcesApi.duplicate(id);
+      toast.success(t("已复制连接、表和已确认 SQL", "Connection, tables and confirmed SQL copied"));
+      router.push(`/data-sources/${(data as { id: string }).id}`);
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("复制失败", "Copy failed")));
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const onDelete = async () => {
     if (!id || !confirm(t("确定删除？", "Delete?"))) return;
-    await dataSourcesApi.delete(id);
-    router.push("/data-sources");
+    setDeleting(true);
+    try {
+      await dataSourcesApi.delete(id);
+      toast.success(t("已删除", "Deleted"));
+      router.push("/data-sources");
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("删除失败", "Delete failed")));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (!ds) {
@@ -368,6 +582,59 @@ export default function DataSourceDetailPage() {
     ...(ds.can_manage ? [{ value: "access" as Tab, label: t("权限", "Access") }] : []),
     ...(isExcelLike ? [] : [{ value: "drift" as Tab, label: t("Schema", "Schema") }]),
   ];
+
+  const filteredRels = remoteRels.filter(
+    (r) => !tblSearch.trim() || r.name.toLowerCase().includes(tblSearch.toLowerCase()),
+  );
+
+  const loadRemoteTables = async () => {
+    if (!id) return;
+    setTblLoading(true);
+    try {
+      const { data } = await dataSourcesApi.listRemoteTables(id, { limit: 200 });
+      const p = data as { tables?: string[]; relations?: { name: string; object_type: string }[] };
+      setRemoteRels(p.relations || (p.tables || []).map((n) => ({ name: n, object_type: "table" })));
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("加载表列表失败", "Failed to load tables")));
+    } finally {
+      setTblLoading(false);
+    }
+  };
+
+  const openEditTables = () => {
+    if (!ds) return;
+    setSelDataTables(dataTables.map((tbl) => tbl.table_name));
+    setSelPermTable(permTable?.table_name || "");
+    setTblSearch("");
+    setEditingTables(true);
+    loadRemoteTables();
+  };
+
+  const saveTables = async () => {
+    if (!id) return;
+    if (selDataTables.length === 0) {
+      toast.error(t("请至少选择一张数据表", "Select at least one data table"));
+      return;
+    }
+    const tables = [
+      ...selDataTables.map((name) => {
+        const rel = remoteRels.find((r) => r.name === name);
+        return { table_name: name, role: "data", object_type: rel?.object_type || "table" };
+      }),
+      ...(selPermTable ? [{ table_name: selPermTable, role: "permission", object_type: "table" }] : []),
+    ];
+    setTblSaving(true);
+    try {
+      await dataSourcesApi.setTables(id, { tables });
+      toast.success(t("表已更新", "Tables updated"));
+      setEditingTables(false);
+      load();
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("保存失败", "Save failed")));
+    } finally {
+      setTblSaving(false);
+    }
+  };
 
   const runTemplateParse = async () => {
     if (!id) return;
@@ -416,11 +683,83 @@ export default function DataSourceDetailPage() {
           </p>
         </div>
         {ds.can_manage && (
-          <button onClick={onDelete} className="btn-secondary text-red-500 flex items-center gap-1 px-3 py-2 text-sm">
-            <Trash2 className="h-4 w-4" />{t("删除", "Delete")}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onCopy} disabled={copying} className="btn-secondary flex items-center gap-1 px-3 py-2 text-sm">
+              <Copy className="h-4 w-4" />{copying ? t("复制中…", "Copying…") : t("复制", "Copy")}
+            </button>
+            <button type="button" onClick={openEdit} className="btn-secondary flex items-center gap-1 px-3 py-2 text-sm">
+              <Pencil className="h-4 w-4" />{t("修改", "Edit")}
+            </button>
+            <button type="button" onClick={onDelete} disabled={deleting} className="btn-secondary text-red-500 flex items-center gap-1 px-3 py-2 text-sm">
+              <Trash2 className="h-4 w-4" />{deleting ? t("删除中…", "Deleting…") : t("删除", "Delete")}
+            </button>
+          </div>
         )}
       </div>
+
+      {editing && editForm && (
+        <div className="theme-surface rounded-xl border theme-border p-4 space-y-3">
+          <h2 className="font-medium">{t("修改数据源", "Edit data source")}</h2>
+          <label className="block text-xs theme-muted">
+            {t("名称", "Name")}
+            <input className="input mt-1 w-full text-sm" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+          </label>
+          {!isExcelLike && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-xs theme-muted">
+                {t("主机", "Host")}
+                <input className="input mt-1 w-full text-sm" value={editForm.host} onChange={(e) => setEditForm({ ...editForm, host: e.target.value })} />
+              </label>
+              <label className="block text-xs theme-muted">
+                {t("端口", "Port")}
+                <input className="input mt-1 w-full text-sm" value={editForm.port} onChange={(e) => setEditForm({ ...editForm, port: e.target.value })} />
+              </label>
+              <label className="block text-xs theme-muted">
+                {t("用户名", "Username")}
+                <input className="input mt-1 w-full text-sm" value={editForm.username} onChange={(e) => setEditForm({ ...editForm, username: e.target.value })} />
+              </label>
+              <label className="block text-xs theme-muted">
+                {t("密码", "Password")}
+                <input className="input mt-1 w-full text-sm" type="password" value={editForm.password} placeholder={ds.password_set ? t("留空则不修改", "Leave blank to keep") : ""} onChange={(e) => setEditForm({ ...editForm, password: e.target.value })} />
+              </label>
+              <label className="block text-xs theme-muted">
+                {t("数据库", "Database")}
+                <input className="input mt-1 w-full text-sm" value={editForm.database} onChange={(e) => setEditForm({ ...editForm, database: e.target.value })} />
+              </label>
+              <label className="block text-xs theme-muted">
+                Schema
+                <input className="input mt-1 w-full text-sm" value={editForm.db_schema} onChange={(e) => setEditForm({ ...editForm, db_schema: e.target.value })} />
+              </label>
+              <label className="block text-xs theme-muted">
+                SSL
+                <select className="input mt-1 w-full text-sm" value={editForm.ssl} onChange={(e) => setEditForm({ ...editForm, ssl: e.target.value })}>
+                  <option value="disable">disable</option>
+                  <option value="prefer">prefer</option>
+                  <option value="require">require</option>
+                </select>
+              </label>
+              <div className="flex items-end gap-4 pb-2 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={editForm.chat_enabled} onChange={(e) => setEditForm({ ...editForm, chat_enabled: e.target.checked })} />
+                  {t("允许问数", "Chat")}
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={editForm.report_enabled} onChange={(e) => setEditForm({ ...editForm, report_enabled: e.target.checked })} />
+                  {t("允许报告", "Reports")}
+                </label>
+              </div>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button type="button" onClick={saveEdit} disabled={savingEdit} className="btn-primary px-3 py-1.5 text-sm">
+              {savingEdit ? t("保存中…", "Saving…") : t("保存", "Save")}
+            </button>
+            <button type="button" onClick={() => setEditing(false)} className="btn-secondary px-3 py-1.5 text-sm">
+              {t("取消", "Cancel")}
+            </button>
+          </div>
+        </div>
+      )}
 
       <SegmentedControl wrap size="sm" value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
 
@@ -428,24 +767,91 @@ export default function DataSourceDetailPage() {
         <>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="theme-surface rounded-xl border theme-border p-4">
-              <h2 className="font-medium mb-2">{isExcelLike ? t("已选 Excel", "Selected Excel files") : t("数据表", "Data tables")}</h2>
-              <ul className="text-sm space-y-1">
-                {dataTables.map((tbl) => (
-                  <li key={tbl.table_name}>
-                    · {tbl.table_name}
-                    {tbl.object_type === "view" && (
-                      <span className="text-xs theme-muted ml-1">({t("视图", "View")})</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              {permTable && (
-                <p className="mt-3 text-sm">
-                  <span className="theme-muted">
-                    {permTable.object_type === "view" ? t("权限视图", "Permission view") : t("权限表", "Permission table")}:{" "}
-                  </span>
-                  {permTable.table_name}
-                </p>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-medium">{isExcelLike ? t("已选 Excel", "Selected Excel files") : t("数据表", "Data tables")}</h2>
+                {ds.can_manage && !isExcelLike && (
+                  <button type="button" onClick={openEditTables} className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs">
+                    <Pencil className="h-3.5 w-3.5" />{t("修改表", "Edit tables")}
+                  </button>
+                )}
+              </div>
+              {editingTables ? (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 theme-muted pointer-events-none" />
+                    <input
+                      className="input w-full pl-9 text-sm"
+                      value={tblSearch}
+                      onChange={(e) => setTblSearch(e.target.value)}
+                      placeholder={t("搜索表名…", "Search tables…")}
+                    />
+                  </div>
+                  {tblLoading ? (
+                    <p className="text-xs theme-muted py-2">{t("加载中…", "Loading…")}</p>
+                  ) : filteredRels.length === 0 ? (
+                    <p className="text-xs theme-muted py-2">{t("无匹配结果", "No matches")}</p>
+                  ) : (
+                    <div className="max-h-56 overflow-y-auto space-y-1 border theme-border rounded-lg p-2">
+                      {filteredRels.map((rel) => (
+                        <label key={rel.name} className="flex items-center gap-2 text-sm py-0.5 hover:bg-black/5 rounded px-1">
+                          <input
+                            type="checkbox"
+                            checked={selDataTables.includes(rel.name)}
+                            onChange={(e) =>
+                              setSelDataTables((prev) =>
+                                e.target.checked ? [...prev, rel.name] : prev.filter((x) => x !== rel.name),
+                              )
+                            }
+                          />
+                          <span className="truncate flex-1" title={rel.name}>{rel.name}</span>
+                          <span className="text-xs theme-muted shrink-0">({rel.object_type})</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-xs theme-muted mb-1">{t("权限表（可选）", "Permission table (optional)")}</label>
+                    <select
+                      className="input w-full text-sm"
+                      value={selPermTable}
+                      onChange={(e) => setSelPermTable(e.target.value)}
+                    >
+                      <option value="">{t("不设置", "None")}</option>
+                      {filteredRels.map((rel) => (
+                        <option key={rel.name} value={rel.name}>{rel.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={saveTables} disabled={tblSaving} className="btn-primary px-3 py-1.5 text-sm">
+                      {tblSaving ? t("保存中…", "Saving…") : t("保存", "Save")}
+                    </button>
+                    <button type="button" onClick={() => setEditingTables(false)} className="btn-secondary px-3 py-1.5 text-sm">
+                      {t("取消", "Cancel")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <ul className="text-sm space-y-1">
+                    {dataTables.map((tbl) => (
+                      <li key={tbl.table_name}>
+                        · {tbl.table_name}
+                        {tbl.object_type === "view" && (
+                          <span className="text-xs theme-muted ml-1">({t("视图", "View")})</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {permTable && (
+                    <p className="mt-3 text-sm">
+                      <span className="theme-muted">
+                        {permTable.object_type === "view" ? t("权限视图", "Permission view") : t("权限表", "Permission table")}:{" "}
+                      </span>
+                      {permTable.table_name}
+                    </p>
+                  )}
+                </>
               )}
             </div>
             <div className="theme-surface rounded-xl border theme-border p-4">
@@ -457,16 +863,55 @@ export default function DataSourceDetailPage() {
               </Link>
             </div>
           </div>
-          {graph && graph.edges.length > 0 && (
-            <div className="theme-surface rounded-xl border theme-border p-4">
-              <h2 className="font-medium mb-2">{t("表关系", "Schema graph")}</h2>
-              <ul className="text-xs theme-muted space-y-1">
+          {!isExcelLike && (
+          <div className="theme-surface rounded-xl border theme-border p-4 space-y-3">
+            <h2 className="font-medium">{t("ER 图", "ER diagram")}</h2>
+            <p className="text-xs theme-muted">
+              {t(
+                "按编号、代码这类关联键画出已选表。虚线表是库里同键的参考表，只作血缘，不会自动加入问数。",
+                "Selected tables are linked by key columns. Dashed tables share a key in the database and stay reference-only.",
+              )}
+            </p>
+            <ErDiagram
+              tables={dataTables}
+              edges={graph?.edges || []}
+              related={graph?.related || []}
+              keys={graph?.keys || []}
+              referenceBadge={t("参考", "ref")}
+            />
+          </div>
+          )}
+          <div className="theme-surface rounded-xl border theme-border p-4">
+            <h2 className="font-medium mb-1">{t("表血缘", "Table lineage")}</h2>
+            <p className="mb-3 text-xs theme-muted">
+              {t(
+                "按编号、代码这类关联键连接已选表。库里同键的其他表只作血缘参考，不会自动加入问数。",
+                "Links selected tables by key columns. Other tables with the same key are reference only.",
+              )}
+            </p>
+            {graph && (graph.keys || []).length > 0 && (
+              <p className="mb-2 text-xs theme-text">{t("关联键", "Keys")}: {(graph.keys || []).join("、")}</p>
+            )}
+            {graph && graph.edges.length > 0 ? (
+              <ul className="space-y-1 text-xs theme-text">
                 {graph.edges.map((e, i) => (
-                  <li key={i}>{e.from} —[{e.label}]→ {e.to}</li>
+                  <li key={`edge-${i}`}>{e.from}.{e.label} = {e.to}.{e.label}</li>
                 ))}
               </ul>
-            </div>
-          )}
+            ) : (
+              <p className="text-xs theme-muted">{t("已选表之间还没有共同的关联键。", "No shared key among selected tables.")}</p>
+            )}
+            {graph && (graph.related || []).length > 0 && (
+              <div className="mt-3">
+                <h3 className="mb-1 text-sm font-medium">{t("库内同键表", "Same-key tables")}</h3>
+                <ul className="max-h-48 space-y-1 overflow-auto text-xs theme-muted">
+                  {(graph.related || []).map((e, i) => (
+                    <li key={`rel-${i}`}>{e.from}.{e.label} ↔ {e.to}.{e.label}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -508,6 +953,20 @@ export default function DataSourceDetailPage() {
       {tab === "ask" && (
         <div className="min-w-0 theme-surface rounded-xl border theme-border p-4 space-y-3">
           <h2 className="font-medium">{t("即时问数", "Quick ask")}</h2>
+          {suggestions.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className="rounded-full border theme-border px-3 py-1 text-xs theme-text"
+                  onClick={() => setQuestion(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          )}
           {(isExcelLike && excelFiles.length > 0) && (
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
               {excelPreload?.status === "ready" ? (
@@ -569,11 +1028,20 @@ export default function DataSourceDetailPage() {
               placeholder={isExcel ? t("先生成 Python 或直接编写", "Generate or write Python") : t("先生成 SQL 或直接编写", "Generate or write SQL")}
             />
           </label>
+          {askResult?.clarification && (
+            <ClarifyCard
+              payload={{ questions: [{ text: askResult.clarification, options: [] }], round: 1, max_rounds: 1 }}
+              lang={lang}
+            />
+          )}
           {askResult?.explanation && (
             <p className="text-xs theme-muted">{askResult.explanation}</p>
           )}
-          {askResult?.answer && (
+          {askResult?.answer && askResult.answer !== askResult.clarification && (
             <div className="whitespace-pre-wrap text-sm theme-text">{askResult.answer}</div>
+          )}
+          {toAskChart(askResult?.chart) && (
+            <ChartRenderer chart={toAskChart(askResult?.chart)!} />
           )}
           {askResult?.columns && askResult.rows && askResult.rows.length > 0 && (
             <div className="overflow-x-auto">
@@ -587,6 +1055,58 @@ export default function DataSourceDetailPage() {
               </table>
             </div>
           )}
+          {askResult?.trace_id ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border theme-border px-3 py-2">
+              <span className="text-xs theme-muted">{t("本次回答有帮助吗？", "Was this answer helpful?")}</span>
+              <button
+                onClick={() => onFeedback("like")}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "like" ? "bg-green-500/15 text-green-600" : "theme-muted hover:text-green-600"}`}
+              >
+                <ThumbsUp className="h-3.5 w-3.5" />{t("有用", "Good")}
+              </button>
+              <button
+                onClick={() => onFeedback("dislike")}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "dislike" ? "bg-red-500/15 text-red-600" : "theme-muted hover:text-red-600"}`}
+              >
+                <ThumbsDown className="h-3.5 w-3.5" />{t("有误", "Bad")}
+              </button>
+              <button
+                onClick={openCorrection}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "correction" ? "bg-blue-500/15 text-blue-600" : "theme-muted hover:text-blue-600"}`}
+              >
+                <Pencil className="h-3.5 w-3.5" />{t("纠正 SQL", "Fix SQL")}
+              </button>
+              <button
+                onClick={() => onFeedback("example")}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "example" ? "bg-amber-500/15 text-amber-600" : "theme-muted hover:text-amber-600"}`}
+              >
+                <Star className="h-3.5 w-3.5" />{t("存为示例", "Save as example")}
+              </button>
+              {fbState?.traceId === askResult.trace_id && (
+                <span className="text-xs text-green-600">{t("已反馈，感谢！", "Thanks for the feedback!")}</span>
+              )}
+            </div>
+          ) : null}
+          {correctionOpen && askResult?.trace_id ? (
+            <div className="space-y-2 rounded-lg border theme-border p-3">
+              <p className="text-xs theme-muted">
+                {t("修正后的 SQL 将写入问数记忆，下次自动作为参考示例", "The corrected SQL will be saved to query memory as a few-shot example")}
+              </p>
+              <textarea
+                className="input w-full min-h-[120px] font-mono text-xs"
+                value={correctionSql}
+                onChange={(e) => setCorrectionSql(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button onClick={onSubmitCorrection} className="btn-primary px-3 py-1.5 text-xs">
+                  {t("提交纠正", "Submit correction")}
+                </button>
+                <button onClick={() => setCorrectionOpen(false)} className="btn-secondary px-3 py-1.5 text-xs">
+                  {t("取消", "Cancel")}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 

@@ -2220,7 +2220,7 @@ body {
   word-break: break-word;
 }
 .markdown-body-xs { font-size: 0.75rem; }
-.markdown-body-sm { font-size: 0.875rem; }
+.markdown-body-sm { font-size: 1rem; }
 .markdown-body-md { font-size: 0.9375rem; }
 .markdown-body-lg { font-size: 1rem; }
 
@@ -2566,3 +2566,120 @@ body {
 }
 [data-theme="light"] .qa-switch-badge { color: #7c3aed; }
 
+
+/* ════════════════════════════════════════════════════════════
+   Chat 回复排版增强（数据分析 / 报告类输出统一视觉规范）
+   ════════════════════════════════════════════════════════════ */
+
+/* 整体阅读节奏：略宽行高、优化字距 */
+.markdown-body {
+  line-height: 1.8;
+  letter-spacing: 0.005em;
+}
+
+/* h2：左侧主题色竖条，强化章节层级 */
+.markdown-body .md-h2 {
+  position: relative;
+  padding-left: 11px;
+  border-left: 4px solid var(--accent, #3b82f6);
+  font-size: 1.22em;
+  letter-spacing: -0.01em;
+}
+
+/* h3：主题色小圆点前缀 */
+.markdown-body .md-h3 {
+  color: var(--prose-heading);
+  opacity: 1;
+  font-size: 1.06em;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.markdown-body .md-h3::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #3b82f6);
+  flex: none;
+}
+
+/* 段落：稳定的上下节奏 */
+.markdown-body .md-p {
+  margin: 0.7em 0;
+  opacity: 0.94;
+}
+
+/* 列表：更舒展的行距与嵌套缩进 */
+.markdown-body .md-ul,
+.markdown-body .md-ol {
+  margin: 0.7em 0;
+  padding-left: 1.5em;
+}
+.markdown-body .md-li {
+  margin: 0.34em 0;
+  padding-left: 0.2em;
+}
+.markdown-body .md-ul .md-ul,
+.markdown-body .md-ol .md-ol,
+.markdown-body .md-ul .md-ol,
+.markdown-body .md-ol .md-ul {
+  margin: 0.34em 0;
+}
+
+/* 表格：表头强化、行 hover、数字对齐 */
+.markdown-body .md-th {
+  font-size: 0.95em;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.markdown-body .md-th,
+.markdown-body .md-td {
+  padding: 0.62em 0.85em;
+  vertical-align: middle;
+}
+.markdown-body .md-tbody .md-tr {
+  transition: background 0.15s ease;
+}
+.markdown-body .md-tbody .md-tr:hover .md-td {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 7%, transparent);
+}
+.markdown-body .md-td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 引用块：稍宽的留白 */
+.markdown-body .md-blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+}
+
+/* 分隔线：章节断点更柔和 */
+.markdown-body .md-hr {
+  margin: 1.4em 0;
+  border-top-width: 2px;
+  opacity: 0.6;
+}
+
+/* 图表卡片与正文之间的统一间距（msg.chartData 容器） */
+.chat-chart-stack {
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+  box-sizing: border-box;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.chat-chart-stack > div {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* 含图表的 assistant 气泡：撑满到 max-w-2xl，避免图表被压缩成窄条 */
+.bubble-with-chart {
+  width: 100%;
+  max-width: 42rem;
+}

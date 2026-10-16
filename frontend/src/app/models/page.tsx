@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Cpu, CheckCircle, Server, Cloud, Plus, Pencil, Trash2, Star, Loader2, PlugZap, Search } from "lucide-react";
 import { modelsApi, formatApiError } from "@/lib/api";
+import { useAuthStore } from "@/lib/authStore";
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { agentAvatarTone } from "@/lib/agentCatalog";
@@ -37,7 +38,7 @@ interface Config {
   inference_params?: InferenceParams;
 }
 
-const PROVIDERS = ["ollama", "openai", "anthropic", "azure"] as const;
+const PROVIDERS = ["ollama", "openai", "deepseek", "qwen", "glm", "anthropic", "azure"] as const;
 
 type ProviderFilter = "all" | (typeof PROVIDERS)[number];
 
@@ -106,6 +107,7 @@ const emptyForm = {
   cost_per_1k_input: "",
   cost_per_1k_output: "",
   is_default: false,
+  api_key: "",
   ...emptyInference,
 };
 
@@ -161,6 +163,7 @@ function inferenceSummary(p?: InferenceParams): string | null {
 
 export default function ModelsPage() {
   const { lang } = useLangStore();
+  const isAdmin = !!useAuthStore((s) => s.user)?.is_admin;
   const m = translations.models;
   const c = translations.common;
   const chatT = translations.chat;
@@ -250,6 +253,7 @@ export default function ModelsPage() {
       cost_per_1k_input: cfg.cost_per_1k_input != null ? String(cfg.cost_per_1k_input) : "",
       cost_per_1k_output: cfg.cost_per_1k_output != null ? String(cfg.cost_per_1k_output) : "",
       is_default: cfg.is_default,
+      api_key: "",
       ...emptyInference,
       ...inferenceFromConfig(cfg),
     });
@@ -265,6 +269,7 @@ export default function ModelsPage() {
       inference_params: buildInferencePayload(form),
     };
     if (form.base_url.trim()) payload.base_url = form.base_url.trim();
+    if (form.api_key.trim()) payload.api_key = form.api_key.trim();
     if (form.context_window.trim()) payload.context_window = Number(form.context_window);
     if (form.cost_per_1k_input.trim()) payload.cost_per_1k_input = Number(form.cost_per_1k_input);
     if (form.cost_per_1k_output.trim()) payload.cost_per_1k_output = Number(form.cost_per_1k_output);
@@ -398,9 +403,13 @@ export default function ModelsPage() {
           <p>{m.subtitle[lang]}</p>
         </div>
         <div className="agents-hub-actions">
-          <button type="button" onClick={openCreate} className="agents-btn-primary">
-            <Plus className="h-4 w-4" /> {m.newConfig[lang]}
-          </button>
+          {isAdmin ? (
+            <button type="button" onClick={openCreate} className="agents-btn-primary">
+              <Plus className="h-4 w-4" /> {m.newConfig[lang]}
+            </button>
+          ) : (
+            <span className="text-sm theme-muted">{lang === "zh" ? "企业模型由管理员维护" : "Company models are managed by an admin"}</span>
+          )}
         </div>
       </div>
 
@@ -531,6 +540,8 @@ export default function ModelsPage() {
                   <div className="agents-card-footer">
                     <span className="agents-card-meta">{cfg.provider}/{cfg.model_id}</span>
                     <div className="agents-card-actions">
+                      {isAdmin && (
+                        <>
                       <button
                         type="button"
                         onClick={() => testConfig(cfg)}
@@ -551,6 +562,8 @@ export default function ModelsPage() {
                       <button type="button" onClick={() => deleteConfig(cfg)} className="agents-icon-btn agents-icon-btn-danger" title={m.deleteConfig[lang]}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -648,6 +661,14 @@ export default function ModelsPage() {
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
                 value={form.base_url}
                 onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
+              />
+              <input
+                type="password"
+                placeholder={lang === "zh" ? "企业 API Key（DeepSeek / 千问 / 智谱必填，已有模型留空则保持原值）" : "Company API key"}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 py-2 text-sm theme-text"
+                value={form.api_key}
+                onChange={(e) => setForm((f) => ({ ...f, api_key: e.target.value }))}
+                autoComplete="off"
               />
               <input
                 type="number"

@@ -137,6 +137,7 @@ class MilvusVectorStoreManager:
                 _FIELD_VECTOR,
                 {"index_type": "IVF_FLAT", "metric_type": "IP", "params": {"nlist": 128}},
             )
+            col.load()
             logger.info("milvus_collection_created", name=self.collection_name, dim=dim)
         else:
             col = Collection(self.collection_name, using=alias)

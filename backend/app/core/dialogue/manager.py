@@ -96,21 +96,20 @@ class DialogueManager:
         if attachment_context:
             messages.append(SystemMessage(content=attachment_context))
 
-        # RAG: retrieve relevant context
+        history = await self.memory.get_history(session_id)
         rag_context = ""
         if self.retriever:
             try:
-                docs = await self.retriever.aretrieve(user_message)
-                if docs:
-                    rag_context = "\n\n".join(d.page_content for d in docs[:3])
+                from app.knowledge.quality import citations_of, context_of, history_text, set_citations
+                docs = await self.retriever.aretrieve(user_message, history_text=history_text(history))
+                set_citations(citations_of(docs))
+                rag_context = context_of(docs)
+                if rag_context:
                     messages.append(SystemMessage(
-                        content=f"Relevant knowledge base context:\n{rag_context}"
+                        content=f"资料库内容，回答时依据这些片段，不要编造：\n{rag_context}"
                     ))
             except Exception as e:
                 log.warning("rag_retrieval_failed", error=str(e))
-
-        # Inject memory history
-        history = await self.memory.get_history(session_id)
         messages.extend(history)
 
         # Current user message
@@ -140,6 +139,7 @@ class DialogueManager:
             "thinking": thinking or None,
             "token_usage": token_usage,
             "rag_used": bool(rag_context),
+            "citations": __import__("app.knowledge.quality", fromlist=["get_citations"]).get_citations(),
         }
 
     async def stream(
@@ -181,21 +181,26 @@ class DialogueManager:
         if attachment_context:
             messages.append(SystemMessage(content=attachment_context))
 
+        history = await self.memory.get_history(session_id)
         rag_context = ""
         if self.retriever:
             try:
-                docs = await self.retriever.aretrieve(user_message)
-                if docs:
-                    rag_context = "\n\n".join(d.page_content for d in docs[:5])
+                from app.knowledge.quality import citations_of, context_of, history_text, set_citations
+                docs = await self.retriever.aretrieve(user_message, history_text=history_text(history))
+                set_citations(citations_of(docs))
+                rag_context = context_of(docs)
+                if rag_context:
                     messages.append(SystemMessage(
-                        content=f"Relevant knowledge base context:\n{rag_context}"
+                        content=f"资料库内容，回答时依据这些片段，不要编造：\n{rag_context}"
                     ))
             except Exception as e:
                 logger.warning("rag_retrieval_failed", error=str(e))
-
-        history = await self.memory.get_history(session_id)
         messages.extend(history)
         messages.append(HumanMessage(content=user_message))
+        from app.knowledge.quality import get_citations
+        _cites = get_citations()
+        if _cites:
+            yield {"citations": _cites}
 
         full_thinking = ""
         full_response = ""

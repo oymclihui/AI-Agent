@@ -11,7 +11,7 @@ interface ThemeState {
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
-      theme: "dark",
+      theme: "light",
       setTheme: (theme) => set({ theme }),
     }),
     { name: "aiagnet-theme" },

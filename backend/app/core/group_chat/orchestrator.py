@@ -275,8 +275,11 @@ class GroupChatOrchestrator:
         disconnected: Callable[[], Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         runtime = self.agents[agent_id]
+        subtask_id = generate_uuid()
         yield {
             "event": "agent_start",
+            "subtask_id": subtask_id,
+            "status": "running",
             "agent_id": agent_id,
             "agent_name": runtime.model.name,
             "agent_role": runtime.model.role,
@@ -330,6 +333,8 @@ class GroupChatOrchestrator:
 
         yield {
             "event": "agent_done",
+            "subtask_id": subtask_id,
+            "status": "completed",
             "agent_id": agent_id,
             "message_id": msg.id,
             "content": full.strip(),
@@ -377,9 +382,12 @@ class GroupChatOrchestrator:
             yield {"event": "round_start", "round": 1, "mode": "parallel"}
 
             async def run_parallel(aid: str) -> list[dict]:
+                subtask_id = generate_uuid()
                 events: list[dict] = []
                 events.append({
                     "event": "agent_start",
+                    "subtask_id": subtask_id,
+                    "status": "running",
                     "agent_id": aid,
                     "agent_name": self.agents[aid].model.name,
                     "agent_role": self.agents[aid].model.role,
@@ -413,7 +421,13 @@ class GroupChatOrchestrator:
                     "content": full.strip(),
                     "round": 1,
                 })
-                events.append({"event": "agent_done", "agent_id": aid, "message_id": msg.id})
+                events.append({
+                    "event": "agent_done",
+                    "subtask_id": subtask_id,
+                    "status": "completed",
+                    "agent_id": aid,
+                    "message_id": msg.id,
+                })
                 return events
 
             batches = await asyncio.gather(*[run_parallel(aid) for aid in self.config.agent_ids])

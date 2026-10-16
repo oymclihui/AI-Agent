@@ -30,11 +30,21 @@ class HarnessHooks:
             await hook(tool_name, tool_args, result)
 
 
+def _preview(value: Any, limit: int = 500) -> str:
+    text = str(value if value is not None else "")
+    return text[:limit]
+
+
 def audit_before_hook(ctx_getter) -> BeforeToolHook:
     async def _hook(tool_name: str, tool_args: dict[str, Any]) -> None:
         ctx = ctx_getter()
         if ctx:
-            ctx.append_trace({"event": "tool_before", "tool": tool_name, "args": tool_args})
+            ctx.record(
+                "tool/call",
+                tool=tool_name,
+                phase="pre-execute",
+                arguments=_preview(tool_args),
+            )
         logger.info("harness_tool_before", tool=tool_name, source=getattr(ctx, "source", None))
 
     return _hook
@@ -43,13 +53,13 @@ def audit_before_hook(ctx_getter) -> BeforeToolHook:
 def audit_after_hook(ctx_getter) -> AfterToolHook:
     async def _hook(tool_name: str, tool_args: dict[str, Any], result: str) -> None:
         ctx = ctx_getter()
-        preview = result[:500] if result else ""
         if ctx:
-            ctx.append_trace({
-                "event": "tool_after",
-                "tool": tool_name,
-                "result_preview": preview,
-            })
+            ctx.record(
+                "tool/result",
+                tool=tool_name,
+                phase="post-execute",
+                preview=_preview(result),
+            )
         logger.info("harness_tool_after", tool=tool_name, result_len=len(result or ""))
 
     return _hook

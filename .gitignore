@@ -54,3 +54,10 @@ deploy/office/.env.unit
 runtime/cache/
 dist/
 build/
+
+# local backup files
+*.bak
+*.bak-*
+*.bak_*
+backend/wheelhouse/
+*.bak2

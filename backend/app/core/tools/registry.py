@@ -58,6 +58,11 @@ class ToolRegistry:
         self._tools[tool.name] = tool
         logger.debug("tool_registered", name=tool.name)
 
+    def unregister(self, name: str) -> None:
+        if name in self._tools:
+            del self._tools[name]
+            logger.info("tool_unregistered", name=name)
+
     def get(self, name: str) -> Optional[BaseTool]:
         return self._tools.get(name)
 

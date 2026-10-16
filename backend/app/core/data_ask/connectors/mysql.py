@@ -131,6 +131,46 @@ class MySqlConnector(DataConnector):
 
         return await asyncio.to_thread(_run)
 
+    async def find_shared_keys(
+        self,
+        columns: list[str],
+        exclude_tables: list[str],
+    ) -> list[dict[str, str]]:
+        safe_cols = [c for c in columns if c]
+        if not safe_cols:
+            return []
+
+        def _run() -> list[dict[str, str]]:
+            conn = self._connect()
+            try:
+                with conn.cursor() as cur:
+                    marks = ", ".join(["%s"] * len(safe_cols))
+                    params: list[Any] = [self.database, *safe_cols]
+                    exclude_sql = ""
+                    if exclude_tables:
+                        exclude_sql = " AND table_name NOT IN (" + ", ".join(["%s"] * len(exclude_tables)) + ")"
+                        params.extend(exclude_tables)
+                    cur.execute(
+                        f"""
+                        SELECT table_name, column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = %s
+                          AND column_name IN ({marks})
+                          {exclude_sql}
+                        LIMIT 80
+                        """,
+                        params,
+                    )
+                    out: list[dict[str, str]] = []
+                    for row in cur.fetchall():
+                        lowered = {str(k).lower(): v for k, v in row.items()}
+                        out.append({"table": str(lowered.get("table_name") or ""), "column": str(lowered.get("column_name") or "")})
+                    return out
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_run)
+
     async def sample_rows(self, table_name: str, limit: int = 5) -> list[dict[str, Any]]:
         def _run() -> list[dict[str, Any]]:
             conn = self._connect()

@@ -20,6 +20,8 @@ from app.db.init_db import (
 from app.db.session import AsyncSessionLocal
 from app.core.tools.registry import ToolRegistry
 from app.core.employees.scheduler import EmployeeScheduler
+from app.core.wecom.listener import wecom_link
+from app.knowledge.wecom_docs import wecom_doc_sync
 
 logger = structlog.get_logger(__name__)
 
@@ -70,9 +72,20 @@ async def lifespan(app: FastAPI):
             logger.info("employee_scheduler_started")
         except Exception as exc:
             logger.warning("employee_scheduler_start_failed", error=str(exc))
+        try:
+            wecom_link.start()
+            logger.info("wecom_link_started")
+            wecom_doc_sync.start()
+        except Exception as exc:
+            logger.warning("wecom_link_start_failed", error=str(exc))
 
     yield
 
+    try:
+        await wecom_doc_sync.stop()
+        await wecom_link.stop()
+    except Exception:
+        pass
     try:
         await EmployeeScheduler.get_instance().stop()
     except Exception:
@@ -100,6 +113,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Redis IP 级 API 限流中间件（Redis 不可用时自动放行，不阻塞业务）──
+@app.middleware("http")
+async def api_rate_limit_middleware(request, call_next):
+    import os as _os
+    if _os.getenv("API_RATELIMIT_ENABLED", "true").strip().lower() in ("1", "true", "yes"):
+        try:
+            if request.url.path.startswith("/api/"):
+                from app.core.cache.redis_cache import rate_limit_check, API_RATELIMIT_PER_MIN
+                _ip = (
+                    request.headers.get("x-real-ip")
+                    or ((request.headers.get("x-forwarded-for") or "").split(",")[0].strip())
+                    or (request.client.host if request.client else "unknown")
+                )
+                _ok, _cnt = await rate_limit_check(f"ratelimit:ip:{_ip}", limit=API_RATELIMIT_PER_MIN)
+                if not _ok:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": f"请求过于频繁（每 IP 每分钟限 {API_RATELIMIT_PER_MIN} 次），请稍后再试"},
+                    )
+        except Exception:
+            pass
+    return await call_next(request)
+
 
 app.include_router(api_router)
 

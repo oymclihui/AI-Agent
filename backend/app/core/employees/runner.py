@@ -173,7 +173,12 @@ async def _run_crew_task(
     auth_token = None
     harness_token = None
     from app.core.auth.context import reset_current_user_id, set_current_user_id
-    from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+    from app.core.harness.context import (
+        HarnessContext,
+        ensure_session_directory,
+        reset_harness_context,
+        set_harness_context,
+    )
 
     if owner_id:
         auth_token = set_current_user_id(owner_id)
@@ -183,6 +188,7 @@ async def _run_crew_task(
                 source="employee",
                 source_id=run.id,
                 auto_confirm=True,
+                working_directory=ensure_session_directory(run.id),
             )
         )
     try:
@@ -311,6 +317,21 @@ async def run_scheduled_task(
     *,
     triggered_by: str = "manual",
 ) -> EmployeeTaskRun:
+    from app.models_hub.user_credentials import resume_personal_keys, suspend_personal_keys
+    token = suspend_personal_keys()
+    try:
+        return await _run_scheduled_task_body(db, task, employee, triggered_by=triggered_by)
+    finally:
+        resume_personal_keys(token)
+
+
+async def _run_scheduled_task_body(
+    db: AsyncSession,
+    task: EmployeeScheduledTask,
+    employee: DigitalEmployee,
+    *,
+    triggered_by: str = "manual",
+) -> EmployeeTaskRun:
     if employee.status != EmployeeStatus.active:
         raise ValueError("Employee is not active")
 
@@ -394,7 +415,12 @@ async def run_scheduled_task(
             raise ConnectionError(detail)
 
         from app.core.auth.context import set_current_user_id, reset_current_user_id
-        from app.core.harness.context import HarnessContext, reset_harness_context, set_harness_context
+        from app.core.harness.context import (
+        HarnessContext,
+        ensure_session_directory,
+        reset_harness_context,
+        set_harness_context,
+    )
 
         owner_id = employee.owner_id
         harness_token = None
@@ -407,6 +433,7 @@ async def run_scheduled_task(
                     source="employee",
                     source_id=run.id,
                     auto_confirm=True,
+                    working_directory=ensure_session_directory(run.id),
                 )
             )
 
@@ -470,6 +497,16 @@ async def run_scheduled_task(
     finally:
         if ctx_token is not None:
             reset_current_user_id(ctx_token)
+        if run.status == ExecutionStatus.completed:
+            try:
+                from app.core.wecom.push import push_employee_report
+
+                wecom_result = await push_employee_report(db, employee=employee, task=task, run=run)
+                payload = dict(run.output_data or {})
+                payload["wecom"] = wecom_result
+                run.output_data = payload
+            except Exception:
+                logger.exception("wecom_employee_push_failed", run_id=run.id)
 
     _finalize_task_schedule(task)
     await db.flush()

@@ -58,6 +58,8 @@ async def _migrate_schema(engine: AsyncEngine, schema: str | None = None) -> Non
         await conn.run_sync(_ensure_users_table)
         await conn.run_sync(_ensure_postgres_enum_values)
         await conn.run_sync(_ensure_data_source_grants_table)
+        await conn.run_sync(_ensure_knowledge_permissions)
+        await conn.run_sync(_ensure_knowledge_quality)
         await conn.run_sync(_ensure_system_settings_table)
 
 
@@ -470,8 +472,8 @@ async def seed_default_models(session) -> None:
     catalog.update(byd_catalog_entries())
 
     ollama_models = [
-        ("qwen3.6:35b", 32768, "Qwen3.6 35B local"),
-        ("gemma4:31b", 32768, "Gemma4 31B local"),
+        ("qwen3.8-flash", 131072, "Qwen3.8 Flash via LiteLLM"),
+        ("deepseek-chat", 131072, "DeepSeek Chat via LiteLLM"),
     ]
     for model_id, ctx, label in ollama_models:
         catalog[("ollama", model_id)] = dict(
@@ -589,9 +591,9 @@ async def seed_template_agents(session) -> None:
              backstory="曾服务 50+ 国内外品牌，精通 AIDA 和故事化营销。",
              tools_config=[{"tool_name": "web_search"}], temperature=0.8),
         dict(name="数据分析专家", role="Data Analyst & Visualization Expert",
-             goal="进行统计分析、趋势识别和异常检测，输出业务解读。",
-             backstory="统计学硕士，精通 Pandas、NumPy、Matplotlib。",
-             tools_config=[{"tool_name": "calculator"}, {"tool_name": "datetime"}], temperature=0.3),
+             goal="基于真实可溯源的数据进行统计分析、机器学习建模、趋势预测和异常检测，输出可验证的业务洞察与可视化图表。严格禁止编造、填充或臆测任何数据。",
+             backstory="统计学硕士，精通 Pandas、NumPy、scikit-learn、statsmodels。擅长：回归分析(线性/逻辑回归)、时间序列预测(ARIMA/指数平滑)、聚类分析(K-Means/DBSCAN)、异常检测(IQR/Z-score/孤立森林)、相关性分析(皮尔逊/斯皮尔曼)、假设检验(t检验/卡方)。坚持数据驱动原则：所有结论必须基于真实数据，数据来源必须可溯源，无法获取数据时如实说明，绝不编造数字。",
+             tools_config=[{"tool_name": "web_search"}, {"tool_name": "http_request"}, {"tool_name": "calculator"}, {"tool_name": "datetime"}], temperature=0.2),
         dict(name="网络安全顾问", role="Senior Cybersecurity Consultant",
              goal="审查代码和架构中的安全漏洞，提供修复方案。",
              backstory="CISSP 持证专家，熟悉 OWASP Top 10 和等保合规。",
@@ -1051,3 +1053,37 @@ async def seed_platform_knowledge_base(session) -> None:
             error=str(exc),
             hint="Ensure Ollama is running for embedding ingestion",
         )
+
+
+def _ensure_knowledge_permissions(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("knowledge_bases"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("knowledge_bases")}
+    if "visibility" not in cols:
+        sync_conn.execute(text(
+            "ALTER TABLE knowledge_bases ADD COLUMN visibility VARCHAR(32) NOT NULL DEFAULT 'private'"
+        ))
+        sync_conn.execute(text(
+            "UPDATE knowledge_bases SET visibility = 'public' WHERE owner_id IS NULL"
+        ))
+    if not inspector.has_table("knowledge_base_grants"):
+        from app.db.base import Base
+
+        table = Base.metadata.tables.get("knowledge_base_grants")
+        if table is not None:
+            table.create(sync_conn, checkfirst=True)
+
+
+def _ensure_knowledge_quality(sync_conn) -> None:
+    from sqlalchemy import inspect
+    from app.db.base import Base
+
+    inspector = inspect(sync_conn)
+    for name in ("knowledge_passages", "knowledge_faq_entries", "knowledge_wecom_sources"):
+        if not inspector.has_table(name):
+            table = Base.metadata.tables.get(name)
+            if table is not None:
+                table.create(sync_conn, checkfirst=True)

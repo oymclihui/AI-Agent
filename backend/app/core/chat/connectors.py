@@ -7,14 +7,6 @@ from langchain_core.messages import SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 CONNECTOR_CATALOG: dict[str, dict[str, Any]] = {
-    "byd-mail": {
-        "label_zh": "企业邮箱",
-        "label_en": "Corporate Mail",
-        "type": "imap",
-        "imap_host": "imap.byd.com",
-        "imap_port": 1993,
-        "imap_use_ssl": True,
-    },
     "wecom-mail": {
         "label_zh": "企微邮箱",
         "label_en": "WeCom Mail",
@@ -22,6 +14,11 @@ CONNECTOR_CATALOG: dict[str, dict[str, Any]] = {
         "imap_host": "imap.exmail.qq.com",
         "imap_port": 993,
         "imap_use_ssl": True,
+    },
+    "wecom-bot": {
+        "label_zh": "企业微信",
+        "label_en": "WeCom",
+        "type": "wecom",
     },
 }
 
@@ -44,6 +41,19 @@ async def build_connector_messages(
     entry = CONNECTOR_CATALOG[connector_id]
     label = connector_label(connector_id, lang)
     messages: list[SystemMessage] = []
+
+    if entry.get("type") == "wecom":
+        messages.append(
+            SystemMessage(
+                content=(
+                    f"用户为本会话启用了「{label}」连接器。数字员工任务完成后，报告摘要会推送到已配置的企业微信 userid。"
+                    "本会话仍在平台内进行。"
+                    if lang == "zh"
+                    else f"The user enabled the {label} connector for employee report push. This chat stays in the product."
+                )
+            )
+        )
+        return messages
 
     if entry.get("type") == "imap":
         try:

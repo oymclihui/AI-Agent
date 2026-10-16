@@ -1,64 +1,48 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, Any, Literal
+from pydantic import BaseModel, Field
+from typing import Optional, Any
 from datetime import datetime
 
 from app.db.models import KBStatus
-from app.knowledge.byd_kms import DEFAULT_BYD_KMS_URL
-
-
-class BydKmsConfigInput(BaseModel):
-    api_url: str = Field(default=DEFAULT_BYD_KMS_URL, min_length=8, max_length=512)
-    user_id: str = Field(..., min_length=1, max_length=128)
-    api_key: Optional[str] = Field(default=None, max_length=512)
-
-    @field_validator("api_url", "user_id", mode="before")
-    @classmethod
-    def strip_required(cls, v: Any) -> Any:
-        return v.strip() if isinstance(v, str) else v
-
-
-class BydKmsConfigPublic(BaseModel):
-    api_url: str
-    user_id: str
-    has_api_key: bool = False
 
 
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    source_type: Literal["local", "byd_kms"] = "local"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "nomic-embed-text"
     chunk_size: int = Field(default=1000, ge=100, le=8000)
     chunk_overlap: int = Field(default=200, ge=0, le=1000)
-    byd_kms: Optional[BydKmsConfigInput] = None
-
-    @model_validator(mode="after")
-    def require_byd_config(self) -> "KnowledgeBaseCreate":
-        if self.source_type == "byd_kms" and not self.byd_kms:
-            raise ValueError("byd_kms configuration is required when source_type is byd_kms")
-        return self
 
 
 class KnowledgeBaseUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
-    byd_kms: Optional[BydKmsConfigInput] = None
 
 
-class BydKmsTestRequest(BaseModel):
-    api_url: str = Field(default=DEFAULT_BYD_KMS_URL, min_length=8, max_length=512)
-    user_id: str = Field(..., min_length=1, max_length=128)
-    api_key: Optional[str] = None
-    test_query: str = Field(default="你好", min_length=1, max_length=500)
+class KnowledgeGrantIn(BaseModel):
+    grantee_type: str
+    grantee_id: str
 
 
-class BydKmsTestResponse(BaseModel):
-    ok: bool
-    message: str
-    latency_ms: int = 0
-    status_code: Optional[int] = None
-    preview: str = ""
-    result_count: int = 0
+class KnowledgeAccessUpdate(BaseModel):
+    visibility: str = "private"
+    grants: list[KnowledgeGrantIn] = []
+
+
+class KnowledgeGrantOut(BaseModel):
+    grantee_type: str
+    grantee_id: str
+    label: str
+
+
+class KnowledgeAccessResponse(BaseModel):
+    visibility: str
+    can_manage: bool
+    grants: list[KnowledgeGrantOut] = []
+
+
+class KnowledgeShareTargets(BaseModel):
+    users: list[dict[str, Optional[str]]] = []
+    departments: list[dict[str, str]] = []
 
 
 class KnowledgeBaseResponse(BaseModel):
@@ -71,7 +55,9 @@ class KnowledgeBaseResponse(BaseModel):
     chunk_overlap: int
     document_count: int
     source_type: str = "local"
-    byd_kms: Optional[BydKmsConfigPublic] = None
+    visibility: str = "private"
+    can_manage: bool = False
+    grant_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -87,6 +73,9 @@ class DocumentResponse(BaseModel):
     file_size: Optional[int]
     status: KBStatus
     chunk_count: int
+    stage: Optional[str] = None
+    stages: dict[str, str] = {}
+    stage_error: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -112,6 +101,39 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
     score_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class FaqEntryIn(BaseModel):
+    standard_question: str = Field(..., min_length=1, max_length=500)
+    similar_questions: list[str] = []
+    negative_questions: list[str] = []
+    answer: str = Field(..., min_length=1)
+    enabled: bool = True
+
+
+class FaqEntryOut(BaseModel):
+    id: str
+    standard_question: str
+    similar_questions: list[str] = []
+    negative_questions: list[str] = []
+    answer: str
+    enabled: bool = True
+
+
+class WecomDocSourceIn(BaseModel):
+    enabled: bool = False
+    corp_id: str = ""
+    secret: str = ""
+    doc_ids: list[str] = []
+
+
+class WecomDocSourceOut(BaseModel):
+    enabled: bool = False
+    corp_id: str = ""
+    secret_set: bool = False
+    doc_ids: list[str] = []
+    last_status: str = ""
+    last_error: str = ""
 
 
 class SearchResult(BaseModel):

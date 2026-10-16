@@ -10,3 +10,5 @@ __all__ = [
     "BaseNode", "StartNode", "EndNode", "AgentNode",
     "ToolNode", "ConditionNode", "HumanNode",
 ]
+
+from app.core.workflow.langgraph_engine import LangGraphWorkflowEngine

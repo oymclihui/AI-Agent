@@ -6,73 +6,59 @@ from langchain_core.documents import Document
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import KnowledgeBase, User
-from app.knowledge.byd_kms import BydKmsError, search_byd_kms
-from app.knowledge.kms_credentials import CallerKmsContext, resolve_caller_kms_context
 from app.knowledge.pipeline import IngestionPipeline
+from app.knowledge.quality import (
+    blocked_faq_ids,
+    expand_hit,
+    keyword_hits,
+    model_rerank,
+    rewrite_query,
+    rrf_merge,
+    to_documents,
+)
 
 logger = structlog.get_logger(__name__)
-
-
-def _is_byd_kms(kb: KnowledgeBase) -> bool:
-    meta = kb.metadata_ or {}
-    return meta.get("source_type") == "byd_kms" or meta.get("provider") == "byd_kms"
 
 
 class MultiKnowledgeRetriever:
     """Retrieve relevant chunks across multiple knowledge bases."""
 
-    def __init__(
-        self,
-        kb_specs: list[tuple[str, KnowledgeBase]],
-        caller_kms: CallerKmsContext | None = None,
-    ):
+    def __init__(self, kb_specs: list[tuple[str, KnowledgeBase]], db: AsyncSession):
         self.kb_specs = kb_specs
-        self.caller_kms = caller_kms
+        self.db = db
 
-    async def aretrieve(self, query: str) -> list[Document]:
+    async def aretrieve(self, query: str, history_text: str = "") -> list[Document]:
+        rewritten = await rewrite_query(query, history_text)
         docs: list[Document] = []
         for kb_id, kb in self.kb_specs:
             try:
-                if _is_byd_kms(kb):
-                    hits = await search_byd_kms(
-                        kb.metadata_ or {},
-                        query,
-                        top_k=3,
-                        score_threshold=0.2,
-                        caller_kms_user_id=self.caller_kms.kms_user_id if self.caller_kms else None,
-                        caller_api_url=self.caller_kms.api_url if self.caller_kms else None,
-                        caller_api_key=self.caller_kms.api_key if self.caller_kms else None,
-                    )
-                else:
-                    pipeline = IngestionPipeline(
-                        knowledge_base_id=kb_id,
-                        embedding_model=kb.embedding_model,
-                        chunk_size=kb.chunk_size or 1000,
-                        chunk_overlap=kb.chunk_overlap or 200,
-                    )
-                    hits = await pipeline.search(query, top_k=3, score_threshold=0.2)
-                for hit in hits:
-                    content = (hit.get("content") or "").strip()
-                    if not content:
-                        continue
-                    docs.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "kb_id": kb_id,
-                                "kb_name": kb.name,
-                                "document_id": hit.get("document_id"),
-                                "document_name": hit.get("document_name"),
-                                "score": hit.get("score"),
-                            },
-                        )
-                    )
-            except BydKmsError as exc:
-                logger.warning("kb_retrieve_byd_failed", kb_id=kb_id, error=str(exc))
+                docs.extend(await self._search_kb(kb_id, kb, rewritten))
             except Exception as exc:
                 logger.warning("kb_retrieve_failed", kb_id=kb_id, error=str(exc))
-        docs.sort(key=lambda d: float((d.metadata or {}).get("score") or 0), reverse=True)
-        return docs[:8]
+        docs.sort(key=lambda item: float((item.metadata or {}).get("score") or 0), reverse=True)
+        return docs[:5]
+
+    async def _search_kb(self, kb_id: str, kb: KnowledgeBase, query: str) -> list[Document]:
+        pipeline = IngestionPipeline(
+            knowledge_base_id=kb_id,
+            embedding_model=kb.embedding_model,
+            chunk_size=kb.chunk_size or 1000,
+            chunk_overlap=kb.chunk_overlap or 200,
+        )
+        vector_hits = await pipeline.search(query, top_k=8, score_threshold=0.0)
+        for hit in vector_hits:
+            hit["role"] = "child"
+            hit["kb_id"] = kb_id
+            hit["snippet"] = (hit.get("content") or "")[:240]
+        lexical = await keyword_hits(self.db, kb_id, query)
+        merged = rrf_merge([vector_hits, lexical])
+        banned = await blocked_faq_ids(self.db, kb_id, query)
+        merged = [hit for hit in merged if str(hit.get("document_id") or "") not in banned]
+        ranked = await model_rerank(query, merged)
+        expanded = []
+        for hit in ranked[:5]:
+            expanded.append(await expand_hit(self.db, kb_id, hit))
+        return to_documents(kb.name, expanded)
 
 
 async def build_multi_kb_retriever(
@@ -82,12 +68,18 @@ async def build_multi_kb_retriever(
 ) -> MultiKnowledgeRetriever | None:
     if not kb_ids:
         return None
+    from app.core.knowledge.access import can_read_kb
+
     specs: list[tuple[str, KnowledgeBase]] = []
     for kb_id in kb_ids:
         kb = await db.get(KnowledgeBase, kb_id)
-        if kb:
-            specs.append((kb_id, kb))
+        if not kb:
+            continue
+        if caller_user is not None and not await can_read_kb(db, kb, caller_user):
+            continue
+        if caller_user is None and (kb.visibility or "private") != "public":
+            continue
+        specs.append((kb_id, kb))
     if not specs:
         return None
-    caller_kms = await resolve_caller_kms_context(caller_user, db)
-    return MultiKnowledgeRetriever(specs, caller_kms=caller_kms)
+    return MultiKnowledgeRetriever(specs, db)

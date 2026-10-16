@@ -1,0 +1,294 @@
+"""Agent Evolution 阶段三 L3：智能体配置自动生成（从 0 到可用智能体）。
+
+输入全部为真实素材：Schema 画像（字段含义/枚举/行数）、业务语义层（术语/指标）、
+分析模板、真实问数轨迹/记忆。LLM 只基于这些真实素材生成 goal / backstory / 开场问题；
+LLM 不可用时回退到基于真实元数据的确定性文案。能力绑定全部由真实信号驱动
+（时间列 → LSTM/CNN、数据量 → 总体分析、示例库达标 → few-shot 检索、数值列 → 可视化）。
+
+数据真实性红线：不合成数据、不编造指标；缺口如实写入 coach 与 metadata。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import (
+    DataSource,
+    DsSemanticMetric,
+    DsSemanticTerm,
+    Skill,
+    SkillStatus,
+)
+
+logger = logging.getLogger("agent_factory_generator")
+
+DEFAULT_CHART_PREFERENCES = {"distribution": "pie", "trend": "line", "comparison": "bar"}
+_BASE_TOOLS = ["calculator", "datetime"]
+_SKILL_SLUGS = ["data-visualization", "data-qa-intent"]
+
+
+async def _load_material(db: AsyncSession, source: DataSource, coach: dict[str, Any]) -> dict[str, Any]:
+    """汇总真实素材供 LLM 与回退文案使用。"""
+    from app.core.data_ask.profile import get_latest_profile
+
+    ds = str(source.id)
+    tables_meta: list[dict[str, Any]] = []
+    try:
+        profile_row = await get_latest_profile(db, ds)
+        if profile_row and isinstance(profile_row.profile, dict):
+            for t in profile_row.profile.get("tables") or []:
+                cols = []
+                for c in (t.get("columns") or [])[:12]:
+                    cols.append({
+                        "name": str(c.get("name") or ""),
+                        "type": str(c.get("type") or ""),
+                        "comment": str(c.get("comment") or c.get("inferred_comment") or ""),
+                        "enum": [e.get("value") for e in (c.get("enum_values") or [])[:6] if e.get("value") is not None],
+                    })
+                tables_meta.append({
+                    "table_name": str(t.get("table_name") or ""),
+                    "row_count": t.get("row_count"),
+                    "columns": cols,
+                })
+    except Exception as exc:  # pragma: no cover
+        logger.warning("material_profile_failed ds=%s err=%s", ds, str(exc)[:150])
+
+    term_res = await db.execute(
+        select(DsSemanticTerm).where(DsSemanticTerm.data_source_id == ds).limit(40)
+    )
+    terms = [
+        {"term": t.term, "definition": t.definition or "", "column_ref": t.column_ref or ""}
+        for t in term_res.scalars().all()
+    ]
+    metric_res = await db.execute(
+        select(DsSemanticMetric).where(DsSemanticMetric.data_source_id == ds).limit(40)
+    )
+    metrics = [
+        {"name": m.name, "expr": m.expr, "description": m.description or ""}
+        for m in metric_res.scalars().all()
+    ]
+
+    sample_questions: list[str] = []
+    try:
+        from app.db.models import AskTemplate
+
+        tp_res = await db.execute(
+            select(AskTemplate)
+            .where(AskTemplate.data_source_id == ds, AskTemplate.status == "active")
+            .order_by(AskTemplate.member_count.desc())
+            .limit(5)
+        )
+        for tp in tp_res.scalars().all():
+            for q in (tp.sample_questions or [])[:3]:
+                q = str(q).strip()
+                if q and q not in sample_questions:
+                    sample_questions.append(q)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("material_templates_failed ds=%s err=%s", ds, str(exc)[:150])
+
+    if not sample_questions:
+        try:
+            from app.db.models import AskTrace
+
+            tr_res = await db.execute(
+                select(AskTrace.question)
+                .where(AskTrace.data_source_id == ds, AskTrace.success.is_(True), AskTrace.question.isnot(None))
+                .order_by(AskTrace.id.desc())
+                .limit(20)
+            )
+            for (q,) in tr_res.all():
+                q = (q or "").strip()
+                if q and q not in sample_questions:
+                    sample_questions.append(q)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("material_traces_failed ds=%s err=%s", ds, str(exc)[:150])
+
+    return {
+        "data_source": {"id": ds, "name": source.name, "driver": str(source.driver)},
+        "tables": tables_meta,
+        "semantic": {"terms": terms, "metrics": metrics},
+        "sample_questions": sample_questions[:8],
+        "total_rows": (coach.get("profile") or {}).get("total_rows"),
+        "time_columns": (coach.get("profile") or {}).get("time_columns") or [],
+    }
+
+
+def _fallback_questions(material: dict[str, Any]) -> list[str]:
+    """无 LLM 时基于真实列名生成开场问题（问题文本由真实列派生，不含编造数据）。"""
+    out = list(material.get("sample_questions") or [])
+    for t in material.get("tables") or []:
+        tname = t.get("table_name") or ""
+        dims = [c for c in (t.get("columns") or []) if c.get("enum")][:2]
+        nums = [c for c in (t.get("columns") or []) if "num" in str(c.get("type") or "").lower()][:2]
+        if dims and nums:
+            out.append(f"{tname} 各 {dims[0]['name']} 的 {nums[0]['name']} 分布")
+        if dims:
+            out.append(f"{tname} 按 {dims[0]['name']} 的 TOP10 排名")
+        if len(out) >= 6:
+            break
+    return [q for q in out][:4]
+
+
+def _fallback_spec(source: DataSource, material: dict[str, Any], coach: dict[str, Any]) -> dict[str, Any]:
+    name = source.name or "问数分析"
+    tables = [t.get("table_name") for t in (material.get("tables") or []) if t.get("table_name")]
+    terms = (material.get("semantic") or {}).get("terms") or []
+    metrics = (material.get("semantic") or {}).get("metrics") or []
+    total_rows = material.get("total_rows")
+
+    covered = []
+    if terms:
+        covered.append(f"业务术语（{', '.join(t['term'] for t in terms[:5])}）")
+    if metrics:
+        covered.append(f"指标口径（{', '.join(m['name'] for m in metrics[:5])}）")
+    if tables:
+        covered.append(f"数据表（{', '.join(tables[:5])}）")
+
+    goal = (
+        f"基于数据源「{name}」的真实数据回答业务问题、输出结构化分析与可视化图表。"
+        f"严格使用已注册表与语义层口径，所有结论必须可溯源；数据不足时如实说明，绝不编造数字。"
+    )
+    backstory = (
+        f"你是面向数据源「{name}」的经营数据分析顾问。"
+        + (f"可访问：{'；'.join(covered)}。" if covered else "")
+        + (f"注册表总行数约 {total_rows}。" if isinstance(total_rows, int) else "")
+        + " 坚持数据驱动：先探查字段含义与取值，再生成 SQL，最后给出可执行的业务建议。"
+    )
+    return {
+        "name": f"{name}分析顾问",
+        "role": "Data Analyst",
+        "goal": goal,
+        "backstory": backstory,
+        "temperature": 0.35,
+        "opening_questions": _fallback_questions(material),
+        "chart_preferences": dict(DEFAULT_CHART_PREFERENCES),
+        "generated_by": "fallback",
+    }
+
+
+async def _llm_spec(source: DataSource, material: dict[str, Any], coach: dict[str, Any]) -> dict[str, Any] | None:
+    """LLM 基于真实素材生成配置草案；失败返回 None（上层回退）。"""
+    from app.models_hub.router import ModelRouter
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    capabilities = [
+        f"{c['label']}：{'可用' if c['enabled'] else '不可用'}（{c['reason']}）"
+        for c in (coach.get("capabilities") or [])
+    ]
+    payload = {
+        "data_source": material.get("data_source"),
+        "tables": [{"name": t.get("table_name"), "row_count": t.get("row_count"),
+                    "columns": [f"{c['name']}({c.get('comment') or c['type']})" for c in (t.get("columns") or [])]}
+                   for t in (material.get("tables") or [])[:6]],
+        "terms": material.get("semantic", {}).get("terms"),
+        "metrics": material.get("semantic", {}).get("metrics"),
+        "sample_questions": material.get("sample_questions"),
+        "capabilities": capabilities,
+        "gaps": coach.get("gaps"),
+    }
+    system = (
+        "你是数据分析智能体设计专家。基于给定的真实数据源素材（表/字段/语义层/能力清单），"
+        "为该数据源设计一个专业的数据分析智能体配置。\n"
+        "要求：全部使用中文；goal 明确「基于真实数据、结论可溯源、数据不足如实说明、严禁编造数字」；"
+        "backstory 说明其业务视角与分析方法论（口径、维度、常用分析框架），不得编造素材中不存在的表或指标；"
+        "opening_questions 给出 3 条贴合该数据源真实字段/口径的开场问题；"
+        "chart_preferences 从 pie/line/bar 中为 distribution/trend/comparison 三类场景各选一种。\n"
+        '只返回 JSON: {"name","role","goal","backstory","temperature","opening_questions","chart_preferences"}，不要输出其他内容。'
+    )
+    try:
+        llm = await ModelRouter.get_llm(db=None, provider=None, model=None, user_id=None, response_style="precise")
+        resp = await llm.ainvoke([
+            SystemMessage(content=system),
+            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+        ])
+        text = resp.content if isinstance(resp.content, str) else str(resp.content)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return None
+        spec = json.loads(match.group(0))
+        if not isinstance(spec, dict) or not spec.get("goal"):
+            return None
+        spec["generated_by"] = "llm"
+        return spec
+    except Exception as exc:  # pragma: no cover
+        logger.exception("factory_llm_spec_failed ds=%s err=%s", str(source.id), str(exc)[:200])
+        return None
+
+
+async def _bind_skills(db: AsyncSession, coach: dict[str, Any]) -> list[dict[str, Any]]:
+    """按真实能力信号绑定技能（按 slug 查询现役技能，找不到则跳过，不硬编 id）。"""
+    cap_enabled = {c["key"]: c["enabled"] for c in (coach.get("capabilities") or [])}
+    want: list[str] = []
+    if cap_enabled.get("visualization"):
+        want.append("data-visualization")
+    if (coach.get("profile") or {}).get("status") == "ready":
+        want.append("data-qa-intent")
+    if not want:
+        return []
+    res = await db.execute(select(Skill).where(Skill.slug.in_(want), Skill.status == SkillStatus.active))
+    by_slug = {s.slug: s for s in res.scalars().all()}
+    out: list[dict[str, Any]] = []
+    priority = 0
+    for slug in want:
+        s = by_slug.get(slug)
+        if not s:
+            continue
+        out.append({"skill_id": s.id, "always_load": True, "priority": priority})
+        priority += 1
+    return out
+
+
+async def generate_factory_spec(
+    db: AsyncSession,
+    source: DataSource,
+    coach: dict[str, Any],
+    *,
+    nl_prompt: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """生成智能体配置草案（不落库）：goal/backstory/工具/技能/图表偏好/开场问题 + 能力匹配。"""
+    material = await _load_material(db, source, coach)
+    spec = await _llm_spec(source, material, coach)
+    if not spec:
+        spec = _fallback_spec(source, material, coach)
+
+    if name:
+        spec["name"] = name
+    if nl_prompt:
+        spec["goal"] = f"{nl_prompt}\n\n" + str(spec.get("goal") or "")
+
+    tools_config = [{"tool_name": t, "config": {}} for t in _BASE_TOOLS]
+    skills_config = await _bind_skills(db, coach)
+
+    cap_keys = [c["key"] for c in (coach.get("capabilities") or []) if c["enabled"]]
+    metadata = {
+        "data_source_id": str(source.id),
+        "data_ask": True,
+        "factory": {
+            "coach_score": (coach.get("readiness") or {}).get("score"),
+            "capabilities": cap_keys,
+            "opening_questions": [str(q) for q in (spec.get("opening_questions") or [])][:6],
+            "chart_preferences": spec.get("chart_preferences") or dict(DEFAULT_CHART_PREFERENCES),
+            "semantic_coverage": coach.get("semantic") or {},
+            "gaps": coach.get("gaps") or [],
+            "generated_by": spec.get("generated_by", "fallback"),
+        },
+    }
+
+    return {
+        "name": str(spec.get("name") or f"{source.name}分析顾问")[:255],
+        "role": str(spec.get("role") or "Data Analyst")[:255],
+        "goal": str(spec.get("goal") or "")[:5000],
+        "backstory": str(spec.get("backstory") or "")[:5000],
+        "temperature": float(spec.get("temperature") or 0.35),
+        "tools_config": tools_config,
+        "skills_config": skills_config,
+        "memory_config": {},
+        "metadata_": metadata,
+        "opening_questions": metadata["factory"]["opening_questions"],
+    }
