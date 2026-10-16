@@ -3,7 +3,7 @@ SQLAlchemy ORM models for all AIAGNET entities.
 """
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float,
-    ForeignKey, JSON, Enum as SAEnum, DateTime,
+    ForeignKey, JSON, Enum as SAEnum, DateTime, UniqueConstraint, Date,
 )
 from sqlalchemy.orm import relationship
 import enum
@@ -93,9 +93,6 @@ class User(Base, TimestampMixin):
     mailbox_credential = relationship(
         "UserMailboxCredential", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    kms_credential = relationship(
-        "UserKmsCredential", back_populates="user", uselist=False, cascade="all, delete-orphan"
-    )
     department_memberships = relationship(
         "UserDepartment", back_populates="user", cascade="all, delete-orphan", foreign_keys="UserDepartment.user_id"
     )
@@ -182,20 +179,6 @@ class UserMailboxCredential(Base, TimestampMixin):
     user = relationship("User", back_populates="mailbox_credential")
 
 
-class UserKmsCredential(Base, TimestampMixin):
-    """Per-user BYD / corporate KMS API identity (工号、接口地址、Key 每人可不同)."""
-    __tablename__ = "user_kms_credentials"
-
-    id = Column(String(36), primary_key=True, default=generate_uuid)
-    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, unique=True, index=True)
-    kms_user_id = Column(String(128), nullable=True)  # KMS UserId; defaults to users.employee_no
-    api_url = Column(String(512), nullable=True)
-    api_key = Column(Text, nullable=True)
-    is_active = Column(Boolean, default=True, nullable=False)
-
-    user = relationship("User", back_populates="kms_credential")
-
-
 class UserModelCredential(Base, TimestampMixin):
     """Per-user LLM API keys (same model catalog, different keys)."""
     __tablename__ = "user_model_credentials"
@@ -207,6 +190,7 @@ class UserModelCredential(Base, TimestampMixin):
     api_key = Column(Text, nullable=False)
     base_url = Column(String(512), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_default = Column(Boolean, default=False, nullable=False)
 
     user = relationship("User", back_populates="model_credentials")
 
@@ -372,10 +356,66 @@ class KnowledgeBase(Base, TimestampMixin):
     embedding_model = Column(String(128), default="text-embedding-3-small")
     chunk_size = Column(Integer, default=1000)
     chunk_overlap = Column(Integer, default=200)
+    visibility = Column(String(32), default="private", nullable=False, index=True)
     document_count = Column(Integer, default=0)
     metadata_ = Column("metadata", JSON, default=dict)
 
     documents = relationship("Document", back_populates="knowledge_base", cascade="all, delete-orphan")
+    grants = relationship("KnowledgeBaseGrant", back_populates="knowledge_base", cascade="all, delete-orphan")
+
+
+class KnowledgeBaseGrant(Base, TimestampMixin):
+    __tablename__ = "knowledge_base_grants"
+    __table_args__ = (
+        UniqueConstraint("knowledge_base_id", "grantee_type", "grantee_id", name="uq_kb_grant"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
+    grantee_type = Column(String(32), nullable=False)
+    grantee_id = Column(String(36), nullable=False, index=True)
+    granted_by = Column(String(36), ForeignKey("users.id"), nullable=False)
+
+    knowledge_base = relationship("KnowledgeBase", back_populates="grants")
+
+
+
+class KnowledgePassage(Base, TimestampMixin):
+    __tablename__ = "knowledge_passages"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(String(36), nullable=False, index=True)
+    chunk_index = Column(Integer, default=0, nullable=False)
+    parent_index = Column(Integer, nullable=True)
+    role = Column(String(16), default="child", nullable=False)
+    content = Column(Text, default="", nullable=False)
+    title = Column(String(512), default="")
+
+
+class KnowledgeFaqEntry(Base, TimestampMixin):
+    __tablename__ = "knowledge_faq_entries"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
+    standard_question = Column(String(500), nullable=False)
+    similar_questions = Column(JSON, default=list)
+    negative_questions = Column(JSON, default=list)
+    answer = Column(Text, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+
+
+class KnowledgeWecomSource(Base, TimestampMixin):
+    __tablename__ = "knowledge_wecom_sources"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, unique=True)
+    enabled = Column(Boolean, default=False, nullable=False)
+    corp_id = Column(String(64), default="")
+    secret_encrypted = Column(Text, nullable=True)
+    doc_ids = Column(JSON, default=list)
+    last_status = Column(String(32), default="")
+    last_error = Column(Text, default="")
 
 
 class Document(Base, TimestampMixin):
@@ -800,3 +840,501 @@ class SystemSetting(Base, TimestampMixin):
 
     key = Column(String(64), primary_key=True)
     value = Column(JSON, default=dict)
+
+
+# ──────────────────────────────────────────────
+# ML Evolution（阶段一）：模型注册表 / 训练日志
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# ──────────────────────────────────────────────
+from sqlalchemy import UniqueConstraint  # noqa: E402
+
+
+class MLModelRegistry(Base, TimestampMixin):
+    """模型注册表：每个 (数据源, 模型类型) 多版本，仅一个 production"""
+    __tablename__ = "ml_model_registry"
+    __table_args__ = (
+        UniqueConstraint("data_source_id", "model_type", "version", name="uq_ml_model_version"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    model_type = Column(String(20), nullable=False)  # lstm / cnn1d
+    version = Column(Integer, nullable=False)
+    file_path = Column(String(500), nullable=False)
+    metrics = Column(JSON, nullable=True)  # {"mae":..,"r2":..,"val_rows":..}
+    status = Column(String(20), default="candidate", nullable=False, index=True)  # candidate/production/retired
+    trained_rows = Column(Integer, nullable=True)
+
+
+class MLTrainingLog(Base, TimestampMixin):
+    """训练日志：每轮训练全留痕，进化曲线数据源"""
+    __tablename__ = "ml_training_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model_id = Column(Integer, nullable=True, index=True)
+    data_source_id = Column(String(64), nullable=True, index=True)
+    trigger_query = Column(String(200), nullable=True)
+    sample_rows = Column(Integer, nullable=True)
+    val_mae = Column(Float, nullable=True)
+    val_r2 = Column(Float, nullable=True)
+    promoted = Column(Boolean, default=False, nullable=False)
+    duration_ms = Column(Integer, nullable=True)
+    note = Column(String(500), nullable=True)
+
+
+# ──────────────────────────────────────────────
+# Agent Evolution（阶段一）：语义沉淀与信号采集
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# data_source_id 统一 String(64) 不带 FK（对齐 ml_* 表风格，避免级联删除约束）
+# ──────────────────────────────────────────────
+
+
+class DsSchemaProfile(Base, TimestampMixin):
+    """数据源 Schema 画像：字段含义/枚举/分布/质量报告（JSON 快照 + 版本）"""
+    __tablename__ = "ds_schema_profile"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String(20), default="building", nullable=False, index=True)  # building/ready/failed
+    trigger = Column(String(20), default="manual", nullable=False)  # manual/auto
+    profile = Column(JSON, nullable=True)
+    table_count = Column(Integer, nullable=True)
+    column_count = Column(Integer, nullable=True)
+    row_counts = Column(JSON, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+
+
+class DsSemanticTerm(Base, TimestampMixin):
+    """术语词典：业务词 <-> 字段/口径/同义词"""
+    __tablename__ = "ds_semantic_term"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    term = Column(String(255), nullable=False)
+    definition = Column(Text, nullable=True)
+    column_ref = Column(String(255), nullable=True)
+    synonyms = Column(JSON, default=list)
+    source = Column(String(20), default="manual", nullable=False)  # manual/auto
+    use_count = Column(Integer, default=0, nullable=False)
+
+
+class DsSemanticMetric(Base, TimestampMixin):
+    """指标口径：公式 + 维度 + 默认过滤"""
+    __tablename__ = "ds_semantic_metric"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    expr = Column(Text, nullable=False)
+    dimensions = Column(JSON, default=list)
+    default_filters = Column(JSON, default=list)
+    description = Column(Text, nullable=True)
+    source = Column(String(20), default="manual", nullable=False)
+    use_count = Column(Integer, default=0, nullable=False)
+
+
+class AskTrace(Base, TimestampMixin):
+    """问数轨迹：问题/改写/SQL/结果签名/各段耗时/命中示例"""
+    __tablename__ = "ask_trace"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True, index=True)
+    question = Column(Text, nullable=True)
+    standalone_question = Column(Text, nullable=True)
+    sql_text = Column(Text, nullable=True)
+    row_count = Column(Integer, nullable=True)
+    success = Column(Boolean, default=True, nullable=False)
+    error_message = Column(Text, nullable=True)
+    analysis_mode = Column(String(20), nullable=True)  # sql/overview/ml/excel/clarification
+    memory_hits = Column(Integer, default=0, nullable=False)
+    duration_ms = Column(Integer, nullable=True)
+    rewrite_ms = Column(Integer, nullable=True)
+    gen_ms = Column(Integer, nullable=True)
+    exec_ms = Column(Integer, nullable=True)
+    analysis_ms = Column(Integer, nullable=True)
+    result_signature = Column(String(64), nullable=True)
+    clarification = Column(Boolean, default=False, nullable=False)
+    cached = Column(Boolean, default=False, nullable=False)
+
+
+class DataAskTreeNode(Base, TimestampMixin):
+    """P1-D 发现树节点：把一次问答记录成树（意图分支 / 候选 SQL / 执行结果）。
+
+    Dream 池的数据基础——P0-B 重放与 P2-E 做梦候选生成都依赖结构化轨迹。
+    trace_id 关联 ask_trace.id；run_id 分组一次问答运行；parent_id 自引用成树。
+    表由 init_db 的 create_all 在应用启动时自动创建。
+    """
+    __tablename__ = "data_ask_tree_node"
+
+    id = Column(String(36), primary_key=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    trace_id = Column(Integer, nullable=True, index=True)
+    run_id = Column(String(64), nullable=False, index=True)
+    parent_id = Column(String(36), nullable=True)
+    node_kind = Column(String(20), nullable=False)  # root/intent/candidate/execution/result
+    node_order = Column(Integer, nullable=False, default=0)
+    payload = Column(JSON, nullable=True)
+
+
+class AskFeedback(Base, TimestampMixin):
+    """用户反馈：赞踩/纠错前后 SQL/保存示例标记"""
+    __tablename__ = "ask_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trace_id = Column(Integer, nullable=True, index=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True, index=True)
+    question = Column(Text, nullable=True)
+    original_sql = Column(Text, nullable=True)
+    corrected_sql = Column(Text, nullable=True)
+    feedback_type = Column(String(20), nullable=False)  # like/dislike/correction/example
+    comment = Column(Text, nullable=True)
+
+
+class DataAskTrainTask(Base, TimestampMixin):
+    """对话内训练任务：反馈触发的蒸馏作业状态（前端轮询回显训练进度）"""
+    __tablename__ = "data_ask_train_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True, index=True)
+    kind = Column(String(20), nullable=False, default="example")  # example/template/rule
+    status = Column(String(16), nullable=False, default="queued", index=True)  # queued/running/done/failed
+    progress = Column(Integer, default=0, nullable=False)
+    detail = Column(JSON, nullable=True)
+    feedback_id = Column(Integer, nullable=True, index=True)
+    error = Column(Text, nullable=True)
+
+
+class AgentMetricDaily(Base, TimestampMixin):
+    """训练度量日物化（P1）：每数据源每天一行，看板趋势数据源，与实时口径同函数计算"""
+    __tablename__ = "agent_metric_daily"
+    __table_args__ = (UniqueConstraint("data_source_id", "day", name="uq_metric_daily_ds_day"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    day = Column(Date, nullable=False, index=True)
+    feedback_total = Column(Integer, default=0, nullable=False)
+    feedback_like = Column(Integer, default=0, nullable=False)
+    feedback_dislike = Column(Integer, default=0, nullable=False)
+    feedback_correction = Column(Integer, default=0, nullable=False)
+    feedback_example = Column(Integer, default=0, nullable=False)
+    golden_created = Column(Integer, default=0, nullable=False)
+    trace_total = Column(Integer, default=0, nullable=False)
+    trace_success = Column(Integer, default=0, nullable=False)
+    first_pass_rate = Column(Float, nullable=True)
+    memory_hit_rate = Column(Float, nullable=True)
+    eval_pass_rate = Column(Float, nullable=True)
+    eval_overall = Column(Float, nullable=True)
+
+
+class MemoryHitLog(Base, TimestampMixin):
+    """记忆命中归因日志（P2）：每次问数命中了哪些金标/示例记忆、是否被用户采纳。
+
+    归因因果链：命中记忆 → 用户反馈采纳（adopted）→ 评测通过率变化，
+    支撑「本轮训练使评测通过率提升 X%」的可复算结论。
+    """
+
+    __tablename__ = "memory_hit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trace_id = Column(Integer, nullable=True, index=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True)
+    question = Column(Text, nullable=True)
+    matched = Column(JSON, default=list)  # [{ref, ref_type, question, score}]
+    match_score = Column(Float, nullable=True)  # 命中的最高相似分
+    adopted = Column(Boolean, nullable=True, index=True)  # None=未反馈 True=正反馈 False=点踩
+
+
+# ──────────────────────────────────────────────
+# Agent Evolution（阶段二 L2）：知识蒸馏 —— 示例库 / 分析模板 / 业务规则
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# data_source_id 统一 String(64) 不带 FK（对齐 ml_* 与阶段一表风格，避免级联删除约束）
+# ──────────────────────────────────────────────
+
+
+class AskExample(Base, TimestampMixin):
+    """示例库：正/负例问答对（向量入 Milvus，本表为元数据与治理）"""
+
+    __tablename__ = "ask_example"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    sql_text = Column(Text, nullable=False)
+    kind = Column(String(16), nullable=False, default="positive", index=True)  # positive/negative
+    source = Column(String(20), default="feedback", nullable=False)  # like/example/correction/dislike/manual
+    quality = Column(Float, default=0.0, nullable=False)
+    trace_id = Column(Integer, nullable=True, index=True)
+    use_count = Column(Integer, default=0, nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    indexed = Column(Boolean, default=False, nullable=False)  # 是否已向量化入 Milvus
+    note = Column(String(500), nullable=True)
+
+
+class AskTemplate(Base, TimestampMixin):
+    """分析模板：高频问题聚类蒸馏出的可复用分析框架"""
+
+    __tablename__ = "ask_template"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    intent = Column(String(255), nullable=True)
+    framework = Column(Text, nullable=True)
+    sample_questions = Column(JSON, default=list)
+    keywords = Column(JSON, default=list)
+    member_count = Column(Integer, default=0, nullable=False)
+    hit_count = Column(Integer, default=0, nullable=False)
+    status = Column(String(20), default="draft", nullable=False, index=True)  # draft/active
+    source = Column(String(20), default="auto", nullable=False)  # auto/manual
+
+
+class DsBusinessRule(Base, TimestampMixin):
+    """业务规则：从纠错记录蒸馏的默认过滤 / 口径 / 术语偏好"""
+
+    __tablename__ = "ds_business_rule"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    rule_type = Column(String(20), nullable=False)  # caliber/terminology/filter
+    name = Column(String(255), nullable=False)
+    rule_text = Column(Text, nullable=False)
+    applies_to = Column(String(255), nullable=True)
+    payload = Column(JSON, nullable=True)  # caliber:{expr,dimensions,default_filters}; terminology:{column_ref,synonyms}; filter:{note}
+    evidence = Column(JSON, nullable=True)  # {"corrections":[...], "samples":[...]}
+    confidence = Column(Float, default=0.0, nullable=False)
+    status = Column(String(20), default="candidate", nullable=False, index=True)  # candidate/active/rejected
+    source = Column(String(20), default="auto", nullable=False)
+    materialized_id = Column(String(36), nullable=True)  # 写回语义层产生的 term/metric id
+
+
+# ──────────────────────────────────────────────
+# Agent Evolution（阶段三 L3）：智能体工厂 —— 配置版本化 / 发布与灰度
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# agent_id / data_source_id 统一 String 不带 FK（对齐 ml_* 与阶段一/二表风格，避免级联删除约束）
+# ──────────────────────────────────────────────
+
+
+class AgentVersion(Base, TimestampMixin):
+    """智能体配置版本快照：每次工厂生成 / 手工编辑 / 回滚产生新版本"""
+
+    __tablename__ = "agent_version"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(String(36), nullable=False, index=True)
+    data_source_id = Column(String(64), nullable=True, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    spec = Column(JSON, nullable=False)  # 完整配置快照：name/role/goal/backstory/temperature/tools_config/skills_config/memory_config/metadata
+    coach = Column(JSON, nullable=True)  # 生成依据：养成画像 / 能力匹配 / 缺口
+    source = Column(String(20), default="factory", nullable=False)  # factory/manual/feedback/rollback
+    note = Column(String(500), nullable=True)
+    status = Column(String(20), default="candidate", nullable=False, index=True)  # candidate/production/retired
+
+
+class AgentRelease(Base, TimestampMixin):
+    """智能体版本发布与灰度记录：发布某个版本（全量 / 灰度白名单）"""
+
+    __tablename__ = "agent_release"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    agent_id = Column(String(36), nullable=False, index=True)
+    version_id = Column(Integer, nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    scope = Column(String(20), default="full", nullable=False)  # full/gray
+    gray_users = Column(JSON, default=list)  # 灰度白名单 user_id 列表
+    active = Column(Boolean, default=True, nullable=False)
+    released_by = Column(String(36), nullable=True)
+    note = Column(String(500), nullable=True)
+
+
+
+# ──────────────────────────────────────────────
+# Agent Evolution 阶段四 L4：回归评估与持续进化
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# agent_id / data_source_id 统一 String 不带 FK（对齐 ml_* 与阶段一/二表风格，避免级联删除约束）
+# ──────────────────────────────────────────────
+
+class AgentEvalSet(Base, TimestampMixin):
+    """回归测试集（考题库）：golden 查询 + 正例示例 + 人工补充，全部来自真实交互"""
+
+    __tablename__ = "agent_eval_set"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    question = Column(Text, nullable=False)
+    expected_sql = Column(Text, nullable=True)
+    expected_signature = Column(String(64), nullable=True)  # 期望结果签名（评估路径真实回填）
+    signature_source = Column(String(16), nullable=True)    # 基线来源：trace（真实轨迹）/ eval（评估路径）
+    expected_row_count = Column(Integer, nullable=True)
+    expected_chart = Column(String(20), nullable=True)
+    category = Column(String(20), default="aggregation", nullable=False, index=True)
+    source = Column(String(20), default="manual", nullable=False)  # golden/example/manual
+    difficulty = Column(String(20), default="medium", nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    note = Column(String(500), nullable=True)
+
+
+class AgentEvalRun(Base, TimestampMixin):
+    """回归评估运行：一轮考题执行 + 指标汇总 + 逐题明细快照"""
+
+    __tablename__ = "agent_eval_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    agent_version_id = Column(Integer, nullable=True)
+    agent_version = Column(Integer, nullable=True)
+    trigger = Column(String(20), default="manual", nullable=False)  # manual/weekly/release
+    status = Column(String(20), default="pending", nullable=False, index=True)  # pending/running/done/failed
+    total = Column(Integer, default=0, nullable=False)
+    passed = Column(Integer, default=0, nullable=False)
+    sql_success_rate = Column(Float, nullable=True)
+    consistency_rate = Column(Float, nullable=True)
+    judge_score = Column(Float, nullable=True)
+    overall_score = Column(Float, nullable=True)
+    weak_categories = Column(JSON, default=list)
+    items = Column(JSON, default=list)
+    error_message = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    note = Column(String(500), nullable=True)
+
+
+class AgentQualityScore(Base, TimestampMixin):
+    """智能体质量分时序：每轮评估一条，质量看板趋势数据源"""
+
+    __tablename__ = "agent_quality_score"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    run_id = Column(Integer, nullable=False, index=True)
+    score = Column(Float, nullable=False, default=0.0)
+    metrics = Column(JSON, default=dict)
+
+
+class DataAskReplayEpisode(Base, TimestampMixin):
+    """P1-B 评测轨迹冻结池：每轮评估逐题冻结为不可变剧集（对应 DREAM-RSI trace_pool）。
+
+    只追加、不更新、不删除：晋升判定时的逐时期不回归门槛读取本表，
+    防止「新版在新题上好、在老题上崩」的跨期回归被总均分掩盖。
+    """
+
+    __tablename__ = "data_ask_replay_episode"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    run_id = Column(Integer, nullable=False, index=True)       # 来源 agent_eval_run.id
+    run_kind = Column(String(16), nullable=True, index=True)   # baseline/candidate/None(手动评估)
+    agent_version_id = Column(Integer, nullable=True)
+    agent_version = Column(Integer, nullable=True)
+    era = Column(String(10), nullable=False, index=True)       # 时期键：YYYY-MM-DD（同一轮双候选同 era）
+    question_id = Column(String(36), nullable=False, index=True)  # agent_eval_set.id 快照
+    question = Column(Text, nullable=False)                    # 考题文本快照（防考题改词后失真）
+    category = Column(String(20), nullable=True)
+    budget_retries = Column(Integer, nullable=True)            # P1-A 预算点：SQL 修复重试上限（None=默认）
+    sql_ok = Column(Boolean, nullable=False, default=False)
+    consistency = Column(String(16), nullable=True)            # exact/baseline/mismatch/None
+    judge_score = Column(Float, nullable=True)
+    item_score = Column(Float, nullable=True)                  # 逐题归一化质量分 ∈[0,1]（与 overall 同权重口径）
+    duration_ms = Column(Integer, nullable=True)
+
+
+class AgentSocraticTrace(Base, TimestampMixin):
+    """苏格拉底反问轨迹：clarify 事件与澄清收敛留痕，反问质量蒸馏数据源"""
+
+    __tablename__ = "agent_socratic_trace"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String(64), nullable=False, index=True)
+    agent_id = Column(String(64), nullable=True, index=True)
+    user_id = Column(String(64), nullable=True, index=True)
+    question = Column(Text, nullable=False)
+    clarify_questions = Column(JSON, default=list)
+    round = Column(Integer, nullable=False, default=1)
+    resolved = Column(Boolean, nullable=False, default=False)
+
+
+
+class SocraticEvalSet(Base, TimestampMixin):
+    """苏格拉底反问考题库：模糊问题(期望反问) + 明确问题(期望直答)，用于回归评估反问质量"""
+
+    __tablename__ = "socratic_eval_set"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    agent_id = Column(String(36), nullable=True, index=True)  # None=通用考题
+    question = Column(Text, nullable=False)
+    expected_behavior = Column(String(10), nullable=False, index=True)  # clarify / direct
+    expected_domains = Column(JSON, default=list)  # 期望反问维度关键词
+    difficulty = Column(String(20), default="medium", nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    note = Column(String(500), nullable=True)
+    source = Column(String(20), default="manual", nullable=False)
+
+
+class SocraticEvalRun(Base, TimestampMixin):
+    """苏格拉底反问评估运行：一轮考题执行 + 指标汇总 + 逐题明细"""
+
+    __tablename__ = "socratic_eval_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    status = Column(String(20), default="pending", nullable=False, index=True)
+    total = Column(Integer, default=0, nullable=False)
+    passed = Column(Integer, default=0, nullable=False)
+    clarify_accuracy = Column(Float, nullable=True)   # 模糊问题正确触发反问比例
+    direct_accuracy = Column(Float, nullable=True)    # 明确问题正确直答比例 (=1-误反问率)
+    avg_rounds = Column(Float, nullable=True)
+    items = Column(JSON, default=list)
+    duration_ms = Column(Integer, nullable=True)
+    note = Column(String(500), nullable=True)
+
+
+# ──────────────────────────────────────────────
+# 经营分析看板技能（Dashboard Skill）：看板产物 + 阶段事件
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# ──────────────────────────────────────────────
+
+class DashboardArtifact(Base, TimestampMixin):
+    """看板产物：一次生成任务的完整状态与自包含 HTML。
+
+    html 列为大文本（内嵌 echarts ~1MB），列表查询应避免 select 该列。
+    snapshot 留档数据快照供审计复核（锚点可复算）。
+    """
+    __tablename__ = "dashboard_artifacts"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True, index=True)
+    conversation_id = Column(String(36), nullable=True, index=True)
+    template = Column(String(64), nullable=False, default="retail_overview")
+    title = Column(String(255), nullable=False, default="")
+    status = Column(String(16), nullable=False, default="queued", index=True)  # queued/running/done/failed
+    stage = Column(String(32), nullable=True)   # intent/schema_probe/metric_fetch/anchor_check/render/verify/done
+    progress = Column(Integer, default=0, nullable=False)
+    period_start = Column(String(10), nullable=True)
+    period_end = Column(String(10), nullable=True)
+    kpis = Column(JSON, default=list)           # 卡片摘要 [{label, value}]
+    anchor_status = Column(String(8), nullable=True)  # pass/warn/fail
+    anchor_detail = Column(JSON, default=dict)
+    snapshot = Column(JSON, nullable=True)      # 数据快照（审计复核）
+    html = Column(Text, nullable=True)          # 自包含 HTML
+    verify_report = Column(JSON, default=dict)
+    error = Column(Text, nullable=True)
+    message_id = Column(String(36), nullable=True)  # 卡片消息 id
+
+
+class DashboardEvent(Base, TimestampMixin):
+    """看板生成阶段事件（SSE 推送与留痕）。"""
+    __tablename__ = "dashboard_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dashboard_id = Column(String(36), nullable=False, index=True)
+    stage = Column(String(32), nullable=False)
+    status = Column(String(16), nullable=False)  # start/ok/warn/fail
+    detail = Column(JSON, default=dict)
