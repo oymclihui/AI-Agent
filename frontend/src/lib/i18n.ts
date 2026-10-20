@@ -24,7 +24,7 @@ export const translations = {
     tools:      { zh: "工具",    en: "Tools" },
     dataSources:{ zh: "问数数据源", en: "Data Sources" },
     mlEvolution: { zh: "模型进化", en: "Model Evolution" },
-    knowledgeDistill: { zh: "知识蒸馏", en: "Knowledge Distilling" },
+    knowledgeDistill: { zh: "问答学习", en: "Learn from Q&A" },
     agentFactory: { zh: "智能体工厂", en: "Agent Factory" },
     agentQuality: { zh: "质量看板", en: "Agent Quality" },
     excelParser: { zh: "Excel 解析", en: "Excel Parser" },

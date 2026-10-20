@@ -35,7 +35,7 @@ const T: Record<string, { zh: string; en: string }> = {
   disliked: { zh: "已点踩", en: "Disliked" },
   corrected: { zh: "已纠正", en: "Corrected" },
   saved: { zh: "已存为示例", en: "Saved" },
-  submitted: { zh: "反馈已提交，正在蒸馏进问数记忆", en: "Feedback submitted · distilling" },
+  submitted: { zh: "已学习：反馈已提交，正在训练智能体", en: "Learned · feedback submitted" },
   queued: { zh: "训练排队中", en: "Queued" },
   running: { zh: "蒸馏中", en: "Distilling" },
   done: { zh: "训练完成", en: "Distill done" },
@@ -247,6 +247,9 @@ export function MessageTrainActions({
           <Star className="h-3.5 w-3.5" />
           {pick("example", lang)}
         </button>
+        {!feedback && (
+          <span className="text-[11px] text-slate-500">{lang === "zh" ? "你的反馈会让智能体更聪明" : "Your feedback makes the agent smarter"}</span>
+        )}
       </div>
 
       {openPanel && (

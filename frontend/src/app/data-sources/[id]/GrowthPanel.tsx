@@ -695,7 +695,7 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
               {t("挖掘业务习惯", "Mine rules")}
             </button>
             <Link href="/knowledge-distill" className="btn-secondary inline-flex items-center gap-1 px-3 py-1.5 text-xs">
-              {t("管理范例库", "Manage examples")} →
+              {t("管理问数范文集", "Manage examples")} →
             </Link>
           </div>
         )}

@@ -381,7 +381,7 @@ export default function DataSourceDetailPage() {
         original_sql: askResult.sql || "",
       });
       setFbState({ traceId: askResult.trace_id, type });
-      toast.success((data as { message?: string })?.message || t("反馈已保存", "Feedback saved"));
+      toast.success((data as { message?: string })?.message || t("已学习：反馈已提交，正在训练智能体", "Learned: feedback submitted"));
     } catch (e: unknown) {
       toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("反馈失败", "Feedback failed")));
     }
@@ -1255,8 +1255,10 @@ export default function DataSourceDetailPage() {
               >
                 <Star className="h-3.5 w-3.5" />{t("存为示例", "Save as example")}
               </button>
-              {fbState?.traceId === askResult.trace_id && (
-                <span className="text-xs text-green-600">{t("已反馈，感谢！", "Thanks for the feedback!")}</span>
+              {fbState?.traceId === askResult.trace_id ? (
+                <span className="text-xs text-green-600">{t("已学习，感谢！智能体会记住这次反馈", "Learned — the agent will remember")}</span>
+              ) : (
+                <span className="text-[11px] theme-muted">{t("你的反馈会让智能体更聪明", "Your feedback makes the agent smarter")}</span>
               )}
             </div>
           ) : null}
