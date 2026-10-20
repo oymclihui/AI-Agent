@@ -7,6 +7,7 @@ import {
   BookOpen,
   CheckCircle2,
   ClipboardList,
+  Database,
   FlaskConical,
   Loader2,
   MessageSquare,
@@ -17,7 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { dsDistillApi, dsEvalApi, dsFactoryApi, formatApiError } from "@/lib/api";
+import { dsDistillApi, dsEvalApi, dsFactoryApi, dsProfileApi, formatApiError } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 
 // ── 后端返回类型（与 app/schemas/ds_factory.py / ds_distill.py / ds_eval.py 对齐）──
@@ -40,7 +41,12 @@ interface CoachData {
   data_source_id: string;
   data_source_name?: string;
   driver?: string;
-  profile: { status?: string; version?: number | null; total_rows?: number };
+  profile: {
+    status?: string;
+    version?: number | null;
+    total_rows?: number;
+    quality_gaps?: string[];
+  };
   semantic: { terms?: number; metrics?: number };
   distill: {
     examples_positive?: number;
@@ -122,9 +128,10 @@ interface Props {
   canManage?: boolean;
   onPublished: () => void;
   onGoAsk: () => void;
+  onGoSemantic: () => void;
 }
 
-export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk }: Props) {
+export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, onGoSemantic }: Props) {
   const { lang } = useLangStore();
   const t = (zh: string, en: string) => (lang === "zh" ? zh : en);
 
@@ -173,8 +180,54 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk }: 
     void loadAll();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (profilePollRef.current) clearInterval(profilePollRef.current);
     };
   }, [loadAll]);
+
+  // ── 一键读懂数据（Schema 画像构建，Celery 异步 → 轮询状态）──
+  const [building, setBuilding] = useState(false);
+  const profilePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopProfilePoll = () => {
+    if (profilePollRef.current) {
+      clearInterval(profilePollRef.current);
+      profilePollRef.current = null;
+    }
+  };
+  const onBuildProfile = async () => {
+    setBuilding(true);
+    try {
+      const { data } = await dsProfileApi.build(dsId);
+      const d = data as { status?: string; message?: string };
+      toast.success(d.message || t("已开始读懂数据，完成后自动刷新", "Profile build started"));
+      stopProfilePoll();
+      profilePollRef.current = setInterval(async () => {
+        try {
+          const { data: st } = await dsProfileApi.status(dsId);
+          const s = st as { status?: string; error?: string | null };
+          if (s.status === "ready" || s.status === "failed") {
+            stopProfilePoll();
+            setBuilding(false);
+            if (s.status === "ready") {
+              toast.success(t("数据已读懂，就绪度已更新", "Data understood — readiness updated"));
+            } else {
+              toast.error(t("读懂数据失败：", "Profile build failed: ") + (s.error || t("未知错误", "unknown")));
+            }
+            await loadAll();
+          }
+        } catch { /* keep polling */ }
+      }, 4000);
+      // 最长轮询 10 分钟
+      setTimeout(() => {
+        if (profilePollRef.current) {
+          stopProfilePoll();
+          setBuilding(false);
+        }
+      }, 600000);
+    } catch (e) {
+      toast.error(formatApiError(e, t("触发读懂数据失败", "Trigger failed")));
+      setBuilding(false);
+    }
+  };
 
   // ── 生成 ──
   const onGenerate = async () => {
@@ -350,6 +403,56 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk }: 
   const level = coach?.readiness?.level ?? "insufficient";
   const levelLabel = level === "good" ? t("状态很好", "Good") : level === "basic" ? t("基本可用", "Basic") : t("还需积累", "Needs work");
   const levelColor = level === "good" ? "text-emerald-500" : level === "basic" ? "text-amber-500" : "text-rose-500";
+  const items = coach?.readiness?.items ?? [];
+  const okCount = items.filter((it) => it.ok).length;
+  const isExcel = coach?.driver === "excel_folder" || coach?.driver === "excel_template";
+  const profileReady = coach?.profile?.status === "ready";
+
+  // P2：缺什么给什么 —— 每个未达标项给出对应的引导动作
+  const actionFor = (key: string) => {
+    const cls = "btn-secondary inline-flex items-center gap-1 px-2 py-1 text-[11px] shrink-0";
+    switch (key) {
+      case "profile":
+        if (isExcel) {
+          return <span className="text-[11px] theme-muted shrink-0">{t("Excel 源暂不支持", "N/A for Excel")}</span>;
+        }
+        return (
+          <button type="button" onClick={() => void onBuildProfile()} disabled={building || !canManage} className="btn-primary inline-flex items-center gap-1 px-2 py-1 text-[11px] shrink-0">
+            {building ? <Loader2 className="h-3 w-3 animate-spin" /> : <Database className="h-3 w-3" />}
+            {building ? t("正在读取…", "Reading…") : t("一键读懂数据", "Read my data")}
+          </button>
+        );
+      case "semantic":
+        return (
+          <button type="button" onClick={onGoSemantic} className={cls}>
+            {t("补术语词典", "Add terms")}
+          </button>
+        );
+      case "examples":
+        return (
+          <button type="button" onClick={onGoAsk} className={cls}>
+            {t("去问数喂养", "Ask to feed")}
+          </button>
+        );
+      case "templates":
+        return (
+          <button type="button" onClick={() => void onMineTemplates()} disabled={miningTpl || !canManage} className={cls}>
+            {miningTpl ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            {t("挖掘分析套路", "Mine templates")}
+          </button>
+        );
+      case "volume":
+        return <span className="text-[11px] theme-muted shrink-0">{profileReady ? t("数据量不足，无法解锁总体分析", "Not enough rows") : t("读懂数据后自动统计", "Auto after reading data")}</span>;
+      case "traces":
+        return (
+          <button type="button" onClick={onGoAsk} className={cls}>
+            {t("去问数", "Ask")}
+          </button>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -376,26 +479,39 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk }: 
               <div className="flex-1 min-w-[220px]">
                 <div className="h-2 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
                   <div
-                    className={`h-full rounded-full ${level === "good" ? "bg-emerald-500" : level === "basic" ? "bg-amber-500" : "bg-rose-500"}`}
+                    className={`h-full rounded-full transition-all duration-500 ${level === "good" ? "bg-emerald-500" : level === "basic" ? "bg-amber-500" : "bg-rose-500"}`}
                     style={{ width: `${score}%` }}
                   />
                 </div>
-                <div className="mt-2 grid sm:grid-cols-2 gap-x-4 gap-y-1">
-                  {(coach.readiness.items || []).map((it) => (
-                    <div key={it.key} className="flex items-center gap-1.5 text-xs">
-                      {it.ok ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                      ) : (
-                        <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
-                      )}
-                      <span className="truncate">
-                        {it.label}：<b>{String(it.value)}</b>
-                        {!it.ok && <span className="theme-muted">（{t("目标", "target")} {String(it.target)}）</span>}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                <p className="mt-1.5 text-xs theme-muted">
+                  {t(`${okCount}/${items.length} 项达标 · 每完成一项，智能体就变强一点`, `${okCount}/${items.length} checks passed · each one makes your agent smarter`)}
+                </p>
               </div>
+            </div>
+
+            {/* 养成清单（P2：缺什么给什么，未达标项直接给动作） */}
+            <div>
+              <p className="text-xs theme-muted mb-1.5">{t("养成清单", "Growth checklist")}</p>
+              <ul className="space-y-1">
+                {items.map((it) => (
+                  <li key={it.key} className="flex items-center gap-2 text-xs rounded-lg border theme-border px-2.5 py-1.5">
+                    {it.ok ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                    ) : (
+                      <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                    )}
+                    <span className="truncate flex-1">
+                      {it.label}：<b>{String(it.value)}</b>
+                      {!it.ok && <span className="theme-muted">（{t("目标", "target")} {String(it.target)}）</span>}
+                    </span>
+                    {it.ok ? (
+                      <span className="text-[11px] text-emerald-600 dark:text-emerald-400 shrink-0">{t("已达成", "done")}</span>
+                    ) : (
+                      actionFor(it.key)
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
 
             {/* 能力清单 */}
@@ -419,14 +535,14 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk }: 
               </div>
             </div>
 
-            {/* 缺口 */}
-            {coach.gaps?.length > 0 && (
+            {/* 数据质量提示（来自真实画像，非就绪度项） */}
+            {(coach.profile?.quality_gaps?.length ?? 0) > 0 && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
                 <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mb-1">
-                  {t("还差这些就能更好", "Gaps to improve")}
+                  {t("数据质量提示", "Data quality notes")}
                 </p>
                 <ul className="text-xs theme-muted space-y-0.5 list-disc pl-4">
-                  {coach.gaps.slice(0, 5).map((g, i) => <li key={i}>{g}</li>)}
+                  {(coach.profile.quality_gaps ?? []).slice(0, 8).map((g, i) => <li key={i}>{g}</li>)}
                 </ul>
               </div>
             )}

@@ -1290,6 +1290,7 @@ export default function DataSourceDetailPage() {
           canManage={Boolean(ds.can_manage)}
           onPublished={load}
           onGoAsk={() => setTab("ask")}
+          onGoSemantic={() => setTab("semantic")}
         />
       )}
 

@@ -631,6 +631,12 @@ export const dsDistillApi = {
   evolve: (id: string) => api.post(`/data-sources/${id}/evolve`),
 };
 
+// ── DsGrowth 阶段一：Schema 画像（一键读懂数据，Celery 异步）──
+export const dsProfileApi = {
+  build: (id: string) => api.post(`/data-sources/${id}/profile/build`),
+  status: (id: string) => api.get(`/data-sources/${id}/profile/status`),
+};
+
 export const dsFactoryApi = {
   coach: (id: string) => api.get(`/data-sources/${id}/factory/coach`),
   generate: (id: string, data: { nl_prompt?: string; name?: string }) =>
