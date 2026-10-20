@@ -14,8 +14,9 @@ import { SegmentedControl } from "@/components/SegmentedControl";
 import ClarifyCard from "@/components/chat/ClarifyCard";
 
 const ErDiagram = dynamic(() => import("./ErDiagram").then((mod) => mod.ErDiagram), { ssr: false });
+const GrowthPanel = dynamic(() => import("./GrowthPanel").then((mod) => mod.GrowthPanel), { ssr: false });
 
-type Tab = "overview" | "files" | "ask" | "semantic" | "audit" | "drift" | "access";
+type Tab = "overview" | "files" | "ask" | "growth" | "semantic" | "audit" | "drift" | "access";
 
 interface DataSourceDetail {
   id: string;
@@ -581,6 +582,7 @@ export default function DataSourceDetailPage() {
     { value: "overview", label: t("概览", "Overview") },
     ...(isExcelLike ? [{ value: "files" as Tab, label: t("Excel 文件", "Excel files") }] : []),
     { value: "ask", label: t("问数", "Ask") },
+    { value: "growth", label: t("养成", "Growth") },
     { value: "semantic", label: t("语义模型", "Semantic") },
     { value: "audit", label: t("审计", "Audit") },
     ...(ds.can_manage ? [{ value: "access" as Tab, label: t("权限", "Access") }] : []),
@@ -925,8 +927,30 @@ export default function DataSourceDetailPage() {
             </div>
             <div className="theme-surface rounded-xl border theme-border p-4">
               <h2 className="font-medium mb-2">{t("关联", "Links")}</h2>
-              {ds.agent_id && <p className="text-sm">Agent: <Link href="/agents" className="text-blue-500">{ds.agent_id.slice(0, 8)}…</Link></p>}
-              {ds.employee_id && <p className="text-sm mt-1">Employee: <Link href={`/employees/${ds.employee_id}`} className="text-blue-500">{t("查看", "View")}</Link></p>}
+              {ds.agent_id ? (
+                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3">
+                  <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{t("已绑定智能体", "Agent bound")}</p>
+                  <p className="text-xs theme-muted mt-0.5">
+                    Agent: <Link href="/agents" className="text-blue-500">{ds.agent_id.slice(0, 8)}…</Link>
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <Link href={`/chat?data_source_id=${ds.id}`} className="btn-primary inline-flex items-center gap-1 px-2.5 py-1 text-xs">
+                      <MessageSquare className="h-3.5 w-3.5" />{t("去问数", "Ask data")}
+                    </Link>
+                    <button type="button" onClick={() => setTab("growth")} className="btn-secondary px-2.5 py-1 text-xs">
+                      {t("去养成", "Train")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed theme-border p-3">
+                  <p className="text-sm theme-muted">{t("尚未绑定智能体", "No agent yet")}</p>
+                  <button type="button" onClick={() => setTab("growth")} className="btn-secondary mt-2 px-2.5 py-1 text-xs">
+                    {t("去养成一个", "Create one")}
+                  </button>
+                </div>
+              )}
+              {ds.employee_id && <p className="text-sm mt-2">Employee: <Link href={`/employees/${ds.employee_id}`} className="text-blue-500">{t("查看", "View")}</Link></p>}
               <Link href={`/chat?data_source_id=${ds.id}`} className="mt-3 inline-flex items-center gap-1 text-sm text-blue-500">
                 <MessageSquare className="h-4 w-4" />{t("在对话中问数", "Ask in Chat")}
               </Link>
@@ -1257,6 +1281,16 @@ export default function DataSourceDetailPage() {
             </div>
           ) : null}
         </div>
+      )}
+
+      {tab === "growth" && (
+        <GrowthPanel
+          dsId={ds.id}
+          agentId={ds.agent_id}
+          canManage={Boolean(ds.can_manage)}
+          onPublished={load}
+          onGoAsk={() => setTab("ask")}
+        />
       )}
 
       {tab === "semantic" && (
