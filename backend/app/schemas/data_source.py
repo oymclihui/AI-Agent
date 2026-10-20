@@ -182,6 +182,19 @@ class DataSourceTestOut(BaseModel):
     truncated: bool = False
 
 
+class TableRelationIn(BaseModel):
+    """用户在 ER 图上手动定义的一条表间关联关系。"""
+    from_table: str = Field(..., min_length=1)
+    from_column: str = Field(..., min_length=1)
+    to_table: str = Field(..., min_length=1)
+    to_column: str = Field(..., min_length=1)
+
+
+class TableRelationsSetIn(BaseModel):
+    """保存用户自定义的表间关系集合（全量覆盖）。"""
+    relations: list[TableRelationIn] = Field(default_factory=list)
+
+
 class SchemaGraphOut(BaseModel):
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]

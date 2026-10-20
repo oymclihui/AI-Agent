@@ -139,6 +139,48 @@ async def _resolve_relative_time(
     return f"{text}（其中「{phrase}」指 {resolved}，数据最新日期为 {latest.isoformat()}）"
 
 
+def user_join_edges_from_tables(tables: list[Any]) -> list[dict[str, Any]]:
+    """从已注册数据表的 join_keys 还原用户自定义的关联边。
+
+    join_keys 结构：{"edges": [{"to": 对端表, "on": 本端列}]}（单表视角、双向存储）。
+    还原时合并双向记录，输出与 infer_join_graph 一致的 edge 结构，
+    并标记 kind="user" 以示区别。若用户未定义任何关系返回空列表。
+    """
+    edges: list[dict[str, Any]] = []
+    jk_by_name: dict[str, dict[str, Any]] = {}
+    for t in tables:
+        role = getattr(t, "role", None)
+        role_val = role.value if hasattr(role, "value") else role
+        if role_val != "data":
+            continue
+        name = str(getattr(t, "table_name", "") or "")
+        if name:
+            jk_by_name[name] = getattr(t, "join_keys", None) or {}
+    for src, jk in jk_by_name.items():
+        for edge in (jk.get("edges") or []):
+            dst = str(edge.get("to") or "")
+            on = str(edge.get("on") or "")
+            if not dst or not on or dst not in jk_by_name:
+                continue
+            if src >= dst:
+                continue
+            dst_jk = jk_by_name.get(dst) or {}
+            to_col = on
+            for de in (dst_jk.get("edges") or []):
+                if str(de.get("to") or "") == src:
+                    to_col = str(de.get("on") or on)
+                    break
+            edges.append({
+                "from": src,
+                "to": dst,
+                "label": on,
+                "from_column": on,
+                "to_column": to_col,
+                "kind": "user",
+            })
+    return edges
+
+
 async def load_source_context(
     db: AsyncSession,
     data_source_id: str,
@@ -169,17 +211,22 @@ async def load_source_context(
     if not table_meta and data_tables:
         table_meta = await introspect_tables(source, [t.table_name for t in data_tables])
     table_meta = enrich_tables(table_meta)
-    join_graph = infer_join_graph(
-        [
-            {
-                "table_name": m["table_name"],
-                "columns": m.get("columns") or [],
-            }
-            for m in table_meta
-        ]
-    )
+    user_edges = user_join_edges_from_tables(data_tables)
+    if user_edges:
+        join_graph_edges = user_edges
+    else:
+        join_graph = infer_join_graph(
+            [
+                {
+                    "table_name": m["table_name"],
+                    "columns": m.get("columns") or [],
+                }
+                for m in table_meta
+            ]
+        )
+        join_graph_edges = join_graph.get("edges") or []
     perm_name = perm_table.table_name if perm_table else None
-    return source, table_meta, source.semantic_model, perm_name, join_graph.get("edges") or []
+    return source, table_meta, source.semantic_model, perm_name, join_graph_edges
 
 
 def _user_key(user: User | None) -> str:

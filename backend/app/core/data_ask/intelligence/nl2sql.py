@@ -72,11 +72,20 @@ def _schema_prompt(tables: list[dict[str, Any]], driver: str, join_edges: list[d
         if jk:
             parts.append(f"  Join hints: {json.dumps(jk, ensure_ascii=False)}")
     if join_edges:
-        edge_txt = "; ".join(
-            f"{e['from']}.{e.get('from_column') or e.get('label', '?')} = {e['to']}.{e.get('to_column') or e.get('label', '?')}"
-            for e in join_edges[:8]
-        )
-        parts.append(f"Suggested joins: {edge_txt}")
+        user_edges = [e for e in join_edges if e.get("kind") == "user"]
+        inferred_edges = [e for e in join_edges if e.get("kind") != "user"]
+        if user_edges:
+            user_txt = "; ".join(
+                f"{e['from']}.{e.get('from_column') or e.get('label', '?')} = {e['to']}.{e.get('to_column') or e.get('label', '?')}"
+                for e in user_edges[:8]
+            )
+            parts.append(f"Mandatory joins (MUST use exactly these columns, do NOT join on any other columns): {user_txt}")
+        if inferred_edges:
+            inf_txt = "; ".join(
+                f"{e['from']}.{e.get('from_column') or e.get('label', '?')} = {e['to']}.{e.get('to_column') or e.get('label', '?')}"
+                for e in inferred_edges[:8]
+            )
+            parts.append(f"Suggested joins: {inf_txt}")
     return "\n".join(parts)
 
 

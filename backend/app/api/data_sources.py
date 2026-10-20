@@ -53,7 +53,7 @@ from app.core.data_ask.intelligence.query_memory import save_golden_query
 from app.core.data_ask.schema.drift import detect_schema_drift
 from app.core.data_ask.schema.introspect import catalog_related_tables, infer_join_graph, introspect_tables, is_key_column
 from app.core.data_ask.semantic.mdl import default_semantic_model, validate_semantic_model
-from app.core.data_ask.service import run_data_ask, stream_data_ask
+from app.core.data_ask.service import run_data_ask, stream_data_ask, user_join_edges_from_tables
 from app.core.excel_parser.service import create_parse_job
 from app.core.excel_parser.access import assert_template_use
 from app.db.models import ExcelParseTemplate
@@ -103,6 +103,7 @@ from app.schemas.data_source import (
     SchemaDriftOut,
     SchemaGraphOut,
     SemanticModelUpdateIn,
+    TableRelationsSetIn,
 )
 from app.schemas.excel_parser import ExcelParseJobOut, ExcelTemplateParseIn, ExcelTemplateStatusOut
 
@@ -947,15 +948,23 @@ async def schema_graph(
     user: User = Depends(get_current_user),
 ):
     source = await _get_source(db, source_id, user)
+    data_tables = [t for t in source.tables if t.role == DataSourceTableRole.data]
     tables = [
         {
             "table_name": t.table_name,
             "columns": (t.column_meta or {}).get("columns") or [],
         }
-        for t in source.tables
-        if t.role == DataSourceTableRole.data
+        for t in data_tables
     ]
-    graph = infer_join_graph(tables)
+    # 优先使用用户在 ER 图上手动定义的关系；未定义时回退到列名自动推断
+    user_edges = user_join_edges_from_tables(data_tables)
+    if user_edges:
+        nodes = [{"id": t["table_name"], "label": t["table_name"]} for t in tables]
+        edges = user_edges
+    else:
+        graph = infer_join_graph(tables)
+        nodes = graph["nodes"]
+        edges = graph["edges"]
     related = await catalog_related_tables(source, tables)
     keys: list[str] = []
     seen: set[str] = set()
@@ -966,12 +975,55 @@ async def schema_graph(
                 seen.add(name.lower())
                 keys.append(name)
     columns_by_name = {str(table["table_name"]): table.get("columns") or [] for table in tables}
-    nodes = []
-    for node in graph["nodes"]:
+    enriched_nodes = []
+    for node in nodes:
         enriched = dict(node)
         enriched["columns"] = columns_by_name.get(str(node.get("id") or "")) or []
-        nodes.append(enriched)
-    return SchemaGraphOut(nodes=nodes, edges=graph["edges"], related=related, keys=keys)
+        enriched_nodes.append(enriched)
+    return SchemaGraphOut(nodes=enriched_nodes, edges=edges, related=related, keys=keys)
+
+
+@router.patch("/{source_id}/tables/relations", response_model=SchemaGraphOut)
+async def set_table_relations(
+    source_id: str,
+    payload: TableRelationsSetIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """保存用户在 ER 图上手动定义的表间关系（全量覆盖）。
+
+    每条关系双向写入两端表的 join_keys，确保问数时 LLM 能看到 Join hints，
+    且 schema-graph / load_source_context 优先采用用户定义而非自动推断。
+    """
+    source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
+    data_tables = [t for t in source.tables if t.role == DataSourceTableRole.data]
+    name_set = {t.table_name for t in data_tables}
+
+    # 校验：关系两端的表必须是已注册的数据表
+    for rel in payload.relations:
+        if rel.from_table not in name_set:
+            raise HTTPException(status_code=400, detail=f"表 {rel.from_table} 未注册为数据表")
+        if rel.to_table not in name_set:
+            raise HTTPException(status_code=400, detail=f"表 {rel.to_table} 未注册为数据表")
+        if rel.from_table == rel.to_table:
+            raise HTTPException(status_code=400, detail="关联关系不能连到同一张表")
+
+    # 清空所有数据表的 join_keys，再按用户关系双向写入
+    by_name = {t.table_name: t for t in data_tables}
+    for t in data_tables:
+        t.join_keys = {"edges": []}
+    for rel in payload.relations:
+        left = by_name[rel.from_table]
+        right = by_name[rel.to_table]
+        left_edges = (left.join_keys or {}).setdefault("edges", [])
+        right_edges = (right.join_keys or {}).setdefault("edges", [])
+        left_edges.append({"to": rel.to_table, "on": rel.from_column})
+        right_edges.append({"to": rel.from_table, "on": rel.to_column})
+    await db.commit()
+
+    # 返回更新后的 schema-graph
+    return await schema_graph(source_id=source_id, db=db, user=user)
 
 
 @router.post("/{source_id}/blueprint", response_model=GenerateBlueprintOut)

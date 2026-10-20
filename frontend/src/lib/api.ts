@@ -561,6 +561,8 @@ export const dataSourcesApi = {
   recommendedQuestions: (id: string) => api.get(`/data-sources/${id}/recommended-questions`),
   saveGoldenQuery: (id: string, data: object) => api.post(`/data-sources/${id}/golden-queries`, data),
   schemaGraph: (id: string) => api.get(`/data-sources/${id}/schema-graph`),
+  setTableRelations: (id: string, relations: Array<{ from_table: string; from_column: string; to_table: string; to_column: string }>) =>
+    api.patch(`/data-sources/${id}/tables/relations`, { relations }),
   blueprint: (id: string, data: object) => api.post(`/data-sources/${id}/blueprint`, data),
   bindAgent: (id: string, data: object) => api.post(`/data-sources/${id}/bind-agent`, data),
   createEmployee: (id: string, data: object) => api.post(`/data-sources/${id}/create-employee`, data),

@@ -203,6 +203,10 @@ export default function DataSourceDetailPage() {
   const [tblLoading, setTblLoading] = useState(false);
   const [tblSaving, setTblSaving] = useState(false);
   const [editForm, setEditForm] = useState<EditForm | null>(null);
+  // ER 图关系编辑
+  const [editingRelations, setEditingRelations] = useState(false);
+  const [relations, setRelations] = useState<Array<{ from_table: string; from_column: string; to_table: string; to_column: string }>>([]);
+  const [savingRelations, setSavingRelations] = useState(false);
 
   const loadTemplateStatus = useCallback(() => {
     if (!id) return;
@@ -636,6 +640,71 @@ export default function DataSourceDetailPage() {
     }
   };
 
+  // ── ER 图关系编辑 ──
+  const startEditRelations = () => {
+    const init = (graph?.edges || [])
+      .filter((e) => e.from && e.to)
+      .map((e) => ({
+        from_table: e.from,
+        from_column: (e as { from_column?: string }).from_column || e.label || "",
+        to_table: e.to,
+        to_column: (e as { to_column?: string }).to_column || e.label || "",
+      }));
+    setRelations(init);
+    setEditingRelations(true);
+  };
+
+  const cancelEditRelations = () => {
+    setEditingRelations(false);
+    setRelations([]);
+  };
+
+  const addRelation = () => {
+    const first = dataTables[0]?.table_name || "";
+    const second = dataTables[1]?.table_name || first;
+    setRelations([...relations, { from_table: first, from_column: "", to_table: second, to_column: "" }]);
+  };
+
+  const removeRelation = (idx: number) => {
+    setRelations(relations.filter((_, i) => i !== idx));
+  };
+
+  const updateRelation = (idx: number, patch: Partial<{ from_table: string; from_column: string; to_table: string; to_column: string }>) => {
+    setRelations(relations.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  };
+
+  const saveRelations = async () => {
+    if (!id) return;
+    const cleaned = relations
+      .filter((r) => r.from_table && r.to_table && r.from_column && r.to_column)
+      .filter((r) => r.from_table !== r.to_table);
+    // 去重（A-B 与 B-A 视为同一条）
+    const seen = new Set<string>();
+    const deduped = cleaned.filter((r) => {
+      const key = [r.from_table, r.to_table].sort().join("|") + "|" + [r.from_column, r.to_column].sort().join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setSavingRelations(true);
+    try {
+      const { data } = await dataSourcesApi.setTableRelations(id, deduped);
+      setGraph(data as GraphData);
+      setEditingRelations(false);
+      setRelations([]);
+      toast.success(t("关联关系已保存", "Relations saved"));
+    } catch (e: unknown) {
+      toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("保存失败", "Save failed")));
+    } finally {
+      setSavingRelations(false);
+    }
+  };
+
+  const columnsOf = (tableName: string) => {
+    const tbl = dataTables.find((x) => x.table_name === tableName);
+    return ((tbl as { column_meta?: { columns?: { name: string }[] } })?.column_meta?.columns || []).map((c) => c.name);
+  };
+
   const runTemplateParse = async () => {
     if (!id) return;
     setParsingTemplate(true);
@@ -865,20 +934,100 @@ export default function DataSourceDetailPage() {
           </div>
           {!isExcelLike && (
           <div className="theme-surface rounded-xl border theme-border p-4 space-y-3">
-            <h2 className="font-medium">{t("ER 图", "ER diagram")}</h2>
-            <p className="text-xs theme-muted">
-              {t(
-                "按编号、代码这类关联键画出已选表。虚线表是库里同键的参考表，只作血缘，不会自动加入问数。",
-                "Selected tables are linked by key columns. Dashed tables share a key in the database and stay reference-only.",
+            <div className="flex items-center justify-between">
+              <h2 className="font-medium">{t("ER 图", "ER diagram")}</h2>
+              {!editingRelations && (
+                <button type="button" onClick={startEditRelations} className="btn-secondary px-3 py-1 text-xs">
+                  {t("编辑关系", "Edit relations")}
+                </button>
               )}
-            </p>
-            <ErDiagram
-              tables={dataTables}
-              edges={graph?.edges || []}
-              related={graph?.related || []}
-              keys={graph?.keys || []}
-              referenceBadge={t("参考", "ref")}
-            />
+            </div>
+            {!editingRelations ? (
+              <>
+                <p className="text-xs theme-muted">
+                  {t(
+                    "按编号、代码这类关联键画出已选表。虚线表是库里同键的参考表，只作血缘，不会自动加入问数。",
+                    "Selected tables are linked by key columns. Dashed tables share a key in the database and stay reference-only.",
+                  )}
+                </p>
+                <ErDiagram
+                  tables={dataTables}
+                  edges={graph?.edges || []}
+                  related={graph?.related || []}
+                  keys={graph?.keys || []}
+                  referenceBadge={t("参考", "ref")}
+                />
+              </>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs theme-muted">
+                  {t(
+                    "手动指定表之间的关联列。保存后问数将优先按你定义的关系生成 JOIN，不再依赖自动推断。",
+                    "Manually define join columns between tables. Saved relations take precedence over auto-detection when generating SQL.",
+                  )}
+                </p>
+                {relations.length === 0 && (
+                  <p className="text-xs theme-muted italic">{t("暂无关系，点击「添加关系」开始。", "No relations yet. Click 'Add relation' to start.")}</p>
+                )}
+                {relations.map((r, idx) => (
+                  <div key={`rel-${idx}`} className="flex flex-wrap items-center gap-2 text-xs">
+                    <select
+                      value={r.from_table}
+                      onChange={(e) => updateRelation(idx, { from_table: e.target.value, from_column: "" })}
+                      className="theme-input rounded px-2 py-1"
+                    >
+                      {dataTables.map((t) => (
+                        <option key={t.table_name} value={t.table_name}>{t.table_name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={r.from_column}
+                      onChange={(e) => updateRelation(idx, { from_column: e.target.value })}
+                      className="theme-input rounded px-2 py-1"
+                    >
+                      <option value="">{t("选列", "col")}</option>
+                      {columnsOf(r.from_table).map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    <span className="theme-muted">=</span>
+                    <select
+                      value={r.to_table}
+                      onChange={(e) => updateRelation(idx, { to_table: e.target.value, to_column: "" })}
+                      className="theme-input rounded px-2 py-1"
+                    >
+                      {dataTables.map((t) => (
+                        <option key={t.table_name} value={t.table_name}>{t.table_name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={r.to_column}
+                      onChange={(e) => updateRelation(idx, { to_column: e.target.value })}
+                      className="theme-input rounded px-2 py-1"
+                    >
+                      <option value="">{t("选列", "col")}</option>
+                      {columnsOf(r.to_table).map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    <button type="button" onClick={() => removeRelation(idx)} className="text-red-500 hover:text-red-600 text-xs">
+                      {t("删除", "Delete")}
+                    </button>
+                  </div>
+                ))}
+                <div className="flex items-center gap-2 pt-2">
+                  <button type="button" onClick={addRelation} className="btn-secondary px-3 py-1 text-xs">
+                    + {t("添加关系", "Add relation")}
+                  </button>
+                  <button type="button" onClick={saveRelations} disabled={savingRelations} className="btn-primary px-3 py-1 text-xs">
+                    {savingRelations ? t("保存中…", "Saving…") : t("保存", "Save")}
+                  </button>
+                  <button type="button" onClick={cancelEditRelations} disabled={savingRelations} className="btn-secondary px-3 py-1 text-xs">
+                    {t("取消", "Cancel")}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           )}
           <div className="theme-surface rounded-xl border theme-border p-4">
