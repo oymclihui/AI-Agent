@@ -337,4 +337,4 @@ async def trigger_weekly_evolution(
 ):
     from app.worker import celery_app
     celery_app.send_task("ds_eval.weekly_evolution")
-    return {"ok": True, "message": "每周进化闭环已提交异步执行（蒸馏→候选版本→回归评估→达标晋升）"}
+    return {"ok": True, "message": "每周自动进化已提交（学习→候选版本→自测→达标上线）"}

@@ -68,7 +68,7 @@ async def regenerate_candidate(
     spec = await generate_factory_spec(db, source, coach, nl_prompt=nl_prompt)
     spec.pop("opening_questions", None)
     row = await versioning.snapshot(
-        db, agent, source="factory", note=note or "蒸馏后再生成候选", coach=coach,
+        db, agent, source="factory", note=note or "学习后再生成候选", coach=coach,
         status="candidate", spec=spec,
     )
     return row

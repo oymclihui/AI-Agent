@@ -133,7 +133,7 @@ async def _evolve_one(session_factory, data_source_id: str) -> dict[str, Any]:
             prod_version = await active_version(db, str(source.agent_id)) if agent else None
 
             candidate = await regenerate_candidate(
-                db, source, note="每周进化：蒸馏后再生成",
+                db, source, note="每周进化：学习后再生成",
             )
             if candidate is not None:
                 result["candidate_version"] = int(candidate.version)
