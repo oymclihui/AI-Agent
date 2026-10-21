@@ -4,8 +4,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
+_MONTH = r"(0?[1-9]|1[0-2])"
+_DAY = r"(0?[1-9]|[12]\d|3[01])"
+# 月份必须落在 1-12：否则「5869.00」这类两位小数的金额会被 \d{4}\.\d{1,2} 误判成日期，
+# 进而把金额列当成时间轴，图表语义完全错位。
 _TIME_VALUE = re.compile(
-    r"^(\d{4}([-/年.]\d{1,2}([-/月.]\d{1,2}日?)?)?|\d{4}年|\d{1,2}月|\d{4}Q[1-4])$",
+    r"^(\d{4}([-/]" + _MONTH + r"([-/]" + _DAY + r")?|年" + _MONTH + r"月(\d{1,2}日)?)?"
+    r"|" + _MONTH + r"月|\d{4}Q[1-4])$",
     re.IGNORECASE,
 )
 _TIME_NAME = ("year", "date", "month", "time", "quarter", "日期", "时间", "季度", "月份", "年份")
@@ -90,8 +95,20 @@ def _summary_chart(
 
 def _with_facts(chart: dict[str, Any]) -> dict[str, Any]:
     chart["caption"] = chart_facts(chart)
-    chart["title"] = chart["caption"]
+    chart["title"] = _short_title(chart)
     return chart
+
+
+def _short_title(chart: dict[str, Any]) -> str:
+    """图表标题只写一行短标签。facts（逐点数值）留给 L3 提示词，不当作标题展示。"""
+    names = [str(d.get("label") or "") for d in (chart.get("datasets") or []) if d.get("label")]
+    series = "、".join(names[:2]) + ("等" if len(names) > 2 else "") or "数值"
+    kind = chart.get("type")
+    if kind == "line":
+        return f"{series}趋势"
+    if kind == "pie":
+        return f"{series}占比"
+    return f"{series}对比"
 
 
 def chart_facts(chart: dict[str, Any] | None) -> str:
