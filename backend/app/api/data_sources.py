@@ -523,13 +523,9 @@ async def set_source_tables(
 ):
     source = await _get_source(db, source_id, user)
     await assert_data_source_access(db, source, user, require_manage=True)
-    is_excel = is_excel_driver(str(source.driver))
     perm_entries = [t for t in payload.tables if t.role == DataSourceTableRole.permission]
-    if is_excel:
-        if len(perm_entries) > 1:
-            raise HTTPException(status_code=400, detail="Excel folder allows at most one permission file")
-    elif len(perm_entries) != 1:
-        raise HTTPException(status_code=400, detail="Must select exactly one permission table or view")
+    if len(perm_entries) > 1:
+        raise HTTPException(status_code=400, detail="At most one permission table or view")
     if perm_entries:
         perm = perm_entries[0]
         if perm.object_type not in (DataSourceObjectType.table, DataSourceObjectType.view):
