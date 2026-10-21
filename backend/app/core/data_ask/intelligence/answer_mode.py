@@ -55,7 +55,9 @@ def classify_answer_mode(
     if hit and (numeric >= 2 or len(data) >= 2):
         return MODE_ANALYSIS
     if hit:
-        return MODE_TABLE
+        # 走到这里必是「单行且非多指标」：分析意图撑不起表格，
+        # 降级为一句话直答，便于交代数据局限（如仅一家门店、无法对比）。
+        return MODE_DIRECT
     if numeric >= 2:
         return MODE_TABLE
     if len(data) >= 2 and text_cols >= 1:

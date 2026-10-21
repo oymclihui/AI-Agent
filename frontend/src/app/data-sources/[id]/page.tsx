@@ -12,6 +12,7 @@ import { useLangStore } from "@/lib/langStore";
 import { useClientAuth } from "@/hooks/useClientAuth";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import ClarifyCard from "@/components/chat/ClarifyCard";
+import MarkdownView from "@/components/MarkdownView";
 
 const ErDiagram = dynamic(() => import("./ErDiagram").then((mod) => mod.ErDiagram), { ssr: false });
 const GrowthPanel = dynamic(() => import("./GrowthPanel").then((mod) => mod.GrowthPanel), { ssr: false });
@@ -148,6 +149,7 @@ export default function DataSourceDetailPage() {
     explanation?: string;
     columns?: string[];
     rows?: unknown[][];
+    answer_mode?: string;
     chart?: {
       type?: string;
       labels: string[];
@@ -1211,12 +1213,16 @@ export default function DataSourceDetailPage() {
             <p className="text-xs theme-muted">{askResult.explanation}</p>
           )}
           {askResult?.answer && askResult.answer !== askResult.clarification && (
-            <div className="whitespace-pre-wrap text-sm theme-text">{askResult.answer}</div>
+            <div className="text-sm theme-text">
+              <MarkdownView size="xs">{askResult.answer}</MarkdownView>
+            </div>
           )}
           {toAskChart(askResult?.chart) && (
             <ChartRenderer chart={toAskChart(askResult?.chart)!} />
           )}
-          {askResult?.columns && askResult.rows && askResult.rows.length > 0 && (
+          {/* L2 的回答正文已是同一份 Markdown 表格、L1 为单值直答，均不再重复渲染原始数据表 */}
+          {askResult?.columns && askResult.rows && askResult.rows.length > 0 &&
+            askResult.answer_mode !== "L1" && askResult.answer_mode !== "L2" && (
             <div className="overflow-x-auto">
               <table className="min-w-full text-xs border theme-border">
                 <thead><tr>{askResult.columns.map((c) => <th key={c} className="border px-2 py-1">{c}</th>)}</tr></thead>

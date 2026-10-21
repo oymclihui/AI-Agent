@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.data_ask.connectors.factory import build_connector_from_source
 from app.core.data_ask.experience.chart_profile import suggest_chart
+from app.core.data_ask.intelligence.answer_mode import MODE_ANALYSIS, MODE_DIRECT
 from app.models_hub.router import ModelRouter
 
 OVERVIEW_KEYWORDS = (
@@ -22,12 +23,26 @@ OVERVIEW_KEYWORDS = (
     "表现", "怎么样", "复盘", "评估", "分析下", "评价一下",
 )
 
+# 诊断意图词：问题聚焦「找原因 / 看差异」，而非「要一份经营总览」。
+# 命中时不走总览流水线——总览板块是固定的通用维度，不含问题所指的定向维度
+# （如各分店交易笔数在 SR_CS_KL 表，总览却会选商品表），容易答非所问。
+# 这类问题交给 NL2SQL 定向取数 + L3 深度分析更准确。
+_DIAGNOSTIC_KEYWORDS = (
+    "为什么", "为啥", "为何", "原因", "差异", "区别",
+    "下降", "下滑", "上升", "上涨", "异常", "波动",
+    "暴跌", "暴涨", "突增", "突降", "偏低", "偏高",
+)
+
 
 def is_overview_question(question: str) -> bool:
     q = (question or "").strip()
     if not q:
         return False
-    return any(k in q for k in OVERVIEW_KEYWORDS)
+    if not any(k in q for k in OVERVIEW_KEYWORDS):
+        return False
+    if any(k in q for k in _DIAGNOSTIC_KEYWORDS):
+        return False
+    return True
 
 
 def _to_chat_chart(chart: dict | None) -> dict | None:
@@ -447,6 +462,15 @@ async def _extract_scope(conn, t: str, question: str) -> tuple[str, str, bool]:
     return where_body, desc, single_day
 
 
+async def _has_column(conn, t: str, col: str) -> bool:
+    """轻量探测表（或范围子查询）是否包含某列，避免硬编码维度在不支持的表上查询报错。"""
+    try:
+        await conn.execute_select(f"SELECT {col} FROM {t} LIMIT 1", limit=1)
+        return True
+    except Exception:
+        return False
+
+
 async def run_overview_analysis(
     db: AsyncSession,
     *,
@@ -525,7 +549,39 @@ async def run_overview_analysis(
         "全局KPI概览",
     )
 
-    # 2. 星期效应（单日范围下无意义，跳过）
+    # 空数据短路：范围内无有效记录（聚合结果全为 NULL）时直接短答，
+    # 跳过其余维度查询与大模型报告，避免对空数据生成长篇分析。
+    _kpi_rows = sections[0]["rows"] if sections else []
+    if _kpi_rows and all(v is None for v in _kpi_rows[0]):
+        scope_sql = f"-- 总体分析：{raw_table}（范围：{scope_desc}，无数据）"
+        return {
+            "answer": f"在「{scope_desc}」范围内未查询到有效经营数据。请确认时间、门店或品类是否正确，或调整范围后重新提问。",
+            "sql": scope_sql,
+            "display_sql": scope_sql,
+            "explanation": f"取数范围：{scope_desc}｜范围内无数据",
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "truncated": False,
+            "chart": None,
+            "charts": [],
+            "clarification": "",
+            "analysis_mode": "overview",
+            "answer_mode": MODE_DIRECT,
+            "standalone_question": question,
+        }
+
+    # 2. 门店经营对比（表含 FDMC 时才注入）：「各分店 / 门店」类问题的核心维度
+    if await _has_column(conn, t, "FDMC"):
+        await collect(
+            "门店经营对比",
+            f"SELECT FDMC AS 门店, ROUND(SUM(XSJE),2) AS 销售金额, ROUND(SUM(ML),2) AS 毛利, "
+            f"ROUND(SUM(ML)/NULLIF(SUM(XSJE),0)*100,2) AS 毛利率, ROUND(SUM(XSSL),2) AS 销售数量 "
+            f"FROM {t} GROUP BY FDMC ORDER BY SUM(XSJE) DESC",
+            "各门店经营对比",
+        )
+
+    # 3. 星期效应（单日范围下无意义，跳过）
     if not scope_single_day:
         await collect(
             "星期效应",
@@ -536,7 +592,7 @@ async def run_overview_analysis(
             "星期效应趋势",
         )
 
-    # 3. 一级分类
+    # 4. 一级分类
     await collect(
         "一级分类",
         f"SELECT FL1MC AS 分类, ROUND(SUM(XSJE),2) AS 销售金额, ROUND(SUM(ML),2) AS 毛利, "
@@ -545,7 +601,7 @@ async def run_overview_analysis(
         "一级分类销售占比",
     )
 
-    # 4. 二级分类 TOP
+    # 5. 二级分类 TOP
     await collect(
         "二级分类TOP10",
         f"SELECT FL2MC AS 分类, ROUND(SUM(XSJE),2) AS 销售金额, ROUND(SUM(ML),2) AS 毛利 "
@@ -553,7 +609,7 @@ async def run_overview_analysis(
         "二级分类排名",
     )
 
-    # 5. 商品 TOP10
+    # 6. 商品 TOP10
     await collect(
         "商品TOP10",
         f"SELECT SPMC AS 商品, ROUND(SUM(XSJE),2) AS 销售金额, ROUND(SUM(ML),2) AS 毛利 "
@@ -561,7 +617,7 @@ async def run_overview_analysis(
         "商品销售排名",
     )
 
-    # 6. 品牌 TOP10
+    # 7. 品牌 TOP10
     await collect(
         "品牌TOP10",
         f"SELECT SBMC AS 品牌, ROUND(SUM(XSJE),2) AS 销售金额, ROUND(SUM(ML),2) AS 毛利 "
@@ -569,7 +625,7 @@ async def run_overview_analysis(
         "品牌销售排名",
     )
 
-    # 7. 负毛利商品
+    # 8. 负毛利商品
     await collect(
         "负毛利商品",
         f"SELECT SPMC AS 商品, ROUND(SUM(XSJE),2) AS 销售金额, ROUND(SUM(ML),2) AS 毛利 "
@@ -577,7 +633,7 @@ async def run_overview_analysis(
         "负毛利商品",
     )
 
-    # 8. 促销折扣
+    # 9. 促销折扣
     await collect(
         "促销折扣",
         f"SELECT ROUND(SUM(ZKJE)/NULLIF(SUM(XSJE),0)*100,2) AS 折扣占比, "
@@ -586,13 +642,13 @@ async def run_overview_analysis(
         "促销力度",
     )
 
-    # 9. 机器学习分析（趋势预测 / 相关性 / 聚类 / 异常检测）
+    # 10. 机器学习分析（趋势预测 / 相关性 / 聚类 / 异常检测）
     await step_start("机器学习分析（趋势预测/相关性/聚类/异常检测）")
     ml_sections = await _run_ml_analysis(conn, t)
     sections.extend(ml_sections)
     await step_end(f"完成 {len(ml_sections)} 项机器学习分析")
 
-    # 10. 异常诊断（星期负毛利 / 折扣侵蚀 / 低毛利分类）
+    # 11. 异常诊断（星期负毛利 / 折扣侵蚀 / 低毛利分类）
     await step_start("异常诊断（星期负毛利/折扣侵蚀/低毛利分类）")
     anomaly_sections = await _run_anomaly_analysis(conn, t)
     sections.extend(anomaly_sections)
@@ -668,5 +724,6 @@ async def run_overview_analysis(
         "charts": charts,
         "clarification": "",
         "analysis_mode": "overview",
+        "answer_mode": MODE_ANALYSIS,
         "standalone_question": question,
     }
