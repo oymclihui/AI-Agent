@@ -415,7 +415,7 @@ async def analyze_results(
     text = tidy_numbers(ground_analysis(text, preview_rows))
     if text == EMPTY_FALLBACK:
         text = _fallback_answer(columns, rows)
-    if facts:
+    if facts and mode == MODE_ANALYSIS:
         text = f"**图中数据**\n{facts}\n\n{text}"
     return text
 
