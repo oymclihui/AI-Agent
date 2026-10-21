@@ -122,6 +122,20 @@ interface EvalQuality {
   weak_categories: { category?: string; pass_rate?: number }[];
 }
 
+interface ReleaseRow {
+  id: string;
+  version: number;
+  scope: string;
+  active: boolean;
+  note?: string | null;
+  created_at?: string | null;
+}
+
+interface ProgressEvent {
+  date: string;
+  text: string;
+}
+
 interface Props {
   dsId: string;
   agentId?: string | null;
@@ -141,6 +155,7 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
   const [examples, setExamples] = useState<ExampleRow[]>([]);
   const [quality, setQuality] = useState<EvalQuality | null>(null);
   const [runs, setRuns] = useState<EvalRun[]>([]);
+  const [releases, setReleases] = useState<ReleaseRow[]>([]);
 
   const [spec, setSpec] = useState<AgentSpec | null>(null);
   const [specName, setSpecName] = useState("");
@@ -161,20 +176,22 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
   const loadAll = useCallback(async () => {
     if (!dsId) return;
     setLoading(true);
-    const [coachR, statsR, exR, qualityR, runsR] = await Promise.allSettled([
+    const [coachR, statsR, exR, qualityR, runsR, releasesR] = await Promise.allSettled([
       dsFactoryApi.coach(dsId),
       dsDistillApi.stats(dsId),
       dsDistillApi.examples(dsId),
       dsEvalApi.quality(dsId),
       dsEvalApi.runs(dsId, 10),
+      agentId ? dsFactoryApi.releases(agentId) : Promise.reject(new Error("no agent")),
     ]);
     if (coachR.status === "fulfilled") setCoach(coachR.value.data as CoachData);
     if (statsR.status === "fulfilled") setStats(statsR.value.data as DistillStats);
     if (exR.status === "fulfilled") setExamples(((exR.value.data as ExampleRow[]) || []).slice(0, 8));
     if (qualityR.status === "fulfilled") setQuality(qualityR.value.data as EvalQuality);
     if (runsR.status === "fulfilled") setRuns((runsR.value.data as EvalRun[]) || []);
+    if (releasesR.status === "fulfilled") setReleases((releasesR.value.data as ReleaseRow[]) || []);
     setLoading(false);
-  }, [dsId]);
+  }, [dsId, agentId]);
 
   useEffect(() => {
     void loadAll();
@@ -408,6 +425,37 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
   const isExcel = coach?.driver === "excel_folder" || coach?.driver === "excel_template";
   const profileReady = coach?.profile?.status === "ready";
 
+  // P4：系统在进步 —— 发布/回滚事件 + 每周自测分变化（全部来自真实接口数据）
+  const events: ProgressEvent[] = [];
+  (releases || []).slice(0, 8).forEach((r) => {
+    const note = r.note || "";
+    const date = (r.created_at || "").slice(0, 10);
+    if (note.includes("回滚")) {
+      events.push({ date, text: t(`回滚到 v${r.version}`, `Rolled back to v${r.version}`) });
+    } else if (note.includes("每周") || note.includes("自动")) {
+      events.push({ date, text: t(`v${r.version} 已自动上线`, `v${r.version} auto-promoted`) });
+    } else {
+      events.push({ date, text: t(`v${r.version} 发布上线`, `v${r.version} released`) });
+    }
+  });
+  const weeklyScored = runs.filter((r) => r.trigger === "weekly" && r.overall_score != null);
+  const toScore = (v: number) => String(Math.round(v * 100));
+  if (weeklyScored.length > 0) {
+    const latest = weeklyScored[0];
+    const latestScore = toScore(latest.overall_score as number);
+    const prev = weeklyScored[1];
+    const cmp =
+      prev && prev.overall_score != null
+        ? `${toScore(prev.overall_score)}→${latestScore}`
+        : latestScore;
+    events.push({
+      date: (latest.created_at || "").slice(0, 10),
+      text: t(`每周自测：综合 ${cmp} 分（${latest.passed}/${latest.total} 通过）`, `Weekly self-test: ${cmp} (${latest.passed}/${latest.total} passed)`),
+    });
+  }
+  events.sort((a, b) => (a.date < b.date ? 1 : -1));
+  const recentEvents = events.slice(0, 5);
+
   // P2：缺什么给什么 —— 每个未达标项给出对应的引导动作
   const actionFor = (key: string) => {
     const cls = "btn-secondary inline-flex items-center gap-1 px-2 py-1 text-[11px] shrink-0";
@@ -546,6 +594,26 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
                 </ul>
               </div>
             )}
+
+            {/* 系统在进步（P4：进化/晋升/回滚事件回写，让用户看得见系统在进步） */}
+            <div>
+              <p className="text-xs theme-muted mb-1.5">{t("系统在进步", "Your agent keeps improving")}</p>
+              {recentEvents.length > 0 ? (
+                <ul className="space-y-1">
+                  {recentEvents.map((ev, i) => (
+                    <li key={i} className="flex items-center gap-2 text-xs">
+                      <Sparkles className="h-3 w-3 text-emerald-500 shrink-0" />
+                      <span className="theme-muted shrink-0">{ev.date}</span>
+                      <span className="truncate">{ev.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs theme-muted">
+                  {t("还没有进化记录 —— 系统会定期自动进化并自测，出分后在这里告诉你", "No evolution records yet — the system improves periodically and reports here")}
+                </p>
+              )}
+            </div>
           </>
         )}
 
