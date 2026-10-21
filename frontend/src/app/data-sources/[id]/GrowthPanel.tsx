@@ -816,10 +816,28 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
           </p>
         )}
         {canManage && (
-          <button type="button" onClick={() => void onRunEval()} disabled={runningEval} className="btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
-            {runningEval ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            {runningEval ? t("自测进行中…", "Eval running…") : t("跑一次自测", "Run an eval")}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onRunEval()}
+              disabled={runningEval || (quality?.eval_set_size ?? 0) === 0}
+              className="btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs"
+              title={
+                (quality?.eval_set_size ?? 0) === 0
+                  ? t("考题库为空，请先到质量看板构建自测卷", "Eval set is empty — build one on the quality board first")
+                  : undefined
+              }
+            >
+              {runningEval ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              {runningEval ? t("自测进行中…", "Eval running…") : t("跑一次自测", "Run an eval")}
+            </button>
+            {(quality?.eval_set_size ?? 0) === 0 && (
+              <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                {t("考题库为空 → 去", "No eval set → go to")}
+                <Link href="/agent-quality" className="underline hover:text-amber-700">{t("质量看板", "quality board")}</Link>
+              </span>
+            )}
+          </div>
         )}
         {runs.length > 0 && (
           <div className="overflow-x-auto">
