@@ -1,6 +1,7 @@
 """Row-level permission injection via permission table."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 try:
@@ -61,9 +62,17 @@ def _pushdown_permission(sql: str, data_column: str, scope_subquery: str, dialec
     if predicate is None:
         return None
     cte_names = {str(cte.alias).lower() for cte in tree.find_all(exp.CTE) if cte.alias}
+    scope_norm = _normalize_sql(scope_subquery)
     applied = False
     for select in list(tree.find_all(exp.Select)):
         if not _reads_physical_table(select, cte_names):
+            continue
+        # 跳过权限表子查询自身，避免在 scope 子查询里再套一层同样的过滤
+        if _normalize_sql(select.sql()) == scope_norm:
+            continue
+        # 模型已按权限提示写过等价过滤条件时不再重复注入
+        if _already_restricted(select, data_column, scope_subquery):
+            applied = True
             continue
         # 给注入的 data_column 限定到该 SELECT 的主表（FROM 第一张表），避免多表 JOIN 下列歧义
         tables = _direct_tables(select)
@@ -81,6 +90,37 @@ def _pushdown_permission(sql: str, data_column: str, scope_subquery: str, dialec
     if data_column.lower() not in rendered.lower():
         return None
     return rendered
+
+
+def _already_restricted(select, data_column: str, scope_subquery: str) -> bool:
+    """该 SELECT 作用域内是否已有等价的 data_column IN (scope_subquery) 条件。"""
+    where = select.args.get("where")
+    if where is None:
+        return False
+    target = _normalize_sql(scope_subquery)
+    for node in where.find_all(exp.In):
+        if _nearest_select(node) is not select:
+            continue
+        col = node.this
+        if not isinstance(col, exp.Column) or (col.name or "").lower() != data_column.lower():
+            continue
+        query = node.args.get("query")
+        if query is None:
+            exprs = node.expressions or []
+            query = exprs[0] if len(exprs) == 1 else None
+        if query is None:
+            continue
+        if _normalize_sql(query.sql()) == target:
+            return True
+    return False
+
+
+def _normalize_sql(text: str) -> str:
+    cleaned = (text or "").replace("`", "").replace('"', "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower().rstrip(";")
+    while cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
 
 
 def _permission_predicate(data_column: str, scope_subquery: str, dialect: str, read: str):
