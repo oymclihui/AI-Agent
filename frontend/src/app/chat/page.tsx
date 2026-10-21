@@ -1259,7 +1259,12 @@ export default function ChatPage() {
     }
     try {
       const { data } = await chatApi.getMessages(convId);
-      setMessages(data.map((m: any) => ({ ...m, chartData: m.charts_data ?? m.chartData ?? null })));
+      setMessages(
+        data.map((m: any) => ({
+          ...m,
+          chartData: dedupeCharts(m.charts_data ?? m.chartData ?? null),
+        })),
+      );
     } catch {
       toast.error(t.loadFailed[lang]);
     }
@@ -1309,6 +1314,14 @@ const pushChartOnce = (list: ChatChartData[], chart: ChatChartData) => {
   const key = `${chart.type}|${chart.title || ""}|${(chart.labels || []).join(",")}`;
   const dup = list.some((c) => `${c.type}|${c.title || ""}|${(c.labels || []).join(",")}` === key);
   if (!dup) list.push(chart);
+};
+
+/** 历史消息里可能已存有重复图表，加载时一并去重。 */
+const dedupeCharts = (charts: ChatChartData[] | null): ChatChartData[] | null => {
+  if (!charts?.length) return null;
+  const out: ChatChartData[] = [];
+  charts.forEach((chart) => pushChartOnce(out, chart));
+  return out;
 };
 
 const appendAssistant = (content: string, thinking?: string, extras?: { chartData?: ChatChartData[] | null; harnessTrace?: HarnessTraceEvent[]; citations?: { document_name?: string; snippet?: string }[]; train?: { data_source_id?: string; question?: string; sql?: string | null; trace_id?: number | null; memory_hits?: number } | null }) => {

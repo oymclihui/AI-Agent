@@ -82,6 +82,15 @@ _DATE_RULE = (
 )
 
 
+# 问题里点名的维度（商品/门店/品类/时间等）必须出现在结果里，否则只能得到一堆无法解读的指标值，
+# 也无法出图（本例：问「10月6日西安店销售1000以上的商品」却只 SELECT 了四个金额列）。
+_DIMENSION_RULE = (
+    "If the question names a dimension (商品/产品, 门店/分店, 品类/分类, 品牌, 时间, 供应商 等), "
+    "that dimension MUST be in the SELECT list as a column (e.g. 商品 -> SPMC or 商品名称), "
+    "and GROUP BY it when aggregating. Never return only measure columns for a per-dimension question.\n"
+)
+
+
 def _schema_prompt(tables: list[dict[str, Any]], driver: str, join_edges: list[dict[str, str]] | None = None) -> str:
     dialect = driver
     if driver == "doris":
@@ -160,6 +169,7 @@ async def generate_sql(
         "When a value hint names a column value, filter with that exact value.\n"
         f"{_RATIO_RULE}"
         f"{_DATE_RULE}"
+        f"{_DIMENSION_RULE}"
         "Return JSON: {\"sql\": \"...\", \"explanation\": \"...\"}\n"
     )
     user = _sql_user_prompt(
@@ -199,6 +209,7 @@ async def generate_sql_candidates(
         "When a value hint names a column value, filter with that exact value.\n"
         f"{_RATIO_RULE}"
         f"{_DATE_RULE}"
+        f"{_DIMENSION_RULE}"
         "Return JSON: {\"candidates\": [{\"sql\": \"...\", \"explanation\": \"...\"}, {\"sql\": \"...\", \"explanation\": \"...\"}]}\n"
     )
     user = _sql_user_prompt(
@@ -413,11 +424,27 @@ async def analyze_results(
     resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     text = resp.content if isinstance(resp.content, str) else str(resp.content)
     text = tidy_numbers(ground_analysis(text, preview_rows))
+    text = _join_split_tables(text)
     if text == EMPTY_FALLBACK:
         text = _fallback_answer(columns, rows)
     if facts and mode == MODE_ANALYSIS:
         text = f"**图中数据**\n{facts}\n\n{text}"
     return text
+
+
+def _join_split_tables(text: str) -> str:
+    """模型偶尔在长表格中间插入空行，Markdown 会把它渲染成两张表；这里把同属一张表的空行去掉。"""
+    lines = text.splitlines()
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        if not line.strip() and out and out[-1].strip().startswith("|"):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and lines[j].strip().startswith("|"):
+                continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def _cell_text(value: Any) -> str:
