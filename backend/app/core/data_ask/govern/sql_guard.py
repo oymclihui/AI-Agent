@@ -68,6 +68,54 @@ def validate_select_sql(
     return True, "OK"
 
 
+def disambiguate_subquery_columns(sql: str, dialect: str | None = None) -> str:
+    """给"只有一张表"的子查询里未限定表名的列补上表前缀，消除 StarRocks 等数据库的歧义报错。
+
+    场景：WHERE x IN (SELECT FDBH FROM SR_FD_QX WHERE RYID='...') —— 子查询列 FDBH 未限定，
+    StarRocks 会把外层同名列也纳入作用域，报 Column 'FDBH' is ambiguous。
+    仅当子查询 FROM/JOIN 只有一张表时才安全加前缀；多表 JOIN 保持原样。
+    """
+    if not _HAS_SQLGLOT:
+        return sql
+    text = (sql or "").strip()
+    if not text:
+        return sql
+    try:
+        parsed = sqlglot.parse_one(text, read=sqlglot_dialect(dialect))
+    except Exception:
+        return sql
+
+    for col in parsed.find_all(exp.Column):
+        # 已带表前缀的列不动
+        if col.table:
+            continue
+        # 向上找最近的 Select 祖先，确定该列所属查询作用域
+        scope = col.parent
+        while scope is not None and not isinstance(scope, exp.Select):
+            scope = scope.parent
+        if scope is None:
+            continue
+        tables = _tables_in_select_scope(scope)
+        if len(tables) == 1:
+            _tname, talias = tables[0]
+            col.set("table", exp.to_identifier(talias))
+
+    return parsed.sql(dialect=sqlglot_dialect(dialect))
+
+
+def _tables_in_select_scope(sel: "exp.Select") -> list[tuple[str, str]]:
+    """返回某 Select 作用域内 FROM/JOIN 直接引用的表 [(表名, 别名或表名)]，不含子查询里的表。"""
+    tables: list[tuple[str, str]] = []
+    frm = sel.args.get("from")
+    if frm is not None:
+        for t in frm.find_all(exp.Table):
+            tables.append((t.name, t.alias_or_name))
+    for j in sel.args.get("joins") or []:
+        for t in j.find_all(exp.Table):
+            tables.append((t.name, t.alias_or_name))
+    return tables
+
+
 def _validate_with_sqlglot(text: str, dialect: str) -> tuple[bool, str, set[str]]:
     try:
         parsed = sqlglot.parse_one(text, read=dialect)

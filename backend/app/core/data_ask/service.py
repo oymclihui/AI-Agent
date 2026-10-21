@@ -21,7 +21,7 @@ from app.core.data_ask.govern.permission import (
     inject_permission_filter,
     permission_config_from_rules,
 )
-from app.core.data_ask.govern.sql_guard import validate_select_sql
+from app.core.data_ask.govern.sql_guard import disambiguate_subquery_columns, validate_select_sql
 from app.core.data_ask.analysis.python_runner import run_python_analysis, validate_python_code
 from app.core.data_ask.excel.session_cache import (
     build_provenance,
@@ -644,6 +644,7 @@ async def _run_data_ask_impl(
     if trace_marks is not None:
         trace_marks["gen_ms"] = int((time.monotonic() - _t_gen) * 1000)
     if voted_qr is None:
+        sql = disambiguate_subquery_columns(sql, dialect=str(source.driver))
         ok, msg = validate_select_sql(sql, allowed_tables=allowed, dialect=str(source.driver))
         if not ok:
             _tree_add(trace_marks, "execution", root_id, {
@@ -1620,6 +1621,7 @@ async def _probe_candidate(
         "truncated": False,
         "exec_sql": expanded,
     }
+    expanded = disambiguate_subquery_columns(expanded, dialect=str(source.driver))
     ok, msg = validate_select_sql(expanded, allowed_tables=allowed, dialect=str(source.driver))
     if not ok:
         base["error"] = msg
@@ -1749,6 +1751,7 @@ async def _execute_with_retry(
                 semantic_model=semantic,
                 user_id=user.id if user else None,
             )
+            fixed_sql = disambiguate_subquery_columns(fixed_sql, dialect=str(source.driver))
             ok, msg = validate_select_sql(fixed_sql, allowed_tables=allowed, dialect=str(source.driver))
             if not ok:
                 raise ValueError(msg) from exc
