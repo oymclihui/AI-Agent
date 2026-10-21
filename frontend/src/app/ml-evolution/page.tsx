@@ -58,8 +58,8 @@ export default function MLEvolutionPage() {
     setLoading(true);
     try {
       const [mRes, lRes] = await Promise.all([
-        fetch(`"/api/v1"/ml-evolution/models`, { headers: ({ Authorization: `Bearer ${getAuthToken()}` }) }),
-        fetch(`"/api/v1"/ml-evolution/logs?limit=200`, { headers: ({ Authorization: `Bearer ${getAuthToken()}` }) }),
+        fetch(`/api/v1/ml-evolution/models`, { headers: ({ Authorization: `Bearer ${getAuthToken()}` }) }),
+        fetch(`/api/v1/ml-evolution/logs?limit=200`, { headers: ({ Authorization: `Bearer ${getAuthToken()}` }) }),
       ]);
       const mData = await mRes.json();
       const lData = await lRes.json();
@@ -80,7 +80,7 @@ export default function MLEvolutionPage() {
   const handleRetrain = async (dsId: string) => {
     setRetraining(dsId);
     try {
-      await fetch(`"/api/v1"/ml-evolution/retrain`, {
+      await fetch(`/api/v1/ml-evolution/retrain`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...({ Authorization: `Bearer ${getAuthToken()}` }) },
         body: JSON.stringify({ data_source_id: dsId }),
@@ -94,7 +94,7 @@ export default function MLEvolutionPage() {
   const handleRollback = async (modelId: number) => {
     setRollbackTarget(modelId);
     try {
-      await fetch(`"/api/v1"/ml-evolution/rollback/${modelId}`, {
+      await fetch(`/api/v1/ml-evolution/rollback/${modelId}`, {
         method: "POST",
         headers: ({ Authorization: `Bearer ${getAuthToken()}` }),
       });

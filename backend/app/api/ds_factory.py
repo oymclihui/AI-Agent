@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth.agent_access import require_agent_manage
@@ -177,6 +178,27 @@ async def factory_trial(
     )
 
 
+async def _assert_agent_or_source_read(db: AsyncSession, agent: AgentModel, user: User) -> None:
+    """读接口：智能体管理者、绑定数据源的管理者、平台管理员均可查看版本与发布记录。"""
+    if getattr(user, "is_admin", False):
+        return
+    try:
+        await require_agent_manage(db, agent, user)
+        return
+    except HTTPException:
+        pass
+    source = (
+        await db.execute(select(DataSource).where(DataSource.agent_id == agent.id))
+    ).scalars().first()
+    if source:
+        try:
+            await assert_data_source_access(db, source, user, require_manage=True)
+            return
+        except HTTPException:
+            pass
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
 # ────────────────────── 版本化：列表 / diff / 回滚 ──────────────────────
 
 @router.get("/agents/{aid}/versions", response_model=list[VersionOut])
@@ -186,7 +208,7 @@ async def list_agent_versions(
     user: User = Depends(get_current_user),
 ):
     agent = await _get_agent(db, aid)
-    await require_agent_manage(db, agent, user)
+    await _assert_agent_or_source_read(db, agent, user)
     from app.core.data_ask.factory import versioning
 
     return [_version_out(r) for r in await versioning.list_versions(db, aid)]
@@ -201,7 +223,7 @@ async def diff_agent_version(
     user: User = Depends(get_current_user),
 ):
     agent = await _get_agent(db, aid)
-    await require_agent_manage(db, agent, user)
+    await _assert_agent_or_source_read(db, agent, user)
     from app.core.data_ask.factory import versioning
 
     target = await versioning.find_version(db, aid, vid)
@@ -252,7 +274,7 @@ async def list_agent_releases(
     user: User = Depends(get_current_user),
 ):
     agent = await _get_agent(db, aid)
-    await require_agent_manage(db, agent, user)
+    await _assert_agent_or_source_read(db, agent, user)
     from app.core.data_ask.factory import versioning
 
     return [_release_out(r) for r in await versioning.list_releases(db, aid)]
