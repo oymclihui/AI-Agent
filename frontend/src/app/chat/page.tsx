@@ -1304,6 +1304,13 @@ export default function ChatPage() {
   return text.replace(/```chart\s*\n?\{[\s\S]*?\}\s*```/g, "").trim();
 }
 
+/** 同一张图表可能由多个 SSE 事件重复下发，按类型+标题+标签去重，避免页面出现两张一样的图。 */
+const pushChartOnce = (list: ChatChartData[], chart: ChatChartData) => {
+  const key = `${chart.type}|${chart.title || ""}|${(chart.labels || []).join(",")}`;
+  const dup = list.some((c) => `${c.type}|${c.title || ""}|${(c.labels || []).join(",")}` === key);
+  if (!dup) list.push(chart);
+};
+
 const appendAssistant = (content: string, thinking?: string, extras?: { chartData?: ChatChartData[] | null; harnessTrace?: HarnessTraceEvent[]; citations?: { document_name?: string; snippet?: string }[]; train?: { data_source_id?: string; question?: string; sql?: string | null; trace_id?: number | null; memory_hits?: number } | null }) => {
     const trace = extras?.harnessTrace?.length ? extras.harnessTrace : undefined;
     const train = extras?.train || null;
@@ -1628,7 +1635,7 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
               };
             }
             if (event.chart_data) {
-              _chartData.push(event.chart_data as ChatChartData);
+              pushChartOnce(_chartData, event.chart_data as ChatChartData);
             }
             if (event.event === "sql" && event.sql) {
               streamSql = event.sql;
@@ -1673,7 +1680,7 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
               };
             }
             if (event.chart_data) {
-              _chartData.push(event.chart_data as ChatChartData);
+              pushChartOnce(_chartData, event.chart_data as ChatChartData);
             }
             if (event.event === "sql" && event.sql) {
               streamSql = event.sql;
