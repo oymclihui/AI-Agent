@@ -231,6 +231,7 @@ class DataAskQueryOut(BaseModel):
     charts: Optional[list[dict[str, Any]]] = None
     generated_only: bool = False
     analysis_mode: str = "sql"
+    answer_mode: str = "L3"
     files_released: bool = False
     standalone_question: str = ""
     clarification: str = ""

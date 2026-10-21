@@ -32,6 +32,7 @@ from app.core.data_ask.excel.session_cache import (
 from app.core.data_ask.excel.retention import release_ephemeral_excel_workspace
 from app.core.data_ask.intelligence.nlpython import analyze_python_results, generate_python, repair_python
 from app.core.data_ask.intelligence.intent import is_forecast_question, rewrite_question
+from app.core.data_ask.intelligence.answer_mode import MODE_ANALYSIS, classify_answer_mode
 from app.core.data_ask.intelligence.nl2sql import analyze_results, generate_sql, generate_sql_candidates, repair_sql
 from app.core.data_ask.intelligence.query_memory import retrieve_similar_queries
 from app.core.data_ask.intelligence.schema_retriever import rank_tables
@@ -767,6 +768,7 @@ async def _run_data_ask_impl(
     )
 
     _t_ana = time.monotonic()
+    answer_mode = classify_answer_mode(standalone, qr["columns"], qr["rows"])
     analysis = await analyze_results(
         db,
         question=standalone,
@@ -774,6 +776,7 @@ async def _run_data_ask_impl(
         columns=qr["columns"],
         rows=qr["rows"],
         chart=chart,
+        answer_mode=answer_mode,
         llm_provider=agent_provider,
         llm_model=agent_model,
         user_id=user.id if user else None,
@@ -785,6 +788,7 @@ async def _run_data_ask_impl(
     )
     if trace_marks is not None:
         trace_marks["analysis_ms"] = int((time.monotonic() - _t_ana) * 1000)
+        trace_marks["answer_mode"] = answer_mode
     if next_chart != chart:
         await _emit_chart_stages(stage_queue, next_chart)
     chart = next_chart
@@ -802,6 +806,7 @@ async def _run_data_ask_impl(
         "truncated": qr["truncated"],
         "chart": chart,
         "analysis_mode": "sql",
+        "answer_mode": answer_mode,
         "standalone_question": standalone,
     }
 
@@ -1350,6 +1355,7 @@ Assign result to `result`.
         sql=qr.get("exec_sql", sql),
         columns=ml_columns,
         rows=ml_rows[:30],
+        answer_mode=MODE_ANALYSIS,
         llm_provider=agent_provider,
         llm_model=agent_model,
         user_id=user.id if user else None,

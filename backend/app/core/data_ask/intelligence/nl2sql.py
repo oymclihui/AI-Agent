@@ -8,6 +8,12 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.data_ask.intelligence.answer_mode import (
+    MODE_ANALYSIS,
+    MODE_DIRECT,
+    MODE_TABLE,
+    classify_answer_mode,
+)
 from app.core.data_ask.intelligence.query_memory import format_memory_prompt
 from app.core.data_ask.experience.chart_profile import chart_facts
 from app.core.data_ask.experience.ground_analysis import (
@@ -23,6 +29,34 @@ from app.core.data_ask.semantic.mdl import (
     format_terms_context,
 )
 from app.models_hub.router import ModelRouter
+
+# 问数结论按回答模式切换排版骨架：L1 直答 / L2 表格 / L3 深度分析。
+_ANSWER_PERSONA = (
+    "你是一位资深零售数据分析师，为业务同事撰写问数结论。"
+    "只解释已经查出来、并且画在图里的实际数据。"
+)
+
+_ANSWER_FORMAT = {
+    MODE_DIRECT: """排版要求（Markdown）：
+1. 只写一句话，直接回答问题并给出关键数值，关键数字用 **加粗**（不要只输出一个加粗数字）。
+2. 不要建表格，不要写要点，不要写「建议」。""",
+    MODE_TABLE: """排版要求（Markdown）：
+1. 首行只写一句表头说明（例如「共 4 个门店，按交易笔数从高到低排列：」）。
+2. 随后只输出一个 Markdown 表格：列名简短并带单位。按数值从大到小排列；结果多于 10 行时只列前 10 行，并在表格上方注明「共 N 行，展示前 10 行」。
+3. 禁止输出无序列表、解读段落、「建议」小节，或任何对数字的额外解释。""",
+    MODE_ANALYSIS: """排版要求（Markdown）：
+1. 首句用一句完整的话直接回答并给出关键数值，关键数字用 **加粗**。
+2. 有分组结果时，用一个 Markdown 表格呈现：列名简短并带单位。按数值从大到小排列；结果多于 10 行时只列前 10 行，并在表格上方注明「共 N 行，展示前 10 行」。
+3. 随后用无序列表写 3-5 条要点，每条都要落到结果里的某个具体数值或对比（最高/最低、差距、集中的分组等）。
+4. 结果里存在数值指标（销售额、毛利、数量等）且确实支持改进行动时，才补一节「建议」，最多 2 条，每条都要落到结果里的具体数值；结果只有文本列或只有一个数时，不写建议。""",
+}
+
+_ANSWER_GROUNDING = """硬性约束：
+- 只能引用「可用数字」里出现过的数值，并且必须原样引用：禁止四舍五入，禁止换算成万元/亿元（例如写 285987.4487 元，不要写成 28.60 万元），禁止自行计算占比、环比、同比、合计、均值等派生量。
+- 结果只有文本列（商品名、SKU 等）而没有数值指标列时，只客观陈述结果（例如「共 N 个商品符合条件」并用表格罗列），不要从文本里的数字（如 500ml、150g、4粒装）推断规格含义或下结论。
+- 结果只给出了部分行（total_rows 大于展示行数）时，不要下「最高/最低/全部/合计」这类全局结论，只描述实际给出的行。
+- 禁止编造结果里没有的维度。
+- 不要写「结果中未提供 X，无法分析」这类凑数句子；没有内容的小节直接省略，不要留空标题。"""
 
 # 比率 / 人均类指标必须用聚合相除表达，不能直接 SUM 一个相关列。
 # 否则「毛利率」会被生成成 SUM(ML)（毛利金额），与用户所问口径不符。
@@ -340,6 +374,7 @@ async def analyze_results(
     chart: dict[str, Any] | None = None,
     agent_goal: str | None = None,
     agent_backstory: str | None = None,
+    answer_mode: str | None = None,
 ) -> str:
     preview_rows = rows[:30]
     data_text = json.dumps(
@@ -348,20 +383,14 @@ async def analyze_results(
         default=str,
     )
     facts = chart_facts(chart)
-    system = """你是一位资深零售数据分析师，为业务同事撰写问数结论。只解释已经查出来、并且画在图里的实际数据。
-
-排版要求（Markdown，务必简洁）：
-1. 首句用一句完整的话直接回答问题并给出关键数值，关键数字用 **加粗**（不要只输出一个加粗数字）。用户只要一个数时，一句话说清即可，不要建表格。
-2. 有分组结果时，用一个 Markdown 表格呈现：列名简短并带单位。按数值从大到小排列；结果多于 10 行时只列前 10 行，并在表格上方注明「共 N 行，展示前 10 行」。
-3. 随后用无序列表写 2-4 条要点，每条都要落到结果里的某个具体数值或对比（最高/最低、差距、集中的分组等）。
-4. 结果里存在数值指标（销售额、毛利、数量等）且确实支持改进行动时，才补一节「建议」，最多 2 条，每条都要落到结果里的具体数值；结果只有文本列或只有一个数时，不写建议。
-
-硬性约束：
-- 只能引用「可用数字」里出现过的数值，并且必须原样引用：禁止四舍五入，禁止换算成万元/亿元（例如写 285987.4487 元，不要写成 28.60 万元），禁止自行计算占比、环比、同比、合计、均值等派生量。
-- 结果只有文本列（商品名、SKU 等）而没有数值指标列时，只客观陈述结果（例如「共 N 个商品符合条件」并用表格罗列），不要从文本里的数字（如 500ml、150g、4粒装）推断规格含义或下结论。
-- 结果只给出了部分行（total_rows 大于展示行数）时，不要下「最高/最低/全部/合计」这类全局结论，只描述实际给出的行。
-- 禁止编造结果里没有的维度。
-- 不要写「结果中未提供 X，无法分析」这类凑数句子；没有内容的小节直接省略，不要留空标题。"""
+    mode = answer_mode or classify_answer_mode(question, columns, rows)
+    system = (
+        _ANSWER_PERSONA
+        + "\n\n"
+        + _ANSWER_FORMAT.get(mode, _ANSWER_FORMAT[MODE_ANALYSIS])
+        + "\n\n"
+        + _ANSWER_GROUNDING
+    )
     if agent_goal:
         system = (
             "【分析职责与要求】\n" + agent_goal + "\n\n"
