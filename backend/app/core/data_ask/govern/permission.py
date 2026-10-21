@@ -25,7 +25,7 @@ def build_permission_scope_sql(
     uc = _quote_ident(user_column, dialect)
     sc = _quote_ident(scope_column, dialect)
     safe_user = user_key.replace("'", "''")
-    return f"SELECT {sc} FROM {pt} WHERE {uc} = '{safe_user}'"
+    return f"SELECT {pt}.{sc} FROM {pt} WHERE {pt}.{uc} = '{safe_user}'"
 
 
 def inject_permission_filter(
@@ -65,7 +65,15 @@ def _pushdown_permission(sql: str, data_column: str, scope_subquery: str, dialec
     for select in list(tree.find_all(exp.Select)):
         if not _reads_physical_table(select, cte_names):
             continue
-        _and_where(select, predicate.copy())
+        # 给注入的 data_column 限定到该 SELECT 的主表（FROM 第一张表），避免多表 JOIN 下列歧义
+        tables = _direct_tables(select)
+        pred = predicate.copy()
+        if tables:
+            alias = tables[0].alias_or_name
+            for col in pred.find_all(exp.Column):
+                if not col.table and col.name and col.name.lower() == data_column.lower():
+                    col.set("table", exp.to_identifier(alias))
+        _and_where(select, pred)
         applied = True
     if not applied:
         return None

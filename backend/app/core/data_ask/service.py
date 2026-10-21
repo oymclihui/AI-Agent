@@ -1673,12 +1673,14 @@ def _wrap_permission(
         user_column=perm_rules["user_column"],
         dialect=str(source.driver),
     )
-    return inject_permission_filter(
+    from app.core.data_ask.govern.sql_guard import disambiguate_subquery_columns
+    result = inject_permission_filter(
         sql,
         data_column=perm_rules["data_column"],
         scope_subquery=scope_sql,
         dialect=str(source.driver),
     )
+    return disambiguate_subquery_columns(result, dialect=str(source.driver))
 
 
 async def _execute_with_retry(

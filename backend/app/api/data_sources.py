@@ -1082,7 +1082,7 @@ async def _resolve_grant_user(db: AsyncSession, item: DataSourceGrantItemIn) -> 
             return target
     login = (item.login or "").strip()
     if login:
-        result = await db.execute(select(User).where(User.login == login).limit(1))
+        result = await db.execute(select(User).where(User.employee_no == login).limit(1))
         target = result.scalar_one_or_none()
         if target:
             return target
@@ -1110,8 +1110,8 @@ async def list_data_source_grants(
             DataSourceGrantItemOut(
                 id=g.id,
                 user_id=g.user_id,
-                login=u.login,
-                display_name=u.display_name or u.login,
+                login=u.employee_no,
+                display_name=u.display_name or u.employee_no,
                 can_ask=bool(g.can_ask),
                 can_manage=bool(g.can_manage),
             )
