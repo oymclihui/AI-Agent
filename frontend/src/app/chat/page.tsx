@@ -262,6 +262,8 @@ export default function ChatPage() {
   const [suggestLoading, setSuggestLoading] = useState(false);
   const suggestAbortRef = useRef<AbortController | null>(null);
   const [memPool, setMemPool] = useState<string[]>([]);
+  // 反馈保存（存为示例/纠正完成）后递增，触发输入联想重新拉取金标问题
+  const [memPoolVersion, setMemPoolVersion] = useState(0);
   const [memSugIdx, setMemSugIdx] = useState(-1);
   const [memHide, setMemHide] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -1911,7 +1913,7 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
     return () => {
       cancelled = true;
     };
-  }, [composerDsId]);
+  }, [composerDsId, memPoolVersion]);
 
   const memQuery = input.trim().toLowerCase();
   const memMatches = memQuery
@@ -2323,6 +2325,9 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
                         originalSql={msg.metadata?.sql ?? null}
                         memoryHits={msg.metadata?.memory_hits || 0}
                         lang={lang}
+                        onSaved={(kind) => {
+                          if (kind === "example" || kind === "correction") setMemPoolVersion((v) => v + 1);
+                        }}
                       />
                     )}
                     {msg.metadata?.dashboard_card && (

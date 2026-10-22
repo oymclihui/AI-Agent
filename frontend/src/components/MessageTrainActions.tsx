@@ -72,6 +72,7 @@ export function MessageTrainActions({
   originalSql,
   memoryHits = 0,
   lang,
+  onSaved,
 }: {
   dataSourceId: string;
   traceId?: number | null;
@@ -79,6 +80,8 @@ export function MessageTrainActions({
   originalSql?: string | null;
   memoryHits?: number;
   lang: Lang;
+  /** 反馈落库/蒸馏完成后回调，父组件可借此刷新金标联想列表 */
+  onSaved?: (kind: FeedbackKind) => void;
 }) {
   const [feedback, setFeedback] = useState<FeedbackKind | null>(null);
   const [taskId, setTaskId] = useState<number | null>(null);
@@ -89,6 +92,11 @@ export function MessageTrainActions({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const timerRef = useRef<number | null>(null);
+  // 用 ref 持有 onSaved，避免回调变化重启训练轮询
+  const onSavedRef = useRef(onSaved);
+  useEffect(() => {
+    onSavedRef.current = onSaved;
+  }, [onSaved]);
 
   // 行级 diff（简单 LCS）：仅展示增/删差异行
   const origLines = (originalSql || "").replace(/\r/g, "").split("\n");
@@ -149,7 +157,11 @@ export function MessageTrainActions({
       try {
         const { data } = await dataAskApi.trainTask(taskId);
         if (!stopped) setTask(data as TrainTaskState);
-        if (data?.status === "done" || data?.status === "failed") return;
+        if (data?.status === "done" || data?.status === "failed") {
+          // 纠正类蒸馏完成时才会写入新示例，此时再刷新联想
+          if (data?.status === "done") onSavedRef.current?.("correction");
+          return;
+        }
       } catch {
         /* 轮询失败不打扰用户 */
       }
@@ -179,6 +191,8 @@ export function MessageTrainActions({
       });
       setFeedback(kind);
       if (data?.task_id) setTaskId(data.task_id);
+      // 存为示例会同步写入金标问题，立即通知父组件刷新联想
+      if (kind === "example") onSavedRef.current?.(kind);
       toast.success(pick("submitted", lang), { id: "train-feedback" });
       if (kind === "correction") setOpenPanel(false);
     } catch (err: unknown) {

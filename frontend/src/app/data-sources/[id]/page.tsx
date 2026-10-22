@@ -373,16 +373,23 @@ export default function DataSourceDetailPage() {
   };
 
   const onFeedback = async (type: "like" | "dislike" | "example") => {
-    if (!id || !askResult?.trace_id) return;
+    if (!id) return;
+    if (!askResult?.trace_id && !(question.trim() && (askResult?.sql || editSql || "").trim())) {
+      toast.error(t("请先生成或执行 SQL", "Generate or run SQL first"));
+      return;
+    }
+    const originalSql = (askResult?.sql || editSql || "").trim();
+    const q = question.trim();
     try {
-      const { data } = await dataAskApi.feedback({
+      const payload: Record<string, unknown> = {
         data_source_id: id,
         feedback_type: type,
-        trace_id: askResult.trace_id,
-        question: question.trim(),
-        original_sql: askResult.sql || "",
-      });
-      setFbState({ traceId: askResult.trace_id, type });
+        question: q,
+        original_sql: originalSql,
+      };
+      if (askResult?.trace_id) payload.trace_id = askResult?.trace_id;
+      const { data } = await dataAskApi.feedback(payload);
+      setFbState({ traceId: askResult?.trace_id ?? -(Date.now() % 1e9), type });
       toast.success((data as { message?: string })?.message || t("已学习：反馈已提交，正在训练智能体", "Learned: feedback submitted"));
     } catch (e: unknown) {
       toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("反馈失败", "Feedback failed")));
@@ -395,17 +402,24 @@ export default function DataSourceDetailPage() {
   };
 
   const onSubmitCorrection = async () => {
-    if (!id || !askResult?.trace_id || !correctionSql.trim()) return;
+    if (!id || !correctionSql.trim()) return;
+    const originalSql = (askResult?.sql || editSql || "").trim();
+    const q = question.trim();
+    if (!q || !originalSql) {
+      toast.error(t("请先生成或执行 SQL", "Generate or run SQL first"));
+      return;
+    }
     try {
-      const { data } = await dataAskApi.feedback({
+      const payload: Record<string, unknown> = {
         data_source_id: id,
         feedback_type: "correction",
-        trace_id: askResult.trace_id,
-        question: question.trim(),
-        original_sql: askResult.sql || "",
+        question: q,
+        original_sql: originalSql,
         corrected_sql: correctionSql.trim(),
-      });
-      setFbState({ traceId: askResult.trace_id, type: "correction" });
+      };
+      if (askResult?.trace_id) payload.trace_id = askResult?.trace_id;
+      const { data } = await dataAskApi.feedback(payload);
+      setFbState({ traceId: askResult?.trace_id ?? -(Date.now() % 1e9), type: "correction" });
       setCorrectionOpen(false);
       toast.success((data as { message?: string })?.message || t("纠正已保存", "Correction saved"));
     } catch (e: unknown) {
@@ -1234,41 +1248,41 @@ export default function DataSourceDetailPage() {
               </table>
             </div>
           )}
-          {askResult?.trace_id ? (
+          {(askResult?.trace_id || askResult?.sql || editSql?.trim()) ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border theme-border px-3 py-2">
               <span className="text-xs theme-muted">{t("本次回答有帮助吗？", "Was this answer helpful?")}</span>
               <button
                 onClick={() => onFeedback("like")}
-                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "like" ? "bg-green-500/15 text-green-600" : "theme-muted hover:text-green-600"}`}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult?.trace_id && fbState?.type === "like" ? "bg-green-500/15 text-green-600" : "theme-muted hover:text-green-600"}`}
               >
                 <ThumbsUp className="h-3.5 w-3.5" />{t("有用", "Good")}
               </button>
               <button
                 onClick={() => onFeedback("dislike")}
-                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "dislike" ? "bg-red-500/15 text-red-600" : "theme-muted hover:text-red-600"}`}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult?.trace_id && fbState?.type === "dislike" ? "bg-red-500/15 text-red-600" : "theme-muted hover:text-red-600"}`}
               >
                 <ThumbsDown className="h-3.5 w-3.5" />{t("有误", "Bad")}
               </button>
               <button
                 onClick={openCorrection}
-                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "correction" ? "bg-blue-500/15 text-blue-600" : "theme-muted hover:text-blue-600"}`}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult?.trace_id && fbState?.type === "correction" ? "bg-blue-500/15 text-blue-600" : "theme-muted hover:text-blue-600"}`}
               >
                 <Pencil className="h-3.5 w-3.5" />{t("纠正 SQL", "Fix SQL")}
               </button>
               <button
                 onClick={() => onFeedback("example")}
-                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult.trace_id && fbState.type === "example" ? "bg-amber-500/15 text-amber-600" : "theme-muted hover:text-amber-600"}`}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${fbState?.traceId === askResult?.trace_id && fbState?.type === "example" ? "bg-amber-500/15 text-amber-600" : "theme-muted hover:text-amber-600"}`}
               >
                 <Star className="h-3.5 w-3.5" />{t("存为示例", "Save as example")}
               </button>
-              {fbState?.traceId === askResult.trace_id ? (
+              {fbState?.traceId === askResult?.trace_id ? (
                 <span className="text-xs text-green-600">{t("已学习，感谢！智能体会记住这次反馈", "Learned — the agent will remember")}</span>
               ) : (
                 <span className="text-[11px] theme-muted">{t("你的反馈会让智能体更聪明", "Your feedback makes the agent smarter")}</span>
               )}
             </div>
           ) : null}
-          {correctionOpen && askResult?.trace_id ? (
+          {correctionOpen && (askResult?.trace_id || askResult?.sql || editSql?.trim()) ? (
             <div className="space-y-2 rounded-lg border theme-border p-3">
               <p className="text-xs theme-muted">
                 {t("修正后的 SQL 将写入问数记忆，下次自动作为参考示例", "The corrected SQL will be saved to query memory as a few-shot example")}
