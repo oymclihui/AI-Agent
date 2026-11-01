@@ -184,9 +184,10 @@ async def execute_workflow(
     workflow_id: str,
     payload: WorkflowExecuteRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     workflow = await db.get(WorkflowModel, workflow_id)
-    if not workflow:
+    if not workflow or not can_read_record(workflow, user):
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     # Build agent registry from database

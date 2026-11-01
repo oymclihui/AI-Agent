@@ -25,3 +25,6 @@ class IncomingTrigger:
     actor: str | None = None
     title: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
+    # Phase 2 — 供 Gate 判定：是否 @ 了机器人 / 发起方是否是 bot
+    addressed: bool = True
+    is_bot: bool = False
