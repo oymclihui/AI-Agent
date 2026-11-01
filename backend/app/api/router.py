@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import agents, workflows, chat, knowledge, models, tools, orchestrator, skills, employees, dashboard, artifacts, auth, desktop_automation, harness, organization, integrations, database, setup, group_chat, data_sources, excel_parser, system, ml_evolution, ds_growth, ds_distill, ds_factory, ds_eval, ds_replay, socratic_eval, ds_dashboard
+from app.api import agents, workflows, chat, knowledge, models, tools, orchestrator, skills, employees, dashboard, artifacts, auth, desktop_automation, harness, organization, integrations, database, setup, group_chat, data_sources, excel_parser, system, ml_evolution, ds_growth, ds_distill, ds_factory, ds_eval, ds_replay, socratic_eval, ds_dashboard, superagent
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -36,3 +36,4 @@ api_router.include_router(ds_replay.router)
 api_router.include_router(socratic_eval.router)
 api_router.include_router(ds_dashboard.router)
 api_router.include_router(system.router)
+api_router.include_router(superagent.router)
