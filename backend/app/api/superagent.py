@@ -5,17 +5,37 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth.deps import get_current_user
 from app.core.auth.permissions import assert_permission, resolve_data_scope
+from app.core.policy import ACCEPT_MODES, get_policy_view, update_policy
 from app.core.sources import SOURCE_KINDS, source_label
-from app.db.models import SuperagentThread, SuperagentTrigger, User
+from app.db.models import (
+    SuperagentDecision,
+    SuperagentMandate,
+    SuperagentThread,
+    SuperagentTrigger,
+    User,
+)
 from app.db.session import get_db
 
 router = APIRouter(prefix="/superagent", tags=["Superagent"])
+
+
+class PolicySourceIn(BaseModel):
+    allowlist: list[str] | None = None
+    bot_list: list[str] | None = None
+
+
+class PolicyUpdateIn(BaseModel):
+    accept_mode: str | None = None
+    rules: list[dict] | None = None
+    note: str | None = None
+    sources: dict[str, PolicySourceIn] | None = None
 
 
 async def _require_admin(user: User, db: AsyncSession) -> None:
@@ -105,5 +125,100 @@ async def list_threads(
                 "created_at": th.created_at.isoformat() if th.created_at else None,
             }
             for th in rows
+        ]
+    }
+
+
+@router.get("/policy")
+async def get_policy(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(user, db)
+    return await get_policy_view(db)
+
+
+@router.put("/policy")
+async def put_policy(
+    payload: PolicyUpdateIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(user, db)
+    if payload.accept_mode is not None and payload.accept_mode not in ACCEPT_MODES:
+        raise HTTPException(status_code=400, detail=f"accept_mode 必须为 {ACCEPT_MODES} 之一")
+    sources = (
+        {k: v.model_dump(exclude_none=True) for k, v in payload.sources.items()}
+        if payload.sources
+        else None
+    )
+    try:
+        return await update_policy(
+            db,
+            accept_mode=payload.accept_mode,
+            rules=payload.rules,
+            note=payload.note,
+            sources=sources,
+            created_by=user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/decisions")
+async def list_decisions(
+    decision: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(user, db)
+    stmt = select(SuperagentDecision).order_by(SuperagentDecision.created_at.desc()).limit(limit)
+    if decision:
+        stmt = stmt.where(SuperagentDecision.decision == decision)
+    rows = (await db.execute(stmt)).scalars().all()
+    return {
+        "decisions": [
+            {
+                "id": d.id,
+                "trigger_id": d.trigger_id,
+                "thread_id": d.thread_id,
+                "source_kind": d.source_kind,
+                "policy_version": d.policy_version,
+                "strength": d.strength,
+                "decision": d.decision,
+                "mandate_id": d.mandate_id,
+                "reason": d.reason,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in rows
+        ]
+    }
+
+
+@router.get("/mandates")
+async def list_mandates(
+    limit: int = Query(default=50, ge=1, le=500),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(user, db)
+    stmt = select(SuperagentMandate).order_by(SuperagentMandate.created_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    return {
+        "mandates": [
+            {
+                "id": m.id,
+                "trigger_id": m.trigger_id,
+                "thread_id": m.thread_id,
+                "source_kind": m.source_kind,
+                "policy_version": m.policy_version,
+                "originator": m.originator,
+                "strength": m.strength,
+                "matched_rules": m.matched_rules,
+                "revoked_at": m.revoked_at.isoformat() if m.revoked_at else None,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in rows
         ]
     }

@@ -10,8 +10,9 @@ import time
 import structlog
 
 from app.db.session import get_db
-from app.db.models import Agent as AgentModel
+from app.db.models import Agent as AgentModel, User
 from app.core.agents.base import Task
+from app.core.auth.deps import get_current_user
 from app.core.skills.factory import build_agent_executor
 from app.core.orchestrator.crew import Crew
 
@@ -33,7 +34,11 @@ class CrewRunRequest(BaseModel):
 
 
 @router.post("/run")
-async def run_crew(payload: CrewRunRequest, db: AsyncSession = Depends(get_db)):
+async def run_crew(
+    payload: CrewRunRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     result = await db.execute(select(AgentModel).where(AgentModel.id.in_(payload.agent_ids)))
     agents_db = {a.id: a for a in result.scalars().all()}
     missing = [aid for aid in payload.agent_ids if aid not in agents_db]

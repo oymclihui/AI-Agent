@@ -1387,3 +1387,84 @@ class SuperagentTrigger(Base, TimestampMixin):
     actor = Column(String(255), nullable=True)                      # 发起人（来源自己的身份标识）
     kind = Column(String(32), nullable=False, default="message")    # message / schedule_tick
     payload = Column(JSON, default=dict)
+
+
+# ──────────────────────────────────────────────
+# 超级智能体演进 · Phase 2：策略(Policy) + 准入(Gate) + 授权(Mandate)
+# 在 Phase 1 的触发/线程之上，加入「谁能让智能体主动接单」的可审计授权层。
+# Gate 是确定性判定（allowlist + 是否 @ 机器人 → 强度），模型研判(Assessment)留待 Phase 3。
+# ──────────────────────────────────────────────
+
+class SuperagentPolicy(Base, TimestampMixin):
+    """带版本的接单策略。取 version 最大的一条为「当前策略」；每次修改新增一个版本（不可变）。"""
+    __tablename__ = "superagent_policies"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    version = Column(Integer, nullable=False, unique=True, index=True)
+    accept_mode = Column(String(16), nullable=False, default="observe")  # off / observe / auto
+    rules = Column(JSON, default=list)        # [{name, instructions, enabled}]，供 Phase 3 研判使用
+    note = Column(String(255), nullable=True)
+    created_by = Column(String(36), nullable=True)
+
+
+class SuperagentPolicySource(Base, TimestampMixin):
+    """某来源在某策略版本下的部分：允许名单 + bot 名单。"""
+    __tablename__ = "superagent_policy_sources"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "source_kind", name="uq_sa_policy_source"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    policy_id = Column(
+        String(36),
+        ForeignKey("superagent_policies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_kind = Column(String(32), nullable=False)
+    allowlist = Column(JSON, default=list)    # 该来源身份下可发起工作的标识（如飞书 open_id）
+    bot_list = Column(JSON, default=list)     # 允许产生「推断候选」的 bot 标识
+    admission = Column(JSON, default=dict)    # 预留：准入表（后续阶段）
+
+
+class SuperagentDecision(Base, TimestampMixin):
+    """对一个触发的 Gate 判定结果（去向）。"""
+    __tablename__ = "superagent_decisions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    trigger_id = Column(
+        String(36),
+        ForeignKey("superagent_triggers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    thread_id = Column(String(36), nullable=True, index=True)
+    policy_version = Column(Integer, nullable=False)
+    source_kind = Column(String(32), nullable=False)
+    strength = Column(String(16), nullable=False)   # explicit / inferred / not_admitted
+    decision = Column(String(16), nullable=False)   # accept / would_accept / ignore
+    mandate_id = Column(String(36), nullable=True)
+    reason = Column(String(255), nullable=True)
+
+
+class SuperagentMandate(Base, TimestampMixin):
+    """一次 accept 授予的授权：记录策略版本、强度、发起人与命中规则。
+
+    不可变；只有人工 stop 才收回（revoked_at），或策略不再成立时吊销。执行留待 Phase 3。
+    """
+    __tablename__ = "superagent_mandates"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    trigger_id = Column(
+        String(36),
+        ForeignKey("superagent_triggers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    thread_id = Column(String(36), nullable=True, index=True)
+    policy_version = Column(Integer, nullable=False)
+    source_kind = Column(String(32), nullable=False)
+    originator = Column(String(255), nullable=True)   # 发起人身份（来源自己的标识）
+    strength = Column(String(16), nullable=False)      # explicit / inferred
+    matched_rules = Column(JSON, default=list)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)

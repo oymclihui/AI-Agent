@@ -60,17 +60,23 @@ async def record_trigger(inc: IncomingTrigger) -> bool:
                 return False
 
             thread = await _get_or_create_thread(db, inc)
-            db.add(
-                SuperagentTrigger(
-                    source_kind=inc.source_kind,
-                    external_id=inc.external_id[:255],
-                    thread_id=thread.id,
-                    actor=(inc.actor[:255] if inc.actor else None),
-                    kind=inc.kind,
-                    payload=inc.payload or {},
-                )
+            trigger = SuperagentTrigger(
+                source_kind=inc.source_kind,
+                external_id=inc.external_id[:255],
+                thread_id=thread.id,
+                actor=(inc.actor[:255] if inc.actor else None),
+                kind=inc.kind,
+                payload=inc.payload or {},
             )
+            db.add(trigger)
             thread.last_trigger_at = datetime.now(timezone.utc)
+            await db.flush()
+
+            # Phase 2 — 确定性准入判定（best-effort；失败不影响入库）
+            from app.core.policy import evaluate_gate
+
+            await evaluate_gate(db, trigger, addressed=inc.addressed, is_bot=inc.is_bot)
+
             try:
                 await db.commit()
             except IntegrityError:
