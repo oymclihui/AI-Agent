@@ -1338,3 +1338,52 @@ class DashboardEvent(Base, TimestampMixin):
     stage = Column(String(32), nullable=False)
     status = Column(String(16), nullable=False)  # start/ok/warn/fail
     detail = Column(JSON, default=dict)
+
+
+# ──────────────────────────────────────────────
+# 超级智能体演进 · Phase 1：来源(Source) → 触发(Trigger) → 线程(Thread)
+# 详见 docs/超级智能体演进蓝图.md。本阶段只做「事件入系统」的标准化留痕，
+# 不改变任何现有行为：触发事件在旁路幂等落库，供后续 Eval/工单阶段消费。
+# ──────────────────────────────────────────────
+
+class SuperagentThread(Base, TimestampMixin):
+    """一个来源线程：按来源把触发事件聚合在一起（如一个飞书会话、一个数字员工的定时任务）。
+
+    唯一键 (source_kind, external_key) 保证同一来源线程只建一次。
+    """
+    __tablename__ = "superagent_threads"
+    __table_args__ = (
+        UniqueConstraint("source_kind", "external_key", name="uq_superagent_thread_key"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    source_kind = Column(String(32), nullable=False, index=True)   # feishu / dingtalk / schedule
+    external_key = Column(String(255), nullable=False)             # 如 feishu:chat:xxx
+    kind = Column(String(32), nullable=False, default="message")   # im_chat / schedule
+    title = Column(String(255), nullable=True)
+    last_trigger_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class SuperagentTrigger(Base, TimestampMixin):
+    """一个不可变的来源事件。
+
+    唯一键 (source_kind, external_id) 保证幂等：同一事件（含来源重试投递）只入库一次，
+    因此进程重启也不会重放已记录的事件。created_at 即事件时间，用于线程内时序。
+    """
+    __tablename__ = "superagent_triggers"
+    __table_args__ = (
+        UniqueConstraint("source_kind", "external_id", name="uq_superagent_trigger_ext"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    source_kind = Column(String(32), nullable=False, index=True)
+    external_id = Column(String(255), nullable=False)
+    thread_id = Column(
+        String(36),
+        ForeignKey("superagent_threads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    actor = Column(String(255), nullable=True)                      # 发起人（来源自己的身份标识）
+    kind = Column(String(32), nullable=False, default="message")    # message / schedule_tick
+    payload = Column(JSON, default=dict)

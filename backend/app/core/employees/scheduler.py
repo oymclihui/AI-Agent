@@ -97,6 +97,7 @@ class EmployeeScheduler:
             rows = result.all()
 
             for task, employee in rows:
+                await self._record_schedule_trigger(task, employee)
                 try:
                     await run_scheduled_task(session, task, employee, triggered_by="schedule")
                     executed += 1
@@ -112,3 +113,30 @@ class EmployeeScheduler:
         if executed:
             logger.info("employee_scheduler_executed", count=executed)
         return executed
+
+    async def _record_schedule_trigger(self, task, employee) -> None:
+        """旁路记录一个定时触发事件（见超级智能体演进蓝图 Phase 1）。
+
+        以 (task_id, 计划时间槽) 作为幂等键，保证同一个计划点只记录一次，
+        绝不影响调度本身。
+        """
+        from app.core.sources import IncomingTrigger, record_trigger
+
+        slot = task.next_run_at.isoformat() if task.next_run_at else self._last_tick.isoformat()
+        await record_trigger(
+            IncomingTrigger(
+                source_kind="schedule",
+                external_id=f"{task.id}:{slot}",
+                thread_external_key=f"schedule:employee:{employee.id}",
+                thread_kind="schedule",
+                actor=f"employee:{employee.id}",
+                kind="schedule_tick",
+                title=(getattr(task, "name", None) or getattr(employee, "name", None) or None),
+                payload={
+                    "task_id": task.id,
+                    "employee_id": employee.id,
+                    "task_name": getattr(task, "name", None),
+                    "scheduled_for": slot,
+                },
+            )
+        )

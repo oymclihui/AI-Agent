@@ -13,6 +13,8 @@ from app.db.session import get_db
 from app.integrations.dingtalk import parse_dingtalk_event, send_dingtalk_session_reply
 from app.integrations.feishu import parse_feishu_event, send_feishu_text
 from app.integrations.im_bridge import generate_im_group_reply
+from app.core.sources import IncomingTrigger, record_trigger
+from app.db.base import generate_uuid
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
@@ -73,6 +75,19 @@ async def feishu_events(request: Request, db: AsyncSession = Depends(get_db)):
     text = parsed.get("text") or ""
     chat_id = parsed.get("chat_id")
     sender = parsed.get("sender_id") or "feishu"
+
+    await record_trigger(
+        IncomingTrigger(
+            source_kind="feishu",
+            external_id=parsed.get("message_id") or generate_uuid(),
+            thread_external_key=f"feishu:chat:{chat_id or sender}",
+            thread_kind="im_chat",
+            actor=sender,
+            title=(text[:80] or None),
+            payload={"text": text, "chat_id": chat_id, "sender_id": sender},
+        )
+    )
+
     reply = await generate_im_group_reply(
         db,
         text,
@@ -103,6 +118,19 @@ async def dingtalk_events(request: Request, db: AsyncSession = Depends(get_db)):
 
     text = parsed.get("text") or ""
     session_key = parsed.get("session_key") or "dingtalk"
+
+    await record_trigger(
+        IncomingTrigger(
+            source_kind="dingtalk",
+            external_id=str(body.get("msgId") or body.get("msgid") or generate_uuid()),
+            thread_external_key=f"dingtalk:{session_key}",
+            thread_kind="im_chat",
+            actor=str(body.get("senderId") or body.get("senderStaffId") or "") or None,
+            title=(text[:80] or None),
+            payload={"text": text, "session_key": session_key},
+        )
+    )
+
     reply = await generate_im_group_reply(
         db,
         text,
