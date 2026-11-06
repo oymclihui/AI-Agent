@@ -40,7 +40,7 @@ def _m(key, name, syn, src, expr, unit, ratio=False):
 METRICS: dict[str, MetricDef] = {
     m.key: m for m in [
         _m("sales_amount", "销售额",
-           ("销售金额", "营业额", "营收", "销售收入", "卖了多少钱", "卖了多少"),
+           ("销售金额", "营业额", "营收", "销售收入", "卖了多少钱", "卖了多少", "销售"),
            "a", "ROUND(SUM({T0}.XSJE), 2)", "元"),
         _m("gross_profit", "毛利", ("毛利额",), "a",
            "ROUND(SUM({T0}.ML), 2)", "元"),
@@ -98,7 +98,7 @@ _STORE_GENERIC = re.compile(r"按门店|各门店|每个门店|哪个门店|哪�
 _RE_ANNOTATION = re.compile(
     r"（其中「[^」]*」指\s*(\d{4}-\d{2}-\d{2})(?:\s*至\s*(\d{4}-\d{2}-\d{2}))?[^）]*）"
 )
-_RE_LATEST_HINT = re.compile(r"数据最新日期为\s*(\d{4}-\d{2}-\d{2})")
+_RE_LATEST_HINT = re.compile(r"(?:数据最新日期|最新营业日)为\s*(\d{4}-\d{2}-\d{2})")
 _RE_ISO = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
 _RE_CN_YMD = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?")
 _RE_CN_MD = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?")
@@ -125,6 +125,8 @@ class MetricIntent:
     order: str | None          # desc / asc / None
     limit: int | None
     matched_text: list[str] = field(default_factory=list)
+    store_stem: str | None = None
+    store_phrase: str | None = None
 
 
 # ─────────────────────────── schema 检测 ───────────────────────────
@@ -226,6 +228,47 @@ def parse_time(question: str, latest_hint: str | None) -> TimeRange | None:
     return None
 
 
+_STEM_SUFFIXES = (
+    "购物中心", "便利店", "旗舰店", "专卖店", "专营店", "连锁店", "大卖场",
+    "超市", "商场", "门市", "分店", "卖场", "门店", "店",
+)
+
+
+_TIME_NOISE = re.compile(
+    r"今天|今日|昨天|昨日|前天|本周|上周|本月|上月|今年|去年|最新营业日|本期|同期|上期"
+)
+
+
+def store_phrase_in(question: str) -> str | None:
+    """从问句里抽出点名的门店，如「西安广场店」。泛化的「各门店」不算。"""
+    text = _STORE_GENERIC.sub("　", str(question or ""))
+    text = _TIME_NOISE.sub("　", text)
+    match = _STORE_NAME.search(text)
+    return match.group(0) if match else None
+
+
+def store_stem_of(phrase: str | None) -> str | None:
+    """门店说法收成可 LIKE 的词干。西安广场店 / 西安广场超市 → 西安广场。"""
+    if not phrase:
+        return None
+    if phrase.endswith("广场店"):
+        stem = phrase[:-1]
+    else:
+        stem = phrase
+        for suffix in _STEM_SUFFIXES:
+            if stem.endswith(suffix) and len(stem) - len(suffix) >= 2:
+                stem = stem[: -len(suffix)]
+                break
+    stem = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]", "", stem)
+    return stem if len(stem) >= 2 else None
+
+
+def _with_store(where: str, column: str | None, stem: str | None) -> str:
+    if not stem or not column:
+        return where
+    return f"{where} AND {column} LIKE '{stem}%'"
+
+
 # ─────────────────────────── 意图解析 ───────────────────────────
 
 def _cn_num(token: str) -> int | None:
@@ -278,10 +321,9 @@ def parse_metric_intent(
             remain = remain.replace(syn, "　")
     if not matched or len(matched) > 4:
         return None
-    # 含明确门店名 → 指标层无法做门店值过滤，交还 LLM（否则门店条件被丢弃）。
-    # 先摘掉「按门店 / 各门店 / 多少家店」这类泛化维度词，避免误判。
-    if _STORE_NAME.search(_STORE_GENERIC.sub("　", text)):
-        return None
+    # 点名门店时留下过滤词，不再把整句交还给模型（否则「同期」会把店丢掉）。
+    store_phrase = store_phrase_in(text)
+    stem = store_stem_of(store_phrase)
 
     # 维度（在摘除指标词后的剩余文本上扫描）
     dimension: str | None = None
@@ -315,12 +357,15 @@ def parse_metric_intent(
         metrics=matched, dimension=dimension,
         time=parse_time(text, latest_hint),
         order=order, limit=limit, matched_text=matched_text,
+        store_stem=stem, store_phrase=store_phrase,
     )
 
 
 # ─────────────────────────── SQL 拼装 ───────────────────────────
 
 def _date_where(tr: TimeRange, rq_col: str) -> str:
+    if tr.origin == "cumulative":
+        return "1=1"
     if tr.single:
         return f"{rq_col} = '{tr.start}'"
     return f"{rq_col} BETWEEN '{tr.start}' AND '{tr.end}'"
@@ -352,7 +397,9 @@ def build_metric_sql(
         return "", ""
 
     rq_a = cols_a.get("RQ", "RQ")
-    where_a = _date_where(intent.time, rq_a)
+    where_a = _with_store(
+        _date_where(intent.time, rq_a), cols_a.get("FDMC"), intent.store_stem,
+    )
 
     def alias_list(t0: str, t1: str) -> str:
         return ", ".join(f"{met.expr.format(T0=t0, T1=t1)} AS {met.name}" for met in intent.metrics)
@@ -361,9 +408,14 @@ def build_metric_sql(
         f"{m.name}={m.expr.replace('{T0}.', '').replace('{T1}.', '')}" for m in intent.metrics
     )
     dim_cn = {"store": "按门店", "day": "按日", "month": "按月"}.get(intent.dimension, "汇总")
-    time_cn = intent.time.start if intent.time.single else f"{intent.time.start} 至 {intent.time.end}"
+    if intent.time.origin == "cumulative":
+        time_cn = "历史累计"
+    elif intent.time.single:
+        time_cn = intent.time.start
+    else:
+        time_cn = f"{intent.time.start} 至 {intent.time.end}"
     origin_cn = {"annotation": "相对时间已解析", "explicit": "显式日期",
-                 "default_latest": "默认最新营业日"}[intent.time.origin]
+                 "default_latest": "默认最新营业日", "cumulative": "历史累计"}[intent.time.origin]
 
     order_by = ""
     metric_pos = ""    # 指标（首个）所在列位置，排名排序用
@@ -371,7 +423,9 @@ def build_metric_sql(
     if need_cross:
         # ── 跨表：预聚合子查询 JOIN（规避行数基数放大） ──
         rq_b = cols_b["RQ"]
-        where_b = _date_where(intent.time, rq_b)
+        where_b = _with_store(
+            _date_where(intent.time, rq_b), cols_b.get("FDMC"), intent.store_stem,
+        )
         fdmc = cols_a.get("FDMC")
         with_fdmc = intent.dimension == "store" and bool(fdmc)
 
@@ -412,7 +466,9 @@ def build_metric_sql(
         # ── 单表 ──
         src = intent.metrics[0].src
         if src == "b":
-            table, rq, where = names["b"], cols_b["RQ"], _date_where(intent.time, cols_b["RQ"])
+            table, rq, where = names["b"], cols_b["RQ"], _with_store(
+                _date_where(intent.time, cols_b["RQ"]), cols_b.get("FDMC"), intent.store_stem,
+            )
         else:
             table, rq, where = names["a"], rq_a, where_a
 
@@ -499,6 +555,13 @@ async def try_metric_route(
     if intent is None:
         return None
 
+    # 用户明确要累计：不收成最新营业日，销售和毛利都在销售表上全量汇总，不与客流内连接。
+    if intent.time is None and re.search(r"累计|历史|至今|所有时间", text):
+        intent.time = TimeRange("*", "*", "cumulative")
+        keys = {m.key for m in intent.metrics}
+        if "sales_amount" in keys and "gross_profit" not in keys and cols_a:
+            intent.metrics.append(METRICS["gross_profit"])
+
     # 无显式时间 → 默认最新营业日（查库一次，轻量）
     if intent.time is None:
         if hint is None:
@@ -524,4 +587,107 @@ async def try_metric_route(
         "time": {"start": intent.time.start, "end": intent.time.end,
                  "origin": intent.time.origin},
         "matched_text": intent.matched_text,
+        "store_phrase": intent.store_phrase,
+        "store_stem": intent.store_stem,
+    }
+
+
+_NAMED_WINDOW = re.compile(
+    r"「(本期|同期|上期|今天|今日|昨天|昨日|前天|本周|上周|本月|上月|今年|去年|最新营业日)」"
+    r"指\s*(\d{4}-\d{2}-\d{2})(?:\s*至\s*(\d{4}-\d{2}-\d{2}))?"
+)
+_COMPARE_WORDS = re.compile(r"对比去年同期|对比上一期|去年同期|同期|同比|环比")
+_PHRASES = ("最新营业日", "今天", "今日", "昨天", "昨日", "前天", "本周", "上周", "本月", "上月", "今年", "去年")
+
+
+def _named_windows(question: str) -> dict[str, tuple[str, str]]:
+    found: dict[str, tuple[str, str]] = {}
+    for match in _NAMED_WINDOW.finditer(question or ""):
+        start, end = match.group(2), match.group(3) or match.group(2)
+        found[match.group(1)] = (start, end)
+    return found
+
+
+def _window_label(start: str, end: str) -> str:
+    return start if start == end else f"{start} 至 {end}"
+
+
+def plan_period_compare(
+    question: str,
+    all_tables: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """同期/环比：问句里已经写明两段窗口时，拼两段确定性 SQL。解析不了返回 None。"""
+    named = _named_windows(question)
+    if "同期" in named:
+        kind, previous = "yoy", named["同期"]
+    elif "上期" in named:
+        kind, previous = "mom", named["上期"]
+    else:
+        return None
+    current = None
+    for label in ("本期", "今天", "今日", "昨天", "昨日", "前天", "本周", "上周", "本月", "上月", "今年", "去年", "最新营业日"):
+        if label in named:
+            current = named[label]
+            break
+    if current is None:
+        return None
+    cols_a, cols_b, names = detect_retail_tables(all_tables)
+    if not cols_a and not cols_b:
+        return None
+    cleaned = _COMPARE_WORDS.sub(" ", question or "")
+    intent = parse_metric_intent(
+        cleaned, current[1], has_a=bool(cols_a), has_b=bool(cols_b),
+    )
+    if intent is None or not intent.metrics:
+        return None
+    if intent.dimension:
+        return None
+    if intent.store_phrase and not (cols_a or {}).get("FDMC") and not (cols_b or {}).get("FDMC"):
+        return None
+    metric = intent.metrics[0]
+    head = (question or "").split("（", 1)[0]
+    phrase = next((item for item in _PHRASES if item in head), "")
+    latest_match = _RE_LATEST_HINT.search(question or "")
+
+    def _one(start: str, end: str) -> str:
+        one = MetricIntent(
+            metrics=[metric], dimension=None,
+            time=TimeRange(start, end, "annotation"),
+            order=None, limit=None, matched_text=list(intent.matched_text[:1]),
+            store_stem=intent.store_stem, store_phrase=intent.store_phrase,
+        )
+        sql, _expl = build_metric_sql(one, cols_a, cols_b, names)
+        return sql
+
+    current_sql = _one(*current)
+    previous_sql = _one(*previous)
+    if not current_sql or not previous_sql:
+        return None
+    current_label = _window_label(*current)
+    previous_label = _window_label(*previous)
+    label = "去年同期" if kind == "yoy" else "上一期"
+    return {
+        "kind": kind,
+        "metric_name": metric.name,
+        "metric_key": metric.key,
+        "unit": metric.unit,
+        "phrase": phrase,
+        "store_phrase": intent.store_phrase or "",
+        "store_stem": intent.store_stem,
+        "current": current,
+        "previous": previous,
+        "current_label": current_label,
+        "previous_label": previous_label,
+        "current_sql": current_sql,
+        "previous_sql": previous_sql,
+        "latest": latest_match.group(1) if latest_match else None,
+        "explanation": f"本期 {current_label} 对比{label} {previous_label}",
+        "metric_intent": {
+            "metric_keys": [metric.key],
+            "metric_names": [metric.name],
+            "dimension": None,
+            "time": {"start": current[0], "end": current[1], "origin": "annotation"},
+            "store_phrase": intent.store_phrase,
+            "store_stem": intent.store_stem,
+        },
     }

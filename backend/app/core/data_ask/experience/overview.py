@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.data_ask.connectors.factory import build_connector_from_source
 from app.core.data_ask.experience.chart_profile import suggest_chart
+from app.core.data_ask.experience.ground_analysis import EMPTY_FALLBACK, ground_analysis
+from app.core.data_ask.govern.answer_gate import chinese_month_span, chinese_months, drop_false_absence
 from app.core.data_ask.intelligence.answer_mode import MODE_ANALYSIS, MODE_DIRECT
 from app.models_hub.router import ModelRouter
 
@@ -397,12 +399,15 @@ async def _extract_scope(conn, t: str, question: str) -> tuple[str, str, bool]:
     mth = _RE_M.search(q)
     lastn = _RE_LAST_N.search(q)
 
+    cn_span = None if m else chinese_month_span(q, (data_year or date.today().year))
     if m:
         y, mo, dy = int(m.group(1)), int(m.group(2)), int(m.group(3))
         try:
             _single(date(y, mo, dy))
         except ValueError:
             pass
+    elif cn_span:
+        _range(*cn_span)
     elif md:
         mo, dy = int(md.group(1)), int(md.group(2))
         y = data_year or date.today().year
@@ -469,6 +474,36 @@ async def _has_column(conn, t: str, col: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _fmt_amount(value: Any) -> str:
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _factual_lines(sections: list[dict]) -> str:
+    """用查询结果写开头，不让报告把别的范围的数说成用户问的那个月。"""
+    by_title = {str(item.get("title") or ""): item for item in sections}
+    lines: list[str] = []
+    monthly = by_title.get("月份对比") or {}
+    if monthly.get("rows"):
+        for row in monthly["rows"]:
+            if not row or row[0] is None:
+                continue
+            lines.append(
+                f"{row[0]} 销售额 {_fmt_amount(row[1])} 元，毛利 {_fmt_amount(row[2])} 元，毛利率 {_fmt_amount(row[3])}%。"
+            )
+        return "\n".join(lines)
+    kpi = by_title.get("全局KPI") or {}
+    rows = kpi.get("rows") or []
+    if rows and rows[0] and rows[0][0] is not None:
+        row = rows[0]
+        lines.append(
+            f"销售额 {_fmt_amount(row[0])} 元，毛利 {_fmt_amount(row[2])} 元，毛利率 {_fmt_amount(row[3])}%。"
+        )
+    return "\n".join(lines)
 
 
 async def run_overview_analysis(
@@ -571,6 +606,16 @@ async def run_overview_analysis(
             "answer_mode": MODE_DIRECT,
             "standalone_question": question,
         }
+
+    # 1b. 点名两个月时按月拆开。否则全局 KPI 是一段合计，报告会把别的范围说成其中一个月。
+    if len(set(chinese_months(question))) >= 2:
+        await collect(
+            "月份对比",
+            f"SELECT SUBSTR(CAST(RQ AS STRING),1,7) AS 月份, ROUND(SUM(XSJE),2) AS 销售金额, "
+            f"ROUND(SUM(ML),2) AS 毛利, ROUND(SUM(ML)/NULLIF(SUM(XSJE),0)*100,2) AS 毛利率 "
+            f"FROM {t} GROUP BY SUBSTR(CAST(RQ AS STRING),1,7) ORDER BY 1",
+            "月份对比",
+        )
 
     # 2. 门店经营对比（表含 FDMC 时才注入）：「各分店 / 门店」类问题的核心维度
     if await _has_column(conn, t, "FDMC"):
@@ -716,6 +761,14 @@ async def run_overview_analysis(
         report = strip_chart_blocks(report)
     except Exception:
         pass
+
+    flat_rows: list[list] = []
+    for section in sections:
+        flat_rows.extend(section.get("rows") or [])
+    report = drop_false_absence(ground_analysis(report, flat_rows), flat_rows)
+    facts = _factual_lines(sections)
+    if facts:
+        report = facts if report == EMPTY_FALLBACK else f"{facts}\n\n{report}"
 
     # 生成图表列表（ChatChartData 格式）
     charts = []

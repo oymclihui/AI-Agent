@@ -24,7 +24,20 @@ from app.core.data_ask.govern.permission import (
 )
 from app.core.data_ask.govern.sql_guard import disambiguate_subquery_columns, validate_select_sql
 from app.core.data_ask.govern.fanout import FANOUT_HINT, detect_fanout, rewrite_fanout
-from app.core.data_ask.govern.date_scope import fix_single_day_sql
+from app.core.data_ask.govern.answer_gate import (
+    apply_answer_gate,
+    bound_undated_sql,
+    grain_refusal,
+    store_mentions,
+)
+from app.core.data_ask.govern.calendar import (
+    business_today,
+    is_context_followup,
+    previous_window,
+    question_cache_key_text,
+    shift_year_iso,
+)
+from app.core.data_ask.govern.date_scope import annotated_window, fix_single_day_sql, latest_biz_note
 from app.core.cache.redis_cache import (
     cache_get_json,
     cache_set_json,
@@ -40,7 +53,7 @@ from app.core.data_ask.excel.session_cache import (
 from app.core.data_ask.excel.retention import release_ephemeral_excel_workspace
 from app.core.data_ask.intelligence.nlpython import analyze_python_results, generate_python, repair_python
 from app.core.data_ask.intelligence.intent import is_forecast_question, rewrite_question
-from app.core.data_ask.metric_layer import try_metric_route
+from app.core.data_ask.metric_layer import plan_period_compare, try_metric_route
 from app.core.data_ask.intelligence.answer_mode import (
     MODE_ANALYSIS,
     classify_answer_mode,
@@ -191,102 +204,103 @@ def _business_columns(all_tables: list[dict[str, Any]] | None) -> set[str]:
     return names
 
 
+_RE_REL_DAY_ORDER = (
+    ("今天", 0), ("今日", 0), ("当天", 0),
+    ("昨天", 1), ("昨日", 1),
+    ("前天", 2),
+)
+
+
 async def _resolve_relative_time(
     source: DataSource,
     all_tables: list[dict[str, Any]] | None,
     question: str,
 ) -> str:
-    """把问题中的相对时间（「最近3天」「昨天」等）解析为具体日期，锚定数据最新日期。
-
-    缺少可用的日期列、取不到最新日期或解析失败时，原样返回问题（不引入错误口径）。
-    """
+    """把「今天 / 本月 / 最近 N 天」写成日历窗口。今天是 Asia/Shanghai 的当天，不是 MAX(RQ)。"""
     from datetime import date, timedelta
     from calendar import monthrange
 
     text = (question or "").strip()
-    if not text:
+    if not text or "其中「" in text:
         return question
+    if any(token in text for token in ("最新营业日", "最新一天", "看最新")):
+        latest = await _latest_biz_date(source, all_tables)
+        if latest is None:
+            return question
+        return f"{text}（其中「最新营业日」指 {latest.isoformat()}，业务时区 Asia/Shanghai）"
+
     window = _RE_REL_WINDOW.search(text)
-    day_off = next((off for kw, off in _RE_REL_DAY.items() if kw in text), None)
+    day_hit = next(((word, off) for word, off in _RE_REL_DAY_ORDER if word in text), None)
     weekmonth = _RE_REL_WEEKMONTH.search(text)
-    if not window and day_off is None and not weekmonth:
+    year_phrase = None
+    if "今年" in text:
+        year_phrase = "今年"
+    elif "去年" in text and "同期" not in text:
+        year_phrase = "去年"
+    if not window and day_hit is None and not weekmonth and year_phrase is None:
         return question
 
-    anchor: tuple[str, str] | None = None
-    for table in all_tables or []:
-        for column in table.get("columns") or []:
-            name = str(column.get("name") if isinstance(column, dict) else column)
-            col_type = str(column.get("type") if isinstance(column, dict) else "").lower()
-            if any(token in col_type for token in ("date", "time")):
-                anchor = (str(table.get("table_name")), name)
-                break
-        if anchor:
-            break
-    if not anchor:
-        return question
-
-    try:
-        conn = build_connector_from_source(source)
-        try:
-            qr = await conn.execute_select(f"SELECT MAX({anchor[1]}) FROM {anchor[0]}", limit=1)
-        finally:
-            await conn.close()
-    except Exception:
-        return question
-    if not qr.rows or qr.rows[0][0] is None:
-        return question
-    raw = str(qr.rows[0][0])
-    try:
-        latest = date(int(raw[:4]), int(raw[5:7]), int(raw[8:10]))
-    except Exception:
-        return question
-
-    end = latest
-    if weekmonth:
-        # 周/月级窗口：上周/本周/本月为至今（month-to-date），上月为完整自然月
+    today = business_today()
+    latest = await _latest_biz_date(source, all_tables)
+    start = end = today
+    phrase = ""
+    if day_hit:
+        phrase, offset = day_hit
+        start = end = today - timedelta(days=offset)
+    elif weekmonth:
         phrase = weekmonth.group(0)
-        monday = latest - timedelta(days=latest.weekday())
+        monday = today - timedelta(days=today.weekday())
         if "月" in phrase:
             if phrase.startswith("上"):
-                total = latest.year * 12 + (latest.month - 1) - 1
+                total = today.year * 12 + (today.month - 1) - 1
                 year, month = divmod(total, 12)
                 start = date(year, month + 1, 1)
                 end = date(year, month + 1, monthrange(year, month + 1)[1])
             else:
-                start = date(latest.year, latest.month, 1)
+                start = date(today.year, today.month, 1)
+                end = today
+        elif phrase.startswith("上"):
+            start = monday - timedelta(days=7)
+            end = start + timedelta(days=6)
         else:
-            if phrase.startswith("上"):
-                start = monday - timedelta(days=7)
-                end = start + timedelta(days=6)
-            else:
-                start = monday
-        if end > latest:
-            end = latest
+            start = monday
+            end = today
     elif window:
         count = _count_of(window.group(1))
         unit = window.group(2)
         if not count or count <= 0:
             return question
         if unit in ("天", "日"):
-            start = latest - timedelta(days=count - 1)
+            start = today - timedelta(days=count - 1)
         elif unit == "周":
-            start = latest - timedelta(days=count * 7 - 1)
+            start = today - timedelta(days=count * 7 - 1)
         elif unit == "月":
-            total = latest.year * 12 + (latest.month - 1) - count
+            total = today.year * 12 + (today.month - 1) - count
             year, month = divmod(total, 12)
             start = date(year, month + 1, 1)
         else:
-            start = date(latest.year - count, latest.month, 1)
+            start = date(today.year - count, today.month, 1)
+        end = today
         phrase = window.group(0)
+    elif year_phrase == "今年":
+        phrase = "今年"
+        start = date(today.year, 1, 1)
+        end = today
     else:
-        # 单日相对词（今天/昨天/前天）：锚定数据最新日期的偏移，必须是单日窗口
-        start = end = latest - timedelta(days=day_off or 0)
-        phrase = next(kw for kw, off in _RE_REL_DAY.items() if off == day_off)
+        phrase = "去年"
+        start = date(today.year - 1, 1, 1)
+        end = date(today.year - 1, 12, 31)
 
-    if start > latest:
-        return question
     resolved = end.isoformat() if start == end else f"{start.isoformat()} 至 {end.isoformat()}"
-    return f"{text}（其中「{phrase}」指 {resolved}，数据最新日期为 {latest.isoformat()}）"
+    extra = ""
+    if re.search(r"同期|同比|和去年比|比去年", text):
+        y_start, y_end = shift_year_iso(start.isoformat()), shift_year_iso(end.isoformat())
+        extra = f"，「同期」指 {y_start}" + ("" if y_start == y_end else f" 至 {y_end}")
+    elif re.search(r"环比|比上一期", text):
+        p_start, p_end = previous_window(start, end)
+        extra = f"，「上期」指 {p_start.isoformat()}" + ("" if p_start == p_end else f" 至 {p_end.isoformat()}")
+    latest_note = f"，最新营业日为 {latest.isoformat()}" if latest else ""
+    return f"{text}（其中「{phrase}」指 {resolved}{extra}，业务时区 Asia/Shanghai{latest_note}）"
 
 
 def _edge_pairs(edge: dict[str, Any]) -> list[tuple[str, str]]:
@@ -405,12 +419,14 @@ _CACHE_REF_WORDS = ("它", "这个", "那个", "刚才", "上面", "再", "呢",
 def _cacheable_question(question: str) -> bool:
     """只缓存独立完整问句；带指代的追问依赖上下文，缓存会串答。"""
     text = " ".join(str(question or "").split())
+    if is_context_followup(text):
+        return False
     return len(text) >= 6 and not any(w in text for w in _CACHE_REF_WORDS)
 
 
 def _route_confidence(route_mode: str) -> str:
     """置信度分级（蓝图 L1）：确定性路由=high，LLM 生成+校验=medium。"""
-    return "high" if route_mode in ("override", "memory_reuse", "metric") else "medium"
+    return "high" if route_mode in ("override", "memory_reuse", "metric", "compare") else "medium"
 
 
 def _user_key(user: User | None) -> str:
@@ -523,6 +539,295 @@ def _resolve_policy_knobs(
     return knobs
 
 
+def _is_direct_calendar_ask(question: str, standalone: str) -> bool:
+    """直问今天/同期时走日历取数，不让技能步骤把窗口改成 $本月 或 $最新日。"""
+    raw = question or ""
+    if any(word in raw for word in ("分析", "为什么", "原因", "趋势", "报告", "怎么看")):
+        if not any(word in raw for word in ("同期", "同比", "环比")):
+            return False
+    blob = f"{raw}\n{standalone or ''}"
+    keys = (
+        "今天", "今日", "昨天", "昨日", "前天", "本周", "这周", "上周", "本月", "上月",
+        "今年", "去年", "同期", "同比", "环比", "最新营业日", "最新一天",
+    )
+    return any(key in blob for key in keys)
+
+
+def _scalar_cell(rows: list[Any] | None) -> Any:
+    if not rows or not rows[0]:
+        return None
+    value = rows[0][0]
+    return None if value is None else value
+
+
+def _fmt_num(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _no_data_answer(question: str, metric_intent: dict[str, Any]) -> str:
+    names = "、".join(metric_intent.get("metric_names") or []) or "该指标"
+    window = metric_intent.get("time") or {}
+    start, end = window.get("start"), window.get("end") or window.get("start")
+    latest = latest_biz_note(question)
+    if ("「今天」" in (question or "") or "「今日」" in (question or "")) and start and start == end:
+        tail = f"库里最新营业日是 {latest}。" if latest else ""
+        return f"今天（{start}）还没有{names}数据。{tail}要看这一天可以说「看最新一天」。"
+    desc = start if start == end else f"{start} 至 {end}"
+    return f"{names}暂无数据（{desc} 无记录，可能数据尚未同步）。"
+
+
+_MEASURE_NAME = re.compile(r"额|利|价|率|量|笔|成本|销售|毛利|客单|营业")
+_DATE_COL_NAME = re.compile(r"日期|时间|月份|年份|季度|\bRQ\b", re.I)
+_ISO_IN_CELL = re.compile(r"\d{4}-\d{2}-\d{2}")
+_RQ_EQ = re.compile(r"RQ\s*=\s*'(\d{4}-\d{2}-\d{2})'", re.I)
+_RQ_BETWEEN = re.compile(
+    r"RQ\s+BETWEEN\s+'(\d{4}-\d{2}-\d{2})'\s+AND\s+'(\d{4}-\d{2}-\d{2})'",
+    re.I,
+)
+
+
+def _cumulative_answer(columns: list[Any], rows: list[Any]) -> str:
+    """历史累计用销售表全量，数字按千分位写出，避免模型改口径。"""
+    if not rows:
+        return "历史累计暂无数据。"
+    parts: list[str] = []
+    for name, value in zip(columns, rows[0]):
+        shown = _fmt_num(value)
+        if shown is None:
+            continue
+        label = str(name)
+        unit = "%" if "率" in label else "元"
+        parts.append(f"{label} {shown} {unit}")
+    body = "，".join(parts) if parts else "暂无数据"
+    if "历史累计" in body:
+        return body + "。"
+    return f"历史累计 {body}。"
+
+
+def _window_label(question: str, metric_intent: dict[str, Any] | None, sql: str) -> str | None:
+    """结果对应的查询窗口。单日就是这一天，区间写成起止。"""
+    window = (metric_intent or {}).get("time") or {}
+    if window.get("origin") == "cumulative":
+        return "历史累计"
+    start = window.get("start")
+    end = window.get("end") or start
+    if not start:
+        annotated = annotated_window(question or "")
+        if annotated:
+            start, end = annotated
+    if not start and sql:
+        between = _RQ_BETWEEN.search(sql)
+        if between:
+            start, end = between.group(1), between.group(2)
+        else:
+            days = list(dict.fromkeys(_RQ_EQ.findall(sql)))
+            if len(days) == 1:
+                start = end = days[0]
+    if not start:
+        return None
+    return str(start) if start == end else f"{start} 至 {end}"
+
+
+def _stamp_measure_columns(columns: list[Any], rows: list[Any], label: str) -> list[str]:
+    """把日期写进指标列标题。按天展开、或一行一个日期时不再改列名。"""
+    names = [str(col) for col in (columns or [])]
+    if not label:
+        return names
+    found: set[str] = set()
+    for row in rows or []:
+        for cell in row or []:
+            found.update(_ISO_IN_CELL.findall(str(cell or "")))
+    if len(found) > 1 or any(_DATE_COL_NAME.search(name) for name in names):
+        return names
+    stamped: list[str] = []
+    changed = False
+    for name in names:
+        if label in name or _DATE_COL_NAME.search(name):
+            stamped.append(name)
+        elif _MEASURE_NAME.search(name):
+            stamped.append(f"{name}（{label}）")
+            changed = True
+        else:
+            stamped.append(name)
+    if not changed and len(names) == 1 and label not in names[0]:
+        return [f"{names[0]}（{label}）"]
+    return stamped
+
+
+def _stamp_markdown_headers(text: str, label: str) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("|"):
+            continue
+        if index + 1 >= len(lines) or "---" not in lines[index + 1]:
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        updated: list[str] = []
+        changed = False
+        for cell in cells:
+            if _MEASURE_NAME.search(cell) and label not in cell and not _ISO_IN_CELL.search(cell):
+                updated.append(f"{cell}（{label}）")
+                changed = True
+            else:
+                updated.append(cell)
+        if changed:
+            lines[index] = "| " + " | ".join(updated) + " |"
+        break
+    return "\n".join(lines)
+
+
+def _ensure_date_visible(answer: str, label: str | None, mode: str) -> str:
+    text = str(answer or "")
+    if not label or label in text:
+        return text
+    if mode in ("L2", "L3"):
+        stamped = _stamp_markdown_headers(text, label)
+        if label in stamped:
+            return stamped
+        return f"**{label}**\n\n{text}"
+    return f"{label} {text}".strip()
+
+
+def _coverage_note(question: str, *, has_data: bool) -> str:
+    if not has_data or "「同期」" in (question or "") or "「上期」" in (question or ""):
+        return ""
+    window = annotated_window(question)
+    latest = latest_biz_note(question)
+    if not window or not latest:
+        return ""
+    _start, end = window
+    if latest < end and latest >= _start:
+        return f"数据覆盖到 {latest}。"
+    return ""
+
+
+def _compare_answer(plan: dict[str, Any], current: Any, previous: Any) -> str:
+    name = str(plan.get("metric_name") or "该指标")
+    unit = str(plan.get("unit") or "")
+    unit_text = unit if unit and unit != "元" else ("元" if unit == "元" else "")
+    phrase = str(plan.get("phrase") or "")
+    store = str(plan.get("store_phrase") or "")
+    current_label = str(plan.get("current_label") or "")
+    previous_label = str(plan.get("previous_label") or "")
+    head = f"{phrase}（{current_label}）" if phrase else f"本期（{current_label}）"
+    if store:
+        head = f"{store}{head}"
+    if current is None:
+        other_name = "去年同期" if plan.get("kind") == "yoy" else "上一期"
+        if previous is None:
+            if phrase in ("今天", "今日"):
+                latest = plan.get("latest")
+                tail = f"库里最新营业日是 {latest}。" if latest else ""
+                return (
+                    f"今天（{current_label}）还没有{name}数据。{tail}"
+                    f"{other_name}（{previous_label}）也没有数据，不算增幅。"
+                )
+            return f"{head}{name}暂无数据。{other_name}（{previous_label}）也没有数据，不算增幅。"
+        return (
+            f"{head}{name}无数据。{other_name}（{previous_label}）{name} {_fmt_num(previous)}{unit_text}。"
+            "本期无数据，不算增幅。"
+        )
+    current_text = _fmt_num(current)
+    other = "去年同期" if plan.get("kind") == "yoy" else "上一期"
+    line = f"{head}{name} {current_text}{unit_text}。{other}（{previous_label}）{name} "
+    if previous is None:
+        line += "无数据，不算增幅。"
+    else:
+        previous_text = _fmt_num(previous)
+        try:
+            current_num, previous_num = float(current), float(previous)
+        except (TypeError, ValueError):
+            line += f"{previous_text}{unit_text}。"
+        else:
+            if previous_num == 0:
+                line += f"{previous_text}{unit_text}。对比期为 0，不算增幅。"
+            else:
+                delta = current_num - previous_num
+                line += (
+                    f"{previous_text}{unit_text}，差额 {_fmt_num(delta)}{unit_text}，"
+                    f"增幅 {delta / previous_num * 100:.2f}%。"
+                )
+    latest = plan.get("latest")
+    window = plan.get("current") or ("", "")
+    if current is not None and latest and window[0] <= str(latest) < window[1]:
+        line += f"数据覆盖到 {latest}。"
+    return line
+
+
+async def _execute_period_compare(
+    db: AsyncSession,
+    *,
+    source: DataSource,
+    user: User | None,
+    question: str,
+    standalone: str,
+    plan: dict[str, Any],
+    apply_perm: bool,
+    perm_table: str | None,
+    perm_rules: dict[str, str],
+) -> dict[str, Any]:
+    current_sql = str(plan["current_sql"])
+    previous_sql = str(plan["previous_sql"])
+    current_exec = _wrap_permission(current_sql, apply_perm, perm_table, perm_rules, user, source)
+    previous_exec = _wrap_permission(previous_sql, apply_perm, perm_table, perm_rules, user, source)
+    conn = build_connector_from_source(source)
+    try:
+        current_qr = await conn.execute_select(current_exec)
+        previous_qr = await conn.execute_select(previous_exec)
+    finally:
+        await conn.close()
+    current_value = _scalar_cell(current_qr.rows)
+    previous_value = _scalar_cell(previous_qr.rows)
+    analysis = _compare_answer(plan, current_value, previous_value)
+    label = "同期" if plan.get("kind") == "yoy" else "上期"
+    columns = ["口径", str(plan.get("metric_name") or "数值")]
+    rows = [
+        [f"本期 {plan.get('current_label')}", current_value],
+        [f"{label} {plan.get('previous_label')}", previous_value],
+    ]
+    display_sql = current_sql + ";\n" + previous_sql
+    exec_sql = current_exec + ";\n" + previous_exec
+    shown = str(plan.get("explanation") or "")
+    if standalone != question:
+        shown = f"追问理解为：{standalone}\n{shown}"
+    await log_query(
+        db,
+        user_id=user.id if user else None,
+        data_source_id=str(source.id),
+        question=question,
+        sql_text=exec_sql,
+        row_count=2,
+        success=True,
+    )
+    return {
+        "answer": analysis,
+        "sql": exec_sql,
+        "display_sql": display_sql,
+        "explanation": shown,
+        "columns": columns,
+        "rows": rows,
+        "row_count": 2,
+        "truncated": False,
+        "chart": None,
+        "analysis_mode": "sql",
+        "answer_mode": "L1",
+        "standalone_question": standalone,
+        "route": "compare",
+        "confidence": "high",
+        "metric_intent": plan.get("metric_intent"),
+        "compare": {
+            "kind": plan.get("kind"),
+            "start": (plan.get("previous") or ("", ""))[0],
+            "end": (plan.get("previous") or ("", ""))[1],
+        },
+    }
+
+
 async def _run_data_ask_impl(
     db: AsyncSession,
     *,
@@ -598,7 +903,18 @@ async def _run_data_ask_impl(
     # P0-C 记忆先验分档 knobs：spec_override（评估注入）> source.metadata_.policy_knobs（固化操作点）> 硬默认
     knobs = _resolve_policy_knobs(source, spec_override)
     standalone = question
-    if history and not sql_override:
+    if not sql_override:
+        # 同期 / 环比 / 那上周呢：先用会话状态补全。补全成功就不再交给模型重猜日期。
+        try:
+            from app.core.data_ask.session_engine import load_session, resolve_followup
+            _sess = await load_session(user)
+            if _sess:
+                _fq = resolve_followup(question, _sess)
+                if _fq:
+                    standalone = _fq
+        except Exception:
+            pass
+    if history and not sql_override and standalone == question:
         try:
             standalone = await rewrite_question(
                 db,
@@ -610,18 +926,6 @@ async def _run_data_ask_impl(
             )
         except Exception:
             standalone = question
-    elif not sql_override:
-        # 会话引擎 v1：无对话历史时用 Redis 会话状态做确定性追问改写
-        # （「那上周呢」+ 上次答了销售额 → 「上周销售额是多少」），不依赖 LLM
-        try:
-            from app.core.data_ask.session_engine import load_session, resolve_followup
-            _sess = await load_session(user)
-            if _sess:
-                _fq = resolve_followup(question, _sess)
-                if _fq:
-                    standalone = _fq
-        except Exception:
-            pass
     if trace_marks is not None:
         trace_marks["rewrite_ms"] = int((time.monotonic() - _t_start) * 1000)
     if str(source.driver) in ("excel_folder", "excel_template"):
@@ -640,7 +944,19 @@ async def _run_data_ask_impl(
     # 蓝图 P1-②：技能步骤编排——技能带 metadata_.steps 时走算子编排（逐步取 facts →
     # 结论生成），不再走 LLM 生成 SQL 的主链路；无 steps 保持 P0 行为（零改动兜底）。
     # excel 源不参与（无 SQL 算子）；编排失败按普通异常上抛，由外层统一写失败轨迹。
-    if execute and not sql_override and skill_ctx and skill_ctx.get("steps"):
+    if (
+        execute and not sql_override and skill_ctx and skill_ctx.get("steps")
+        and not _is_direct_calendar_ask(question, standalone)
+    ):
+        try:
+            _gate_source, _gate_tables, _gate_semantic, _perm, _edges = await load_source_context(db, data_source_id)
+            _gate_semantic, _gate_profile = await load_ds_semantic(db, data_source_id, _gate_semantic)
+            enrich_table_meta_with_profile(_gate_tables, _gate_profile)
+            blocked = await apply_answer_gate(db, _gate_source, _gate_tables, standalone, data_source_id)
+            if blocked:
+                return blocked
+        except Exception:
+            logging.getLogger("data_ask").warning("answer_gate_before_skill_failed", exc_info=True)
         result = await run_skill_orchestration(
             db,
             source=source,
@@ -678,6 +994,11 @@ async def _run_data_ask_impl(
     enrich_table_meta_with_profile(all_tables, _profile_lookup)
     if not source.chat_enabled and execute:
         raise ValueError("Chat Q&A is disabled for this data source")
+
+    if execute and not sql_override:
+        blocked = await apply_answer_gate(db, source, all_tables, standalone, data_source_id)
+        if blocked:
+            return blocked
 
     # 总体分析：笼统问题自动执行多维度查询 + 多图表
     if execute and not sql_override and is_overview_question(standalone):
@@ -791,6 +1112,45 @@ async def _run_data_ask_impl(
                 "standalone_question": standalone,
             }
 
+    compare_plan = None
+    if not sql_override:
+        try:
+            compare_plan = plan_period_compare(standalone, all_tables)
+        except Exception:
+            compare_plan = None
+    if compare_plan:
+        if not execute:
+            return {
+                "answer": "",
+                "sql": compare_plan["current_sql"] + ";\n" + compare_plan["previous_sql"],
+                "display_sql": compare_plan["current_sql"],
+                "explanation": compare_plan["explanation"],
+                "columns": [],
+                "rows": [],
+                "row_count": 0,
+                "truncated": False,
+                "chart": None,
+                "generated_only": True,
+                "standalone_question": standalone,
+                "route": "compare",
+                "confidence": "high",
+                "metric_intent": compare_plan.get("metric_intent"),
+            }
+        try:
+            return await _execute_period_compare(
+                db,
+                source=source,
+                user=user,
+                question=question,
+                standalone=standalone,
+                plan=compare_plan,
+                apply_perm=apply_perm,
+                perm_table=perm_table,
+                perm_rules=perm_rules,
+            )
+        except Exception:
+            logging.getLogger("data_ask").warning("period_compare_failed", exc_info=True)
+
     memory_examples = (
         await _gather_memory_examples(
             db, data_source_id=data_source_id, question=standalone,
@@ -881,7 +1241,9 @@ async def _run_data_ask_impl(
     elif metric_hit:
         route_mode = "metric"
         sql, explanation = str(metric_hit["sql"]), str(metric_hit["explanation"])
-        metric_intent = {k: metric_hit.get(k) for k in ("metric_keys", "metric_names", "dimension", "time")}
+        metric_intent = {k: metric_hit.get(k) for k in (
+            "metric_keys", "metric_names", "dimension", "time", "store_phrase", "store_stem",
+        )}
         _tree_add(trace_marks, "candidate", intent_id, {
             "index": 0, "mode": "metric",
             "sql": sql[:8000], "explanation": explanation[:500],
@@ -995,6 +1357,12 @@ async def _run_data_ask_impl(
 
     if trace_marks is not None:
         trace_marks["gen_ms"] = int((time.monotonic() - _t_gen) * 1000)
+    if voted_qr is None and route_mode not in ("override", "memory_reuse", "metric"):
+        _latest_for_bound = await _latest_biz_date(source, all_tables)
+        sql = bound_undated_sql(
+            sql, standalone, _latest_for_bound.isoformat() if _latest_for_bound else None,
+        )
+
     if voted_qr is None:
         sql = disambiguate_subquery_columns(sql, dialect=str(source.driver))
         ok, msg = validate_select_sql(sql, allowed_tables=allowed, dialect=str(source.driver))
@@ -1094,6 +1462,9 @@ async def _run_data_ask_impl(
             "row_count": int(qr.get("row_count") or 0),
         })
 
+    _date_label = _window_label(standalone, metric_intent, str(qr.get("display_sql") or ""))
+    if _date_label:
+        qr["columns"] = _stamp_measure_columns(qr["columns"], qr["rows"], _date_label)
     chart = _suggest_chart(qr["columns"], qr["rows"], standalone)
     if standalone != question and explanation and not str(explanation).startswith("追问理解为"):
         explanation = f"追问理解为：{standalone}\n{explanation}"
@@ -1132,15 +1503,15 @@ async def _run_data_ask_impl(
     _metric_no_data = (
         metric_intent is not None
         and not metric_intent.get("dimension")
-        and qr["rows"]
-        and all(v is None for _row in qr["rows"] for v in _row)
+        and (
+            not qr["rows"]
+            or all(v is None for _row in qr["rows"] for v in _row)
+        )
     )
     if _metric_no_data:
-        _names = "、".join(metric_intent.get("metric_names") or []) or "该指标"
-        _t = metric_intent.get("time") or {}
-        _tstart, _tend = _t.get("start"), _t.get("end")
-        _tdesc = _tstart if _tstart == _tend else f"{_tstart} 至 {_tend}"
-        analysis = f"{_names}暂无数据（{_tdesc} 无记录，可能数据尚未同步）。"
+        analysis = _no_data_answer(standalone, metric_intent)
+    elif (metric_intent or {}).get("time", {}).get("origin") == "cumulative" and not (metric_intent or {}).get("dimension"):
+        analysis = _cumulative_answer(qr["columns"], qr["rows"])
     else:
         analysis = await analyze_results(
             db,
@@ -1157,6 +1528,10 @@ async def _run_data_ask_impl(
             agent_backstory=agent_backstory,
             skill_style=skill_ctx,
         )
+    coverage = _coverage_note(standalone, has_data=not _metric_no_data)
+    if coverage and coverage not in analysis:
+        analysis = coverage + analysis
+    analysis = _ensure_date_visible(analysis, _date_label, answer_mode)
     analysis, next_chart = await _attach_forecast(
         str(source.id), qr["columns"], qr["rows"], standalone, analysis, chart
     )
@@ -1371,13 +1746,15 @@ async def run_data_ask(
     ):
         cache_key = make_dataask_cache_key(
             data_source_id=data_source_id,
-            question=question,
+            question=question_cache_key_text(question),
             llm_provider=kwargs.get("llm_provider"),
             llm_model=kwargs.get("llm_model"),
             execute=True,
             user_key=_user_key(user) + _skill_scope,
         )
-        hit = await cache_get_json(cache_key)
+        # 点了门店、或问了客流表没有的维度时，不复用旧缓存。旧缓存里有过「卖场店 = 另一家店的数」。
+        _recheck = bool(grain_refusal(question) or store_mentions(question))
+        hit = None if _recheck else await cache_get_json(cache_key)
         if isinstance(hit, dict) and hit.get("answer"):
             hit["cached"] = True
             hit["trace_id"] = None

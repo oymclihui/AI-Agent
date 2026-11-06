@@ -1,48 +1,50 @@
-"""日期口径硬约束：单日类提问（昨天/今天）不得生成多日范围 SQL。
+"""日期守卫：问句已经标明窗口时，SQL 里的 RQ 必须落在这个窗口内。
 
-模型常把「昨天」写成 RQ IN ('前天','昨天')，导致指标被两天合计。
-这里用确定性改写兜底，避免依赖提示词。
+不再把多日条件收成「SQL 里出现过的最晚日期」。那个日期常常不是今天。
 """
 from __future__ import annotations
 
 import re
 
-_SINGLE_DAY = ("昨天", "昨日", "今天", "今日", "当天", "上一日", "昨日")
-_COMPARE = (
-    "趋势", "对比", "环比", "同比", "最近", "近一周", "近7天", "近七天", "本周", "上周",
-    "本月", "上月", "每月", "每天", "每日", "走势", "排名", "top", "最高", "最低", "分布", "占比",
+_WINDOW = re.compile(
+    r"（其中「[^」]*」指\s*(\d{4}-\d{2}-\d{2})(?:\s*至\s*(\d{4}-\d{2}-\d{2}))?"
+)
+_LATEST = re.compile(r"(?:数据最新日期|最新营业日)为\s*(\d{4}-\d{2}-\d{2})")
+_RQ_PRED = re.compile(
+    r"\bRQ\s+IN\s*\([^)]*\)"
+    r"|\bRQ\s+BETWEEN\s+'[^']+'\s+AND\s+'[^']+'"
+    r"|\bRQ\s*(?:>=|<=|>|<)\s*'[^']+'"
+    r"|\bRQ\s*=\s*'[^']+'",
+    re.I,
 )
 
-_IN_LIST = re.compile(r"RQ\s+IN\s*\(\s*'[^']+'(?:\s*,\s*'[^']+')*\s*\)", re.I)
-_BETWEEN = re.compile(r"RQ\s+BETWEEN\s+'([^']+)'\s+AND\s+'([^']+)'", re.I)
-_SINCE = re.compile(r"RQ\s*(?:>=|>)\s*'([^']+)'", re.I)
+
+def annotated_window(question: str) -> tuple[str, str] | None:
+    match = _WINDOW.search(question or "")
+    if not match:
+        return None
+    start = match.group(1)
+    end = match.group(2) or start
+    return start, end
 
 
-def is_single_day_question(question: str) -> bool:
-    q = str(question or "").lower()
-    if any(k in q for k in _COMPARE):
-        return False
-    return any(k in q for k in _SINGLE_DAY)
-
-
-def _latest_in(match_text: str) -> str:
-    dates = re.findall(r"'([^']+)'", match_text)
-    return max(dates) if dates else ""
+def latest_biz_note(question: str) -> str | None:
+    match = _LATEST.search(question or "")
+    return match.group(1) if match else None
 
 
 def fix_single_day_sql(question: str, sql: str) -> tuple[str, str | None]:
-    """返回 (改写后的 SQL, 命中说明)。非单日提问原样返回。"""
-    if not sql or not is_single_day_question(question):
+    """把 RQ 条件改回问句标注的窗口。同期/环比由两段 SQL 各自带日期，这里不动。"""
+    if not sql:
         return sql, None
-    original = sql
-
-    def _repl_in(m: re.Match) -> str:
-        latest = _latest_in(m.group(0))
-        return f"RQ = '{latest}'" if latest else m.group(0)
-
-    sql = _IN_LIST.sub(_repl_in, sql)
-    sql = _BETWEEN.sub(lambda m: f"RQ = '{max(m.group(1), m.group(2))}'", sql)
-    sql = _SINCE.sub(lambda m: f"RQ = '{m.group(1)}'", sql)
-    if sql != original:
-        return sql, "单日口径修正：多日范围已收敛为最新营业日"
+    if "「同期」" in (question or "") or "「上期」" in (question or ""):
+        return sql, None
+    window = annotated_window(question)
+    if not window:
+        return sql, None
+    start, end = window
+    replacement = f"RQ = '{start}'" if start == end else f"RQ BETWEEN '{start}' AND '{end}'"
+    rewritten, count = _RQ_PRED.subn(replacement, sql)
+    if count and rewritten != sql:
+        return rewritten, "日期守卫：已按当前日期窗口改写"
     return sql, None

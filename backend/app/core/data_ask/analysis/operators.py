@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.data_ask.connectors.factory import build_connector_from_source
 from app.core.data_ask.govern.access import bypass_row_permission
+from app.core.data_ask.govern.calendar import business_today
 from app.core.data_ask.govern.audit import log_query
 from app.core.data_ask.govern.column_policy import validate_sql_columns
 from app.core.data_ask.govern.fanout import detect_fanout
@@ -337,38 +338,41 @@ async def _latest_biz_date(ctx: OperatorContext) -> str:
 
 
 async def _resolve_window(ctx: OperatorContext, spec: Any) -> TimeRange:
-    """时间窗解析：相对词（基于最新营业日）> 显式日期/区间/整月。默认 $最新日。"""
+    """时间窗解析。$今天/$本月/$今年 用日历今天；$最新日 才是 MAX(RQ)。"""
     text = str(spec or "").strip() or "$最新日"
-    latest = await _latest_biz_date(ctx)
-    ld = _d(latest)
+    today = business_today()
 
-    if text in ("$最新日", "$今天", "$今日"):
+    if text == "$最新日":
+        latest = await _latest_biz_date(ctx)
         return TimeRange(latest, latest, "annotation")
+    if text in ("$今天", "$今日"):
+        day = today.isoformat()
+        return TimeRange(day, day, "annotation")
     if text in ("$昨天", "$昨日"):
-        d = (ld - timedelta(days=1)).isoformat()
-        return TimeRange(d, d, "annotation")
+        day = (today - timedelta(days=1)).isoformat()
+        return TimeRange(day, day, "annotation")
 
     m = re.fullmatch(r"\$(?:近|最近)\s*(\d+)\s*天", text)
     if m:
         n = max(1, min(365, int(m.group(1))))
-        start = (ld - timedelta(days=n - 1)).isoformat()
-        return TimeRange(start, latest, "annotation")
+        start = (today - timedelta(days=n - 1)).isoformat()
+        return TimeRange(start, today.isoformat(), "annotation")
 
     if text == "$本周":
-        start = (ld - timedelta(days=ld.weekday())).isoformat()
-        return TimeRange(start, latest, "annotation")
+        start = (today - timedelta(days=today.weekday())).isoformat()
+        return TimeRange(start, today.isoformat(), "annotation")
     if text == "$上周":
-        ws = ld - timedelta(days=ld.weekday() + 7)
+        ws = today - timedelta(days=today.weekday() + 7)
         return TimeRange(ws.isoformat(), (ws + timedelta(days=6)).isoformat(), "annotation")
     if text == "$本月":
-        return TimeRange(_month_start(ld).isoformat(), _month_end(ld).isoformat(), "annotation")
+        return TimeRange(date(today.year, today.month, 1).isoformat(), today.isoformat(), "annotation")
     if text == "$上月":
-        pm_last = _month_start(ld) - timedelta(days=1)
+        pm_last = date(today.year, today.month, 1) - timedelta(days=1)
         return TimeRange(_month_start(pm_last).isoformat(), _month_end(pm_last).isoformat(), "annotation")
     if text == "$今年":
-        return TimeRange(date(ld.year, 1, 1).isoformat(), latest, "annotation")
+        return TimeRange(date(today.year, 1, 1).isoformat(), today.isoformat(), "annotation")
     if text == "$去年":
-        return TimeRange(date(ld.year - 1, 1, 1).isoformat(), date(ld.year - 1, 12, 31).isoformat(), "annotation")
+        return TimeRange(date(today.year - 1, 1, 1).isoformat(), date(today.year - 1, 12, 31).isoformat(), "annotation")
 
     m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\s*[-~至到—]\s*(\d{4}-\d{2}-\d{2})", text)
     if m:

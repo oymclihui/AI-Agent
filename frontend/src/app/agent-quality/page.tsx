@@ -463,10 +463,10 @@ export default function AgentQualityPage() {
     title: t.trend,
     labels: trend.map((p) => `#${p.run_id}`),
     datasets: [
-      { label: t.kpiOverall, data: trend.map((p) => Number((p.overall_score ?? 0).toFixed(4))) },
-      { label: t.kpiSql, data: trend.map((p) => Number((p.sql_success_rate ?? 0).toFixed(4))) },
-      { label: t.kpiCons, data: trend.map((p) => Number((p.consistency_rate ?? 0).toFixed(4))) },
-      { label: t.kpiJudge, data: trend.map((p) => Number((p.judge_score ?? 0).toFixed(4))) },
+      { label: t.kpiOverall, data: trend.map((p) => Number((Number(p.overall_score) || 0).toFixed(4))) },
+      { label: t.kpiSql, data: trend.map((p) => Number((Number(p.sql_success_rate) || 0).toFixed(4))) },
+      { label: t.kpiCons, data: trend.map((p) => Number((Number(p.consistency_rate) || 0).toFixed(4))) },
+      { label: t.kpiJudge, data: trend.map((p) => Number((Number(p.judge_score) || 0).toFixed(4))) },
     ],
   };
 
@@ -864,12 +864,12 @@ export default function AgentQualityPage() {
             </div>
             <div className="rounded-xl border border-gray-200 p-3">
               <div className="text-xs text-gray-500">误反问率</div>
-              <div className={`text-xl font-semibold ${socraticQuality.misclarify_rate <= 0.05 ? "text-emerald-600" : "text-red-600"}`}>{pct(socraticQuality.misclarify_rate)}</div>
-              <div className="text-xs text-gray-400">{socraticQuality.misclarify_rate <= 0.05 ? "达标 <=5%" : "超标"}</div>
+              <div className={`text-xl font-semibold ${socraticQuality.misclarify_rate != null && socraticQuality.misclarify_rate <= 0.05 ? "text-emerald-600" : socraticQuality.misclarify_rate != null ? "text-red-600" : "text-gray-800"}`}>{pct(socraticQuality.misclarify_rate)}</div>
+              <div className="text-xs text-gray-400">{socraticQuality.misclarify_rate == null ? "暂无" : socraticQuality.misclarify_rate <= 0.05 ? "达标 <=5%" : "超标"}</div>
             </div>
             <div className="rounded-xl border border-gray-200 p-3">
               <div className="text-xs text-gray-500">平均收敛轮次</div>
-              <div className="text-xl font-semibold text-gray-800">{socraticQuality.avg_rounds.toFixed(2)}</div>
+              <div className="text-xl font-semibold text-gray-800">{socraticQuality.avg_rounds == null ? "—" : Number(socraticQuality.avg_rounds).toFixed(2)}</div>
               <div className="text-xs text-gray-400">轮</div>
             </div>
           </div>

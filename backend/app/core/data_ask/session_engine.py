@@ -10,10 +10,12 @@ from __future__ import annotations
 import os
 import re
 import time
+from datetime import date
 from typing import Any
 
 from app.core.cache.redis_cache import cache_get_json, cache_set_json
-from app.core.data_ask.metric_layer import METRICS
+from app.core.data_ask.govern.calendar import previous_window, shift_year_iso
+from app.core.data_ask.metric_layer import METRICS, store_phrase_in
 
 SESS_TTL = int(os.getenv("DATAASK_SESS_TTL", "1800"))
 
@@ -59,45 +61,115 @@ async def save_session(user: Any, state: dict[str, Any]) -> None:
         pass
 
 
+_PHRASES = (
+    "最新营业日", "今天", "今日", "昨天", "昨日", "前天",
+    "本周", "上周", "本月", "上月", "今年", "去年",
+)
+_ANN_WINDOW = re.compile(
+    r"「(?:本期|今天|今日|昨天|昨日|前天|本周|上周|本月|上月|今年|去年|最新营业日)」"
+    r"指\s*(\d{4}-\d{2}-\d{2})(?:\s*至\s*(\d{4}-\d{2}-\d{2}))?"
+)
+
+
+def _phrase_of(text: str) -> str | None:
+    head = text.split("（", 1)[0]
+    for phrase in _PHRASES:
+        if phrase in head or phrase in text:
+            return phrase
+    match = _RE_TIME_PHRASE.search(text)
+    return match.group(0) if match else None
+
+
 def extract_state(result: dict[str, Any]) -> dict[str, Any]:
-    """从问数结果提取会话状态：{standalone, route, metrics, dimension, time, time_phrase, sql}。"""
+    """从问数结果提取会话状态。同期追问要靠窗口和门店，不能只记时间词。"""
     standalone = str(result.get("standalone_question") or "")
     intent = result.get("metric_intent") or {}
-    tp = _RE_TIME_PHRASE.search(standalone)
+    metrics = list(intent.get("metric_names") or [])
+    if not metrics:
+        for syn, name in _SYN_SORTED:
+            if syn in standalone:
+                metrics = [name]
+                break
+    window_time = dict(intent.get("time") or {})
+    if not window_time.get("start"):
+        match = _ANN_WINDOW.search(standalone)
+        if match:
+            window_time = {"start": match.group(1), "end": match.group(2) or match.group(1)}
+    phrase = _phrase_of(standalone)
+    window = None
+    if window_time.get("start"):
+        window = {
+            "start": window_time["start"],
+            "end": window_time.get("end") or window_time["start"],
+            "phrase": phrase,
+        }
+    store_phrase = intent.get("store_phrase") or store_phrase_in(standalone)
     return {
         "standalone": standalone,
         "route": result.get("route") or "",
-        "metrics": list(intent.get("metric_names") or []),
+        "metrics": metrics,
         "dimension": intent.get("dimension"),
-        "time": dict(intent.get("time") or {}),
-        "time_phrase": tp.group(0) if tp else None,
+        "time": window_time,
+        "time_phrase": phrase,
+        "window": window,
+        "filters": {"store_phrase": store_phrase} if store_phrase else {},
+        "compare": result.get("compare"),
         "sql": str(result.get("display_sql") or result.get("sql") or "")[:4000],
         "ts": int(time.time()),
     }
 
 
-def resolve_followup(question: str, state: dict[str, Any]) -> str | None:
-    """确定性追问改写：结合会话状态把省略问句补全为独立问句。
+_RE_YOY = re.compile(r"同期|同比|去年同期|和去年比|比去年")
+_RE_MOM = re.compile(r"环比|比上一期|和上期比")
+_RE_LATEST_ASK = re.compile(r"看最新一天|最新营业日|最新一天")
 
-    「那上周呢」+ 上次答了销售额 → 「上周销售额是多少」
-    「换成毛利呢」 → 「{上次时间口径}毛利是多少」
-    「按门店看看」 → 「{时间}各门店{指标}」
-    解析不出时间/指标/维度任一有效组合 → None（交还既有链路）。
-    """
+
+def _span_text(start: str, end: str) -> str:
+    return start if start == end else f"{start} 至 {end}"
+
+
+def resolve_followup(question: str, state: dict[str, Any]) -> str | None:
+    """确定性追问改写。只说「同期」时沿用上一句的指标、门店和窗口。"""
     text = str(question or "").strip()
     if not text or not state:
-        return None
-    if not _RE_REFERENTIAL.search(text):
         return None
     metrics = state.get("metrics") or []
     if not metrics:
         return None
     metric_name = str(metrics[0])
-
-    # 指标替换（「换成毛利呢」）
     swap = next((name for syn, name in _SYN_SORTED if syn in text), None)
     if swap:
         metric_name = swap
+    store = str((state.get("filters") or {}).get("store_phrase") or "")
+    window = state.get("window") or {}
+    phrase = str(window.get("phrase") or state.get("time_phrase") or "")
+    start, end = window.get("start"), window.get("end")
+
+    if _RE_LATEST_ASK.search(text) and len(text) <= 16:
+        return f"最新营业日{store}{metric_name}是多少"
+    if _RE_YOY.search(text) or _RE_MOM.search(text):
+        if start and end and _RE_YOY.search(text):
+            current = _span_text(str(start), str(end))
+            previous = _span_text(shift_year_iso(str(start)), shift_year_iso(str(end)))
+            return (
+                f"{phrase}{store}{metric_name}，对比去年同期"
+                f"（其中「本期」指 {current}，「同期」指 {previous}）"
+            )
+        if start and end and _RE_MOM.search(text):
+            prev_start, prev_end = previous_window(date.fromisoformat(str(start)), date.fromisoformat(str(end)))
+            current = _span_text(str(start), str(end))
+            previous = _span_text(prev_start.isoformat(), prev_end.isoformat())
+            return (
+                f"{phrase}{store}{metric_name}，对比上一期"
+                f"（其中「本期」指 {current}，「上期」指 {previous}）"
+            )
+        if phrase:
+            tag = "对比去年同期" if _RE_YOY.search(text) else "对比上一期"
+            return f"{phrase}{store}{metric_name}，{tag}"
+        return None
+
+    if not _RE_REFERENTIAL.search(text):
+        return None
 
     dim_kind = None
     if re.search(r"每天|每日|按天|按日|走势|趋势", text):
@@ -105,17 +177,17 @@ def resolve_followup(question: str, state: dict[str, Any]) -> str | None:
     elif re.search(r"按门店|各门店|哪个门店|门店排名|分店", text):
         dim_kind = "store"
 
-    tp = _RE_TIME_PHRASE.search(text)
-    time_word = tp.group(0) if tp else None
+    time_match = _RE_TIME_PHRASE.search(text)
+    time_word = time_match.group(0) if time_match else None
 
     if dim_kind == "day":
-        return f"{time_word or '最近7天'}每天{metric_name}走势"
+        return f"{time_word or '最近7天'}每天{store}{metric_name}走势"
     if dim_kind == "store":
-        return f"{time_word or state.get('time_phrase') or '今天'}各门店{metric_name}"
+        return f"{time_word or phrase or '今天'}各门店{metric_name}"
     if time_word:
-        return f"{time_word}{metric_name}是多少"
-    if swap:  # 只换了指标，沿用上次时间口径
-        return f"{state.get('time_phrase') or '今天'}{metric_name}是多少"
+        return f"{time_word}{store}{metric_name}是多少"
+    if swap:
+        return f"{phrase or '今天'}{store}{metric_name}是多少"
     return None
 
 
@@ -126,6 +198,8 @@ def build_suggestions(state: dict[str, Any]) -> list[str]:
     t = state.get("time") or {}
     single = bool(t.get("start")) and t.get("start") == t.get("end")
     chips: list[str] = []
+    if metrics and (state.get("window") or state.get("time_phrase")) and not state.get("compare"):
+        chips.append("同期")
     if metrics:
         m = str(metrics[0])
         related = _RELATED.get(m)

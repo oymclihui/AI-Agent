@@ -1331,6 +1331,9 @@ async def data_ask_query(
         if _dialogue_act:
             raise RuntimeError("skip-cache")
         from app.core.cache.redis_cache import make_dataask_cache_key, cache_get_json
+        from app.core.data_ask.govern.calendar import is_context_followup, question_cache_key_text
+        if is_context_followup(payload.question):
+            raise RuntimeError("skip-cache")
         _user_key = str(getattr(user, "employee_no", None) or user.id)
         if bool(getattr(user, "is_admin", False)):
             _user_key += ":admin"
@@ -1339,7 +1342,7 @@ async def data_ask_query(
         if payload.skill_id:
             _user_key += f":skill:{payload.skill_id}"
         _cache_key = make_dataask_cache_key(
-            data_source_id=payload.data_source_id, question=payload.question,
+            data_source_id=payload.data_source_id, question=question_cache_key_text(payload.question),
             sql_override=payload.sql_override, llm_provider=payload.llm_provider,
             llm_model=payload.llm_model, execute=payload.execute, history=history,
             user_key=_user_key,

@@ -53,12 +53,7 @@ def result_numbers(rows: list[list[Any]] | None) -> set[str]:
             if isinstance(cell, (int, float)):
                 found.add(_canon(cell))
             # 同时按文本扫描：保证与 _clause_ok 用同一套正则、正负号一致。
-            text = _unseparate(str(cell)).strip()
-            if _DATE_TIME.fullmatch(text):
-                # 日期/时间单元格（2026-10-01、13:20）不是数据数字，
-                # 否则会把 2026、10、13 放行，分析文案里就能凭空写「低于13万元」。
-                continue
-            for match in _NUMBER.findall(text):
+            for match in _NUMBER.findall(_unseparate(str(cell))):
                 found.add(_canon(match))
     return found
 
@@ -99,20 +94,46 @@ def tidy_numbers(text: str) -> str:
 
 
 def _clean_line(line: str, allowed: set[str]) -> str:
-    """守住「不出现未授权数字」：含违规数字的行整行丢弃。
-
-    只丢整行、不做半句截断——截断容易留下「…虽排名第五」这种残句，
-    可读性更差；被丢空的标题由 _drop_orphan_headings 一并清理。
-    """
-    return line if _line_ok(line, allowed) else ""
+    """含对不上的数字时丢掉那一句。同一行里其余对得上的句子留下。"""
+    if _line_ok(line, allowed):
+        return line
+    parts = re.split(r"(?<=[。！？；])", line)
+    if len(parts) <= 1:
+        return ""
+    return "".join(part for part in parts if part.strip() and _line_ok(part, allowed))
 
 
 def _line_ok(line: str, allowed: set[str]) -> bool:
-    body = _DATE_TIME.sub("", _LIST_MARK.sub("", line))
-    for match in _NUMBER.findall(_unseparate(body)):
-        if _canon(match) not in allowed:
-            return False
+    body = _DATE_TIME.sub("", _LIST_MARK.sub("", _unseparate(line)))
+    for match in _NUMBER.finditer(body):
+        token = match.group()
+        if _canon(token) in allowed:
+            continue
+        if _as_wan(token, body[match.end(): match.end() + 3], allowed):
+            continue
+        return False
     return True
+
+
+def _as_wan(token: str, tail: str, allowed: set[str]) -> bool:
+    """25.55万 可以对应结果里的 255493.89。旁边没有「万」就不换算。"""
+    if "万" not in tail:
+        return False
+    try:
+        value = float(token)
+    except ValueError:
+        return False
+    for item in allowed:
+        try:
+            base = float(item)
+        except ValueError:
+            continue
+        scaled = base / 10000.0
+        if abs(scaled - value) <= 0.05:
+            return True
+        if abs(value - round(value)) < 1e-6 and abs(round(scaled) - value) < 1e-6:
+            return True
+    return False
 
 
 def _is_heading(line: str) -> bool:
