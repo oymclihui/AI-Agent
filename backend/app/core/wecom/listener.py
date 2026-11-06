@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -74,6 +77,134 @@ class WecomLink:
                 sent.append(chat_id)
         return {"ok": not errors and bool(sent), "sent": sent, "errors": errors}
 
+    async def upload_media(self, file_path: str, media_type: str = "image") -> str:
+        """WS 三步协议上传本地媒体文件，返回 media_id。
+
+        media_type 与企微媒体类型一致：image / voice / video / file。
+        """
+        path = Path(file_path)
+        data = path.read_bytes()
+        chunk_size = 512 * 1024
+        chunks = [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+        ack = await self._request({
+            "cmd": "aibot_upload_media_init",
+            "headers": {"req_id": f"upload_init_{uuid.uuid4().hex}"},
+            "body": {
+                "filename": path.name,
+                "type": media_type,
+                "total_size": len(data),
+                "total_chunks": len(chunks),
+                "md5": hashlib.md5(data).hexdigest(),
+            },
+        })
+        if int(ack.get("errcode") or 0) != 0:
+            raise RuntimeError(str(ack.get("errmsg") or "上传初始化失败")[:200])
+        upload_id = str((ack.get("body") or {}).get("upload_id") or "")
+        if not upload_id:
+            raise RuntimeError("上传初始化未返回 upload_id")
+        for index, chunk in enumerate(chunks):
+            ack = await self._request({
+                "cmd": "aibot_upload_media_chunk",
+                "headers": {"req_id": f"upload_chunk_{uuid.uuid4().hex}"},
+                "body": {
+                    "upload_id": upload_id,
+                    "chunk_index": index,
+                    "total_chunks": len(chunks),
+                    "base64_data": base64.b64encode(chunk).decode(),
+                },
+            }, timeout=30)
+            if int(ack.get("errcode") or 0) != 0:
+                raise RuntimeError(str(ack.get("errmsg") or f"第 {index} 片上传失败")[:200])
+        ack = await self._request({
+            "cmd": "aibot_upload_media_finish",
+            "headers": {"req_id": f"upload_finish_{uuid.uuid4().hex}"},
+            "body": {"upload_id": upload_id, "filename": path.name},
+        }, timeout=30)
+        if int(ack.get("errcode") or 0) != 0:
+            raise RuntimeError(str(ack.get("errmsg") or "上传完成失败")[:200])
+        media_id = str((ack.get("body") or {}).get("media_id") or "")
+        if not media_id:
+            raise RuntimeError("上传完成未返回 media_id")
+        return media_id
+
+    async def upload_image(self, file_path: str) -> str:
+        """兼容旧调用：上传图片。"""
+        return await self.upload_media(file_path, "image")
+
+    async def send_image(self, chat_ids: list[str], file_path: str) -> dict[str, Any]:
+        sent: list[str] = []
+        errors: list[dict[str, str]] = []
+        try:
+            media_id = await self.upload_image(file_path)
+        except Exception as exc:
+            logger.warning("wecom_upload_image_failed", error=str(exc)[:200])
+            return {"ok": False, "sent": [], "errors": [{"chat_id": "", "error": str(exc)[:200]}]}
+        for chat_id in chat_ids:
+            ack = await self._request({
+                "cmd": "aibot_send_msg",
+                "headers": {"req_id": f"aibot_send_msg_{uuid.uuid4().hex}"},
+                "body": {
+                    "chatid": chat_id,
+                    "msgtype": "image",
+                    "image": {"media_id": media_id},
+                },
+            })
+            if int(ack.get("errcode") or 0) != 0:
+                errors.append({"chat_id": chat_id, "error": str(ack.get("errmsg") or "发送失败")[:200]})
+            else:
+                sent.append(chat_id)
+        return {"ok": not errors and bool(sent), "sent": sent, "errors": errors}
+
+    async def send_voice(self, chat_ids: list[str], file_path: str) -> dict[str, Any]:
+        """发送语音消息（mp3 直传，实测企微长连接接受 mp3）。"""
+        sent: list[str] = []
+        errors: list[dict[str, str]] = []
+        try:
+            media_id = await self.upload_media(file_path, "voice")
+        except Exception as exc:
+            logger.warning("wecom_upload_voice_failed", error=str(exc)[:200])
+            return {"ok": False, "sent": [], "errors": [{"chat_id": "", "error": str(exc)[:200]}]}
+        for chat_id in chat_ids:
+            ack = await self._request({
+                "cmd": "aibot_send_msg",
+                "headers": {"req_id": f"aibot_send_msg_{uuid.uuid4().hex}"},
+                "body": {
+                    "chatid": chat_id,
+                    "msgtype": "voice",
+                    "voice": {"media_id": media_id},
+                },
+            })
+            if int(ack.get("errcode") or 0) != 0:
+                errors.append({"chat_id": chat_id, "error": str(ack.get("errmsg") or "发送失败")[:200]})
+            else:
+                sent.append(chat_id)
+        return {"ok": not errors and bool(sent), "sent": sent, "errors": errors}
+
+    async def send_file(self, chat_ids: list[str], file_path: str) -> dict[str, Any]:
+        """发送文件消息（xlsx 等，type=file，实测上传三步均 errcode=0）。"""
+        sent: list[str] = []
+        errors: list[dict[str, str]] = []
+        try:
+            media_id = await self.upload_media(file_path, "file")
+        except Exception as exc:
+            logger.warning("wecom_upload_file_failed", error=str(exc)[:200])
+            return {"ok": False, "sent": [], "errors": [{"chat_id": "", "error": str(exc)[:200]}]}
+        for chat_id in chat_ids:
+            ack = await self._request({
+                "cmd": "aibot_send_msg",
+                "headers": {"req_id": f"aibot_send_msg_{uuid.uuid4().hex}"},
+                "body": {
+                    "chatid": chat_id,
+                    "msgtype": "file",
+                    "file": {"media_id": media_id},
+                },
+            })
+            if int(ack.get("errcode") or 0) != 0:
+                errors.append({"chat_id": chat_id, "error": str(ack.get("errmsg") or "发送失败")[:200]})
+            else:
+                sent.append(chat_id)
+        return {"ok": not errors and bool(sent), "sent": sent, "errors": errors}
+
     async def reply_stream(self, req_id: str, stream_id: str, content: str, *, finish: bool) -> None:
         await self._request({
             "cmd": "aibot_respond_msg",
@@ -82,6 +213,39 @@ class WecomLink:
                 "msgtype": "stream",
                 "stream": {"id": stream_id, "finish": finish, "content": content},
             },
+        })
+
+    async def reply_stream_card(
+        self, req_id: str, stream_id: str, content: str, *, finish: bool,
+        template_card: dict[str, Any] | None = None,
+    ) -> None:
+        """流式回复并可附带一张模板卡片（同一消息只允许回复一次卡片）。"""
+        body: dict[str, Any] = {
+            "msgtype": "stream_with_template_card",
+            "stream": {"id": stream_id, "finish": finish, "content": content},
+        }
+        if template_card:
+            body["template_card"] = template_card
+        await self._request({
+            "cmd": "aibot_respond_msg",
+            "headers": {"req_id": req_id},
+            "body": body,
+        })
+
+    async def update_template_card(
+        self, req_id: str, template_card: dict[str, Any], userids: list[str] | None = None
+    ) -> None:
+        """响应模板卡片点击事件，更新卡片（需在 5 秒内回复，task_id 必须一致）。"""
+        body: dict[str, Any] = {
+            "response_type": "update_template_card",
+            "template_card": template_card,
+        }
+        if userids:
+            body["userids"] = userids
+        await self._request({
+            "cmd": "aibot_respond_update_msg",
+            "headers": {"req_id": req_id},
+            "body": body,
         })
 
     async def reply_welcome(self, req_id: str, content: str) -> None:

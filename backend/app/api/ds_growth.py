@@ -11,15 +11,17 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth.deps import get_current_user
 from app.core.data_ask.govern.access import assert_data_source_access
 from app.core.data_ask.intelligence.query_memory import save_golden_query
 from app.db.models import (
+    AskExample,
     AskFeedback,
     AskTrace,
     DataAskTrainTask,
@@ -31,23 +33,28 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.schemas.ds_growth import (
+    AnswerModeStatsOut,
     FeedbackIn,
     FeedbackOut,
+    FeedbackStatOut,
     MetricIn,
     MetricOut,
+    ModeStatOut,
     ProfileBuildOut,
     ProfileOut,
     ProfileStatusOut,
     TermIn,
     TermOut,
+    TopQuestionOut,
     TraceOut,
     TrainTaskOut,
 )
+from app.schemas.train_center import FeedbackStatusOut, FeedbackStepOut
 
 router = APIRouter(tags=["DsGrowth"])
 
 _EXCEL_DRIVERS = ("excel_folder", "excel_template")
-_FEEDBACK_TYPES = ("like", "dislike", "correction", "example")
+_FEEDBACK_TYPES = ("like", "dislike", "correction", "example", "verbose")
 
 
 async def _get_source(db: AsyncSession, sid: str) -> DataSource:
@@ -84,16 +91,24 @@ async def build_profile(
     rows = list(res.scalars().all())
     for r in rows:
         if r.status == "building":
-            return ProfileBuildOut(
-                profile_id=r.id, version=r.version, status="building",
-                message="画像正在构建中，请稍后查看状态",
-            )
+            updated = r.updated_at or r.created_at
+            if updated is not None and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            if updated is not None and datetime.now(timezone.utc) - updated < timedelta(minutes=30):
+                return ProfileBuildOut(
+                    profile_id=r.id, version=r.version, status="building",
+                    message="画像正在构建中，请稍后查看状态",
+                )
+            r.status = "failed"
+            r.error = "构建超过 30 分钟仍未完成，已重新发起"
+            await db.flush()
     next_version = (rows[0].version + 1) if rows else 1
     row = DsSchemaProfile(
         data_source_id=str(sid), version=next_version, status="building", trigger="manual",
     )
     db.add(row)
     await db.flush()
+    await db.commit()
 
     from app.core.data_ask.profile_tasks import build_profile_task
 
@@ -349,9 +364,12 @@ async def submit_feedback(
     corrected_sql = (payload.corrected_sql or "").strip()
 
     # 从 trace 回填问题与原 SQL（前端只传 trace_id 时也能闭环）
-    if payload.trace_id and (not question or not original_sql):
+    trace = None
+    if payload.trace_id:
         trace = await db.get(AskTrace, payload.trace_id)
-        if trace and trace.data_source_id == str(source.id):
+        if trace and trace.data_source_id != str(source.id):
+            trace = None
+        elif trace and (not question or not original_sql):
             question = question or (trace.question or "")
             original_sql = original_sql or (trace.sql_text or "")
 
@@ -386,26 +404,53 @@ async def submit_feedback(
                     MemoryHitLog.trace_id == int(payload.trace_id),
                     MemoryHitLog.adopted.is_(None),
                 )
-                .values(adopted=(ftype != "dislike"))
+                .values(adopted=(ftype not in ("dislike", "verbose")))
             )
     except Exception:
         pass
 
-    train_task = DataAskTrainTask(
-        data_source_id=str(source.id), user_id=str(user.id), kind="example",
-        status="queued", progress=0, feedback_id=row.id,
-        detail={"feedback_type": ftype, "question": question or None},
-    )
-    db.add(train_task)
-    await db.flush()
+    train_task = None
+    if ftype in ("like", "dislike", "correction", "example"):
+        train_task = DataAskTrainTask(
+            data_source_id=str(source.id), user_id=str(user.id), kind="example",
+            status="queued", progress=0, feedback_id=row.id,
+            detail={"feedback_type": ftype, "question": question or None},
+        )
+        db.add(train_task)
+        await db.flush()
 
     saved = False
     if ftype in ("correction", "example"):
+        # 仅纠错可覆盖金标口径；"保存示例"只在无金标时补建，避免弱信号回刷旧 SQL
         await save_golden_query(
             db, data_source_id=str(source.id), question=question,
             sql_text=corrected_sql or original_sql, user_id=str(user.id),
+            overwrite=(ftype == "correction"),
         )
         saved = True
+
+    # 蓝图 P1-③：点赞 / 采纳写入命中技能的专属示例（无技能或无 SQL 则跳过）
+    if ftype in ("like", "example", "correction") and trace is not None and trace.skill_id:
+        sql_for_skill = (corrected_sql or original_sql or "").strip()
+        first_stmt = sql_for_skill.split(";")[0].strip()
+        if question and first_stmt and _is_select(first_stmt):
+            try:
+                from app.core.data_ask.skill_memory import save_skill_example
+
+                mem = await save_skill_example(
+                    db,
+                    data_source_id=str(source.id),
+                    skill_id=str(trace.skill_id),
+                    question=question,
+                    sql_text=sql_for_skill,
+                    source=ftype,
+                    trace_id=int(trace.id) if trace.id is not None else None,
+                    note=(payload.comment or "")[:200] or None,
+                )
+                if mem.get("saved") or mem.get("deduped"):
+                    saved = True
+            except Exception:
+                pass
 
     if ftype in ("like", "dislike", "correction", "example"):
         try:
@@ -429,7 +474,7 @@ async def submit_feedback(
     return FeedbackOut(
         id=row.id, saved_example=saved,
         message="反馈已保存" + ("，示例已加入问数记忆" if saved else ""),
-        task_id=train_task.id,
+        task_id=train_task.id if train_task else None,
     )
 
 
@@ -451,6 +496,113 @@ async def get_train_task(
         progress=row.progress or 0, detail=row.detail, feedback_id=row.feedback_id,
         error=row.error, created_at=row.created_at, updated_at=row.updated_at,
     )
+
+
+# ────────────────────── 反馈训练状态回执（P1：已入队 / 已蒸馏 / 已生效） ──────────────────────
+
+async def _feedback_status(db: AsyncSession, row: AskFeedback) -> FeedbackStatusOut:
+    task = (
+        await db.execute(
+            select(DataAskTrainTask)
+            .where(DataAskTrainTask.feedback_id == row.id)
+            .order_by(DataAskTrainTask.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    example = None
+    if row.trace_id:
+        example = (
+            await db.execute(
+                select(AskExample)
+                .where(
+                    AskExample.data_source_id == row.data_source_id,
+                    AskExample.trace_id == row.trace_id,
+                    AskExample.active.is_(True),
+                )
+                .order_by(AskExample.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if example is None and row.question:
+        example = (
+            await db.execute(
+                select(AskExample)
+                .where(
+                    AskExample.data_source_id == row.data_source_id,
+                    AskExample.question == row.question,
+                    AskExample.active.is_(True),
+                )
+                .order_by(AskExample.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    queued = bool(task is not None)
+    distilled = bool((task is not None and task.status == "done") or example is not None)
+    effective = bool(example is not None and example.active and example.indexed)
+    if effective:
+        message = "已生效：示例已向量化，可被后续问数命中"
+    elif distilled:
+        message = "已蒸馏：示例已写入知识记忆，等待向量化生效"
+    elif queued:
+        message = "已入队：等待蒸馏作业执行"
+    else:
+        message = "未入队：本次反馈不触发训练"
+    return FeedbackStatusOut(
+        feedback_id=int(row.id),
+        data_source_id=row.data_source_id,
+        question=row.question,
+        feedback_type=row.feedback_type,
+        task_id=int(task.id) if task is not None else None,
+        task_status=task.status if task is not None else None,
+        queued=queued,
+        distilled=distilled,
+        effective=effective,
+        example_id=example.id if example is not None else None,
+        example_indexed=bool(example.indexed) if example is not None else False,
+        steps=[
+            FeedbackStepOut(key="queued", label="已入队", done=queued),
+            FeedbackStepOut(key="distilled", label="已蒸馏", done=distilled),
+            FeedbackStepOut(key="effective", label="已生效", done=effective),
+        ],
+        message=message,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/data-ask/feedback/{fid}/status", response_model=FeedbackStatusOut)
+async def get_feedback_status(
+    fid: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    row = await db.get(AskFeedback, int(fid))
+    if not row:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    source = await _get_source(db, row.data_source_id)
+    await assert_data_source_access(db, source, user)
+    return await _feedback_status(db, row)
+
+
+@router.get("/data-ask/feedback/recent", response_model=list[FeedbackStatusOut])
+async def list_recent_feedback(
+    data_source_id: str = Query(...),
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, data_source_id)
+    await assert_data_source_access(db, source, user)
+    rows = (
+        await db.execute(
+            select(AskFeedback)
+            .where(AskFeedback.data_source_id == str(source.id))
+            .order_by(AskFeedback.id.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [await _feedback_status(db, r) for r in rows]
 
 
 # ────────────────────── 问数轨迹 ──────────────────────
@@ -476,7 +628,7 @@ async def list_traces(
             question=t.question, standalone_question=t.standalone_question,
             sql_text=t.sql_text, row_count=t.row_count, success=t.success,
             error_message=t.error_message, analysis_mode=t.analysis_mode,
-            memory_hits=t.memory_hits or 0, duration_ms=t.duration_ms,
+            answer_mode=t.answer_mode, memory_hits=t.memory_hits or 0, duration_ms=t.duration_ms,
             rewrite_ms=t.rewrite_ms, gen_ms=t.gen_ms, exec_ms=t.exec_ms,
             analysis_ms=t.analysis_ms, result_signature=t.result_signature,
             clarification=bool(t.clarification), cached=bool(t.cached),
@@ -484,3 +636,74 @@ async def list_traces(
         )
         for t in res.scalars().all()
     ]
+
+
+# ────────────────────── 回答模式观测 ──────────────────────
+
+@router.get("/data-sources/{sid}/answer-mode-stats", response_model=AnswerModeStatsOut)
+async def answer_mode_stats(
+    sid: str,
+    days: int = Query(14, ge=1, le=180),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """L1/L2/L3 分布 + 反馈构成 + 高频问句（支撑词表修订与冗长反馈评估）。"""
+    source = await _get_source(db, sid)
+    await assert_data_source_access(db, source, user)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    mode_rows = (
+        await db.execute(
+            select(AskTrace.answer_mode, func.count())
+            .where(
+                AskTrace.data_source_id == str(sid),
+                AskTrace.created_at >= since,
+                AskTrace.answer_mode.isnot(None),
+                AskTrace.success.is_(True),
+            )
+            .group_by(AskTrace.answer_mode)
+        )
+    ).all()
+    total = sum(int(n) for _, n in mode_rows)
+    modes = [
+        ModeStatOut(
+            answer_mode=str(mode or "?"),
+            count=int(n),
+            ratio=round(int(n) / total * 100, 1) if total else 0.0,
+        )
+        for mode, n in sorted(mode_rows, key=lambda x: str(x[0] or ""))
+    ]
+
+    fb_rows = (
+        await db.execute(
+            select(AskFeedback.feedback_type, func.count())
+            .where(AskFeedback.data_source_id == str(sid), AskFeedback.created_at >= since)
+            .group_by(AskFeedback.feedback_type)
+        )
+    ).all()
+    feedback = [
+        FeedbackStatOut(feedback_type=str(ftype or ""), count=int(n))
+        for ftype, n in sorted(fb_rows, key=lambda x: str(x[0] or ""))
+    ]
+
+    q_rows = (
+        await db.execute(
+            select(AskTrace.question, func.count().label("n"))
+            .where(
+                AskTrace.data_source_id == str(sid),
+                AskTrace.created_at >= since,
+                AskTrace.question.isnot(None),
+                AskTrace.success.is_(True),
+            )
+            .group_by(AskTrace.question)
+            .order_by(func.count().desc())
+            .limit(15)
+        )
+    ).all()
+    top_questions = [
+        TopQuestionOut(question=str(q or "")[:200], count=int(n)) for q, n in q_rows
+    ]
+
+    return AnswerModeStatsOut(
+        days=days, total=total, modes=modes, feedback=feedback, top_questions=top_questions,
+    )

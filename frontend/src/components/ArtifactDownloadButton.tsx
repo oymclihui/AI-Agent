@@ -22,6 +22,24 @@ export function ArtifactDownloadButton({
   const formats = formatsForFilename(artifact.filename);
   const e = translations.employees;
 
+  if (artifact.filename.toLowerCase().endsWith(".html")) {
+    const preview = artifact.download_url.split("?")[0];
+    const labelText = lang === "en" ? "Download HTML" : "下载 HTML";
+    return (
+      <button
+        type="button"
+        className={`text-xs underline ${className}`}
+        onClick={() => {
+          downloadArtifact(`${preview}?download=1`, artifact.filename).catch(() => {
+            window.open(`${preview}?download=1`, "_blank", "noopener,noreferrer");
+          });
+        }}
+      >
+        {label ?? labelText}
+      </button>
+    );
+  }
+
   const defaultLabel = (() => {
     const lower = artifact.filename.toLowerCase();
     if (lower.endsWith(".pptx")) return e.downloadPptx[lang];

@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +53,7 @@ from app.core.data_ask.intelligence.query_memory import save_golden_query
 from app.core.data_ask.schema.drift import detect_schema_drift
 from app.core.data_ask.schema.introspect import catalog_related_tables, infer_join_graph, introspect_tables, is_key_column
 from app.core.data_ask.semantic.mdl import default_semantic_model, validate_semantic_model
+from app.core.data_ask.intelligence.answer_mode import MODE_ANALYSIS
 from app.core.data_ask.service import run_data_ask, stream_data_ask, user_join_edges_from_tables
 from app.core.excel_parser.service import create_parse_job
 from app.core.excel_parser.access import assert_template_use
@@ -793,6 +794,49 @@ async def update_semantic_model(
     return _source_out(source)
 
 
+@router.get("/{source_id}/semantic-model/export")
+async def export_semantic_model(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_source(db, source_id, user)
+    from app.core.data_ask.blueprint_finish import dump_semantic_yaml
+    return {"yaml": dump_semantic_yaml(source.semantic_model or {}), "source_id": source.id}
+
+
+class SemanticYamlIn(__import__("pydantic").BaseModel):
+    yaml: str
+
+
+@router.post("/{source_id}/semantic-model/import")
+async def import_semantic_model(
+    source_id: str,
+    payload: SemanticYamlIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """导入语义模型 YAML。不改连接信息，并在 config_versions 留一版。"""
+    from app.core.data_ask.govern.access import assert_data_source_access
+    from app.core.data_ask.blueprint_finish import load_semantic_yaml, record_config, semantic_document
+    source = await _get_source(db, source_id, user)
+    await assert_data_source_access(db, source, user, require_manage=True)
+    try:
+        model = load_semantic_yaml(payload.yaml)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
+    source.semantic_model = model
+    version = await record_config(
+        db,
+        key=f"semantic:{source.id}",
+        document=semantic_document(model),
+        actor=str(getattr(user, "employee_no", None) or user.id),
+        note="import",
+    )
+    await db.commit()
+    return {"source_id": source.id, "config_version": version}
+
+
 @router.get("/{source_id}/schema-drift", response_model=SchemaDriftOut)
 async def schema_drift(
     source_id: str,
@@ -996,7 +1040,7 @@ async def set_table_relations(
     data_tables = [t for t in source.tables if t.role == DataSourceTableRole.data]
     name_set = {t.table_name for t in data_tables}
 
-    # 校验：关系两端的表必须是已注册的数据表
+    # 校验：关系两端的表必须是已注册的数据表，且至少有一个完整字段对
     for rel in payload.relations:
         if rel.from_table not in name_set:
             raise HTTPException(status_code=400, detail=f"表 {rel.from_table} 未注册为数据表")
@@ -1004,18 +1048,33 @@ async def set_table_relations(
             raise HTTPException(status_code=400, detail=f"表 {rel.to_table} 未注册为数据表")
         if rel.from_table == rel.to_table:
             raise HTTPException(status_code=400, detail="关联关系不能连到同一张表")
+        if not rel.column_pairs():
+            raise HTTPException(
+                status_code=400,
+                detail=f"{rel.from_table} → {rel.to_table} 未指定关联字段",
+            )
 
-    # 清空所有数据表的 join_keys，再按用户关系双向写入
+    # 清空所有数据表的 join_keys，再按用户关系双向写入（复合键写入 pairs 与逗号拼接的 on）
     by_name = {t.table_name: t for t in data_tables}
     for t in data_tables:
         t.join_keys = {"edges": []}
     for rel in payload.relations:
         left = by_name[rel.from_table]
         right = by_name[rel.to_table]
+        pairs = rel.column_pairs()
         left_edges = (left.join_keys or {}).setdefault("edges", [])
         right_edges = (right.join_keys or {}).setdefault("edges", [])
-        left_edges.append({"to": rel.to_table, "on": rel.from_column})
-        right_edges.append({"to": rel.from_table, "on": rel.to_column})
+        left_edges.append({
+            "to": rel.to_table,
+            "on": ",".join(a for a, _ in pairs),
+            "pairs": [{"from": a, "to": b} for a, b in pairs],
+        })
+        right_edges.append({
+            "to": rel.from_table,
+            "on": ",".join(b for _, b in pairs),
+            "pairs": [{"from": b, "to": a} for a, b in pairs],
+        })
+
     await db.commit()
 
     # 返回更新后的 schema-graph
@@ -1166,6 +1225,47 @@ async def _get_source(db: AsyncSession, source_id: str, user: User) -> DataSourc
 ask_router = APIRouter(prefix="/data-ask", tags=["DataAsk"])
 
 
+@ask_router.post("/drill")
+async def data_ask_drill(
+    payload: dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """图表点击下钻 / 对比归因（蓝图二期 p2-1/p2-2）。确定性拼 SQL，不经过 LLM。"""
+    from app.core.data_ask.drill import DrillError, run_attribution, run_drill
+
+    sid = str(payload.get("data_source_id") or "").strip()
+    if not sid:
+        raise HTTPException(status_code=422, detail="data_source_id 必填")
+    source = await db.get(DataSource, sid)
+    if not source:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    await assert_data_source_access(db, source, user, require_chat=True)
+    if str(source.driver) in ("excel_folder", "excel_template"):
+        from app.core.data_ask.excel.session_cache import (
+            get_all_tables,
+            get_load_status,
+            preload_excel_source,
+        )
+        if get_load_status(source.id).get("status") != "ready":
+            try:
+                await preload_excel_source(source.id)
+            except Exception as exc:
+                raise HTTPException(status_code=409, detail=f"数据预载失败：{exc}") from exc
+        all_tables = get_all_tables(source.id)
+    else:
+        from app.core.data_ask.service import load_source_context
+        _, all_tables, _, _, _ = await load_source_context(db, source.id)
+    action = str(payload.get("action") or "drill")
+    try:
+        if action == "why":
+            return await run_attribution(source, payload, all_tables)
+        return await run_drill(source, payload, all_tables)
+    except DrillError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+
 @ask_router.post("/query", response_model=DataAskQueryOut)
 async def data_ask_query(
     payload: DataAskQueryIn,
@@ -1209,6 +1309,8 @@ async def data_ask_query(
                     llm_model=payload.llm_model,
                     execute=True,
                     history=history,
+                    employee_id=payload.employee_id,
+                    skill_id=payload.skill_id,
                 ):
                     yield f"data: {line.strip()}\n\n"
             except Exception as exc:
@@ -1216,14 +1318,31 @@ async def data_ask_query(
 
         return StreamingResponse(sse(), media_type="text/event-stream")
 
-    # Redis 缓存：相同问题（含历史/参数）300 秒内直接返回
+    # Redis 缓存：相同问题（含历史/参数）300 秒内直接返回；按用户隔离（行级权限不同）
+    # 蓝图 P0：缓存键纳入技能维度，不同技能/员工命中不同缓存
+    # 修改意见和发布/回滚指令不缓存，否则草案和生效结果会串。
     _cache_key = None
     try:
+        from app.core.chat.reflector import is_dialogue_act
+        _dialogue_act = is_dialogue_act(payload.question)
+    except Exception:
+        _dialogue_act = False
+    try:
+        if _dialogue_act:
+            raise RuntimeError("skip-cache")
         from app.core.cache.redis_cache import make_dataask_cache_key, cache_get_json
+        _user_key = str(getattr(user, "employee_no", None) or user.id)
+        if bool(getattr(user, "is_admin", False)):
+            _user_key += ":admin"
+        if payload.employee_id:
+            _user_key += f":emp:{payload.employee_id}"
+        if payload.skill_id:
+            _user_key += f":skill:{payload.skill_id}"
         _cache_key = make_dataask_cache_key(
             data_source_id=payload.data_source_id, question=payload.question,
             sql_override=payload.sql_override, llm_provider=payload.llm_provider,
             llm_model=payload.llm_model, execute=payload.execute, history=history,
+            user_key=_user_key,
         )
         _cached = await cache_get_json(_cache_key)
         if _cached is not None:
@@ -1251,6 +1370,8 @@ async def data_ask_query(
             llm_model=payload.llm_model,
             execute=payload.execute,
             history=history,
+            employee_id=payload.employee_id,
+            skill_id=payload.skill_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1288,4 +1409,45 @@ async def data_ask_query(
     except Exception:
         logger.exception("schedule_evolution_failed")
 
+    return DataAskQueryOut(**result)
+
+
+@ask_router.post("/reanalyze/{trace_id}", response_model=DataAskQueryOut)
+async def data_ask_reanalyze(
+    trace_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """L2 回答上点「需要分析」：复用原 SQL 重跑，强制按 L3 深度分析生成。"""
+    from app.db.models import AskTrace
+
+    row = await db.get(AskTrace, trace_id)
+    if not row or not row.data_source_id:
+        raise HTTPException(status_code=404, detail="问数轨迹不存在")
+    source = await db.get(DataSource, row.data_source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    await assert_data_source_access(db, source, user, require_chat=True)
+    if not row.sql_text:
+        raise HTTPException(status_code=400, detail="该轨迹没有可复用的 SQL")
+    question = (row.standalone_question or row.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="该轨迹缺少问题文本")
+
+    try:
+        result = await run_data_ask(
+            db,
+            data_source_id=row.data_source_id,
+            question=question,
+            user=user,
+            sql_override=row.sql_text,
+            execute=True,
+            use_memory=False,
+            force_answer_mode=MODE_ANALYSIS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("data_ask_reanalyze_failed")
+        raise HTTPException(status_code=500, detail=str(exc)[:500]) from exc
     return DataAskQueryOut(**result)

@@ -128,6 +128,64 @@ def nightly_distill_task(data_source_id: str) -> None:
         logger.exception("nightly_distill_task failed ds=%s", data_source_id)
 
 
+@celery_app.task(name="ds_distill.nightly_all_sources", ignore_result=True, max_retries=0)
+def nightly_distill_all_sources_task() -> None:
+    """遍历全部 active 数据源跑一遍蒸馏（beat 每日触发，企微新问法/反馈自动进示例库）。
+
+    开关：环境变量 DISTILL_NIGHTLY_ALL=0 可关闭（默认开启）。
+    """
+    import os
+
+    if os.getenv("DISTILL_NIGHTLY_ALL", "1").strip().lower() in ("0", "false", "no"):
+        logger.info("nightly_distill_all skipped: DISTILL_NIGHTLY_ALL=0")
+        return
+    from sqlalchemy import select
+
+    from app.db.models import DataSource
+
+    async def _sources() -> list[str]:
+        async with DistillSessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(DataSource.id).where(DataSource.status == "active")
+                )
+            ).scalars().all()
+            return [str(row) for row in rows]
+
+    try:
+        sources = run_in_persistent_loop(_sources())
+    except Exception:
+        logger.exception("nightly_distill_all: list sources failed")
+        return
+    logger.info("nightly_distill_all start sources=%s", len(sources))
+
+    async def _refresh_alias(sid: str) -> dict:
+        """维度值别名刷新：门店改名/新增门店后，问法自动跟上（实体归一自学习）。"""
+        from app.core.data_ask.experience.entity_link import refresh_aliases
+
+        async with DistillSessionLocal() as db:
+            source = await db.get(DataSource, sid)
+            if not source:
+                return {}
+            out = await refresh_aliases(db, source)
+            await db.commit()
+            return out
+
+    for sid in sources:
+        try:
+            nightly_distill_task(sid)
+        except Exception:
+            logger.exception("nightly_distill_all: source failed ds=%s", sid)
+        try:
+            logger.info(
+                "nightly_distill_all: aliases ds=%s result=%s",
+                sid, run_in_persistent_loop(_refresh_alias(sid)),
+            )
+        except Exception:
+            logger.exception("nightly_distill_all: alias refresh failed ds=%s", sid)
+    logger.info("nightly_distill_all done sources=%s", len(sources))
+
+
 # ────────────── P2：影子对比 / 单源进化闭环 ──────────────
 
 

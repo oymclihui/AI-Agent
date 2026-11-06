@@ -61,6 +61,101 @@ async def _migrate_schema(engine: AsyncEngine, schema: str | None = None) -> Non
         await conn.run_sync(_ensure_knowledge_permissions)
         await conn.run_sync(_ensure_knowledge_quality)
         await conn.run_sync(_ensure_system_settings_table)
+        await conn.run_sync(_ensure_wecom_reply_template)
+        await conn.run_sync(_ensure_ask_trace_entities)
+        await conn.run_sync(_ensure_ask_template_acceptance)
+        await conn.run_sync(_ensure_skill_memory_columns)
+
+
+def _ensure_ask_template_acceptance(sync_conn) -> None:
+    """ask_template 新增验收标准 / 反馈评分列（create_all 不给已有表加列）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("ask_template"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("ask_template")}
+    if str(sync_conn.engine.url).startswith("sqlite"):
+        if "success_criteria" not in cols:
+            sync_conn.execute(text("ALTER TABLE ask_template ADD COLUMN success_criteria TEXT"))
+        if "quality_score" not in cols:
+            sync_conn.execute(
+                text("ALTER TABLE ask_template ADD COLUMN quality_score FLOAT NOT NULL DEFAULT 0")
+            )
+        return
+    if "success_criteria" not in cols:
+        sync_conn.execute(
+            text("ALTER TABLE ask_template ADD COLUMN IF NOT EXISTS success_criteria TEXT")
+        )
+    if "quality_score" not in cols:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE ask_template ADD COLUMN IF NOT EXISTS "
+                "quality_score DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+
+
+def _ensure_skill_memory_columns(sync_conn) -> None:
+    """蓝图 P1-③/④：已有表补技能记忆与问数轨迹列（create_all 不改旧表）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    is_sqlite = str(sync_conn.engine.url).startswith("sqlite")
+
+    def add(table: str, col: str, sqlite_def: str, pg_def: str) -> None:
+        if not inspector.has_table(table):
+            return
+        cols = {c["name"] for c in inspector.get_columns(table)}
+        if col in cols:
+            return
+        if is_sqlite:
+            sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {sqlite_def}"))
+        else:
+            sync_conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {pg_def}"
+            ))
+
+    add("ask_example", "skill_id", "VARCHAR(36)", "VARCHAR(36)")
+    add("ask_trace", "skill_id", "VARCHAR(36)", "VARCHAR(36)")
+    add("ask_trace", "skill_version", "VARCHAR(16)", "VARCHAR(16)")
+    add("ask_trace", "steps_profile", "JSON", "JSONB")
+    if not is_sqlite:
+        sync_conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_ask_example_skill_id ON ask_example (skill_id)"
+        ))
+        sync_conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_ask_trace_skill_id ON ask_trace (skill_id)"
+        ))
+
+
+def _ensure_ask_trace_entities(sync_conn) -> None:
+    """ask_trace 新增实体归一列（门店/维度值解析结果，create_all 不加列）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("ask_trace"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("ask_trace")}
+    if "entities" in cols:
+        return
+    if str(sync_conn.engine.url).startswith("sqlite"):
+        sync_conn.execute(text("ALTER TABLE ask_trace ADD COLUMN entities JSON"))
+    else:
+        sync_conn.execute(text("ALTER TABLE ask_trace ADD COLUMN IF NOT EXISTS entities JSONB"))
+
+
+def _ensure_wecom_reply_template(sync_conn) -> None:
+    """企微智能体绑定新增回答模板列（create_all 不会给已有表加列）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("wecom_agent_bindings"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("wecom_agent_bindings")}
+    if "reply_template" in cols:
+        return
+    sync_conn.execute(text("ALTER TABLE wecom_agent_bindings ADD COLUMN reply_template TEXT"))
 
 
 def _ensure_system_settings_table(sync_conn) -> None:
@@ -471,20 +566,26 @@ async def seed_default_models(session) -> None:
 
     catalog.update(byd_catalog_entries())
 
-    ollama_models = [
-        ("qwen3.8-flash", 131072, "Qwen3.8 Flash via LiteLLM"),
-        ("deepseek-chat", 131072, "DeepSeek Chat via LiteLLM"),
+    # ── LiteLLM 网关千问模型（统一入口：backend → LiteLLM → MaaS）──
+    from app.core.data_ask.credentials import encrypt_secret as _encrypt_secret
+    import os as _os
+    _litellm_base = _os.environ.get("LITELLM_BASE_URL") or "http://litellm:4000/v1"
+    _litellm_key = _os.environ.get("LITELLM_MASTER_KEY") or "sk-litellm-master-a8f3e2b1c9"
+    litellm_models = [
+        ("qwen-max", 32768, "Qwen Max via LiteLLM", True),
+        ("qwen-plus", 131072, "Qwen Plus via LiteLLM", False),
     ]
-    for model_id, ctx, label in ollama_models:
-        catalog[("ollama", model_id)] = dict(
-            name=f"ollama/{model_id}",
-            provider="ollama",
-            model_id=model_id,
-            base_url=settings.OLLAMA_BASE_URL,
-            is_default=False,
+    for _mid, _ctx, _label, _def in litellm_models:
+        catalog[("openai", _mid)] = dict(
+            name=_mid,
+            provider="openai",
+            model_id=_mid,
+            base_url=_litellm_base,
+            api_key_encrypted="enc:" + _encrypt_secret(_litellm_key),
+            is_default=_def,
             is_active=True,
-            context_window=ctx,
-            config={"label": label, "inference": default_inference},
+            context_window=_ctx,
+            config={"label": _label, "inference": default_inference},
         )
 
     STALE_MODEL_IDS = {"llama3.2"}
@@ -634,6 +735,121 @@ async def seed_template_agents(session) -> None:
             metadata_=merge_agent_metadata_i18n({"template": "seed"}, i18n) if i18n else {},
         ))
 
+    await session.commit()
+
+
+async def seed_runbooks(session) -> None:
+    """分析套餐（runbook）内置配置：场景 → 角色编队 → 步骤。幂等：按 slug 去重。"""
+    from sqlalchemy import select
+
+    from app.db.models import DsRunbook
+
+    runbooks = [
+        dict(
+            slug="retail-daily-inspection",
+            name="经营分析日巡检",
+            description="每日经营数据巡检：先核对指标取数，再做异常归因，最后输出可执行结论。",
+            roster=[
+                {"step": 1, "role": "数据工程师", "agent_slug": "engineering-data-engineer",
+                 "output": "当日指标取数结果与行数/口径校验"},
+                {"step": 2, "role": "数据库优化师", "agent_slug": "engineering-database-optimizer",
+                 "output": "核对字段、过滤条件与聚合方式，给出可复算口径"},
+                {"step": 3, "role": "数据分析专家", "agent_slug": None,
+                 "output": "异常门店/品类定位与归因分析"},
+                {"step": 4, "role": "多智能体架构师", "agent_slug": "engineering-multi-agent-systems-architect",
+                 "output": "汇总结论与后续动作，标注数据来源与行数"},
+            ],
+            trigger={"kind": "daily", "cron": "09:00", "scene": "经营分析"},
+        ),
+        dict(
+            slug="store-anomaly-drilldown",
+            name="门店异常下钻",
+            description="销售异常门店下钻：定位异常 → 拆维度 → 生成核查 SQL → 输出结论。",
+            roster=[
+                {"step": 1, "role": "数据分析专家", "agent_slug": None,
+                 "output": "按门店/日/品类定位异常点及幅度"},
+                {"step": 2, "role": "数据工程师", "agent_slug": "engineering-data-engineer",
+                 "output": "生成可复核的核查 SQL 与取数结果"},
+                {"step": 3, "role": "提示词工程师", "agent_slug": "engineering-prompt-engineer",
+                 "output": "把归因结论整理成可直接执行的业务动作"},
+            ],
+            trigger={"kind": "event", "scene": "门店销售异常"},
+        ),
+        dict(
+            slug="metric-caliber-audit",
+            name="指标口径核验",
+            description="指标口径核验：定义 → 取数核对 → 差异说明 → 口径确认，避免同名不同义。",
+            roster=[
+                {"step": 1, "role": "数据库优化师", "agent_slug": "engineering-database-optimizer",
+                 "output": "列出指标的字段来源、过滤条件与聚合规则"},
+                {"step": 2, "role": "数据工程师", "agent_slug": "engineering-data-engineer",
+                 "output": "按口径实取一遍，记录行数与关键值"},
+                {"step": 3, "role": "SRE", "agent_slug": "engineering-sre",
+                 "output": "差异定位与风险提示（口径漂移/数据延迟）"},
+            ],
+            trigger={"kind": "manual", "scene": "口径评审"},
+        ),
+    ]
+
+    existing = set(
+        (await session.execute(select(DsRunbook.slug))).scalars().all()
+    )
+    for item in runbooks:
+        if item["slug"] in existing:
+            continue
+        session.add(DsRunbook(
+            id=generate_uuid(),
+            data_source_id=None,
+            slug=item["slug"],
+            name=item["name"],
+            description=item["description"],
+            roster=item["roster"],
+            trigger=item["trigger"],
+            status="active",
+            source="seed",
+        ))
+    await session.commit()
+
+
+async def seed_analysis_operators(session) -> None:
+    """蓝图 P1-①：内置分析算子落 tool_definitions（前台工具中心目录）。
+
+    幂等 upsert：按 name 判重，存在则刷新描述/Schema/配置，不动 id。
+    实际执行走 app.core.data_ask.analysis.operators.run_operator（治理链内嵌）。
+    """
+    from sqlalchemy import select
+
+    from app.core.data_ask.analysis.operators import OPERATORS
+    from app.db.models import ToolDefinition
+
+    for spec in OPERATORS.values():
+        result = await session.execute(
+            select(ToolDefinition).where(ToolDefinition.name == spec.name).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        config = {
+            "handler": "app.core.data_ask.analysis.operators:run_operator",
+            "operator": spec.name,
+            "display_name": spec.display_name,
+        }
+        if row:
+            row.description = spec.description
+            row.category = "analysis"
+            row.parameters_schema = spec.parameters_schema
+            row.implementation_type = "builtin"
+            row.config = config
+            row.is_active = True
+        else:
+            session.add(ToolDefinition(
+                id=generate_uuid(),
+                name=spec.name,
+                description=spec.description,
+                category="analysis",
+                parameters_schema=spec.parameters_schema,
+                implementation_type="builtin",
+                config=config,
+                is_active=True,
+            ))
     await session.commit()
 
 

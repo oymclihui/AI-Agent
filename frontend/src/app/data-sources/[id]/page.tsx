@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Copy, FileSpreadsheet, MessageSquare, Pencil, Play, RefreshCw, Save, Search, Star, ThumbsDown, ThumbsUp, Trash2, Upload, Wand2 } from "lucide-react";
 import toast from "react-hot-toast";
-import { dataAskApi, dataSourcesApi, excelParserApi } from "@/lib/api";
+import { dataAskApi, dataSourcesApi, excelParserApi, skillsApi } from "@/lib/api";
 import { ChartRenderer, type ChatChartData } from "@/components/ChartRenderer";
 import { useLangStore } from "@/lib/langStore";
 import { useClientAuth } from "@/hooks/useClientAuth";
@@ -76,9 +76,28 @@ interface GrantRow {
   can_manage: boolean;
 }
 
+interface RelationPair {
+  from_column: string;
+  to_column: string;
+}
+
+interface RelationDraft {
+  from_table: string;
+  to_table: string;
+  pairs: RelationPair[];
+}
+
 interface GraphData {
   nodes: { id: string; label: string }[];
-  edges: { from: string; to: string; label: string; kind?: string }[];
+  edges: {
+    from: string;
+    to: string;
+    label: string;
+    kind?: string;
+    from_column?: string;
+    to_column?: string;
+    pairs?: RelationPair[];
+  }[];
   related?: { from: string; to: string; label: string; kind?: string }[];
   keys?: string[];
 }
@@ -162,7 +181,10 @@ export default function DataSourceDetailPage() {
     clarification?: string;
     files_released?: boolean;
     trace_id?: number | null;
+    skill_used?: { skill_id?: string; display_name?: string; version?: number } | null;
   } | null>(null);
+  const [askSkillId, setAskSkillId] = useState("");
+  const [analysisSkills, setAnalysisSkills] = useState<{ id: string; display_name: string }[]>([]);
   const [fbState, setFbState] = useState<{ traceId: number; type: string } | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionSql, setCorrectionSql] = useState("");
@@ -208,7 +230,7 @@ export default function DataSourceDetailPage() {
   const [editForm, setEditForm] = useState<EditForm | null>(null);
   // ER 图关系编辑
   const [editingRelations, setEditingRelations] = useState(false);
-  const [relations, setRelations] = useState<Array<{ from_table: string; from_column: string; to_table: string; to_column: string }>>([]);
+  const [relations, setRelations] = useState<RelationDraft[]>([]);
   const [savingRelations, setSavingRelations] = useState(false);
 
   const loadTemplateStatus = useCallback(() => {
@@ -306,6 +328,10 @@ export default function DataSourceDetailPage() {
       void dataSourcesApi.recommendedQuestions(id).then(({ data }) => {
         setSuggestions((data as { questions?: string[] }).questions || []);
       }).catch(() => setSuggestions([]));
+      void skillsApi.list(undefined, "analysis").then(({ data }) => {
+        const rows = Array.isArray(data) ? data as { id: string; display_name: string }[] : [];
+        setAnalysisSkills(rows.map((row) => ({ id: row.id, display_name: row.display_name })));
+      }).catch(() => setAnalysisSkills([]));
     }
   }, [tab, loadAudit, loadDrift, loadExcelFiles, loadGrants, ds?.can_manage, id]);
 
@@ -317,14 +343,19 @@ export default function DataSourceDetailPage() {
         data_source_id: id,
         question: question.trim(),
         execute: false,
+        ...(askSkillId ? { skill_id: askSkillId } : {}),
       });
-      const payload = data as { sql?: string; display_sql?: string; explanation?: string; answer?: string; clarification?: string };
+      const payload = data as {
+        sql?: string; display_sql?: string; explanation?: string; answer?: string; clarification?: string;
+        skill_used?: { skill_id?: string; display_name?: string; version?: number } | null;
+      };
       setEditSql(payload.display_sql || payload.sql || "");
       setAskResult({
         explanation: payload.explanation,
         sql: payload.sql,
         answer: payload.clarification ? "" : payload.answer,
         clarification: payload.clarification,
+        skill_used: payload.skill_used,
       });
       toast.success(payload.clarification
         ? t("需要补充问题", "Need a more specific question")
@@ -345,6 +376,7 @@ export default function DataSourceDetailPage() {
         question: question.trim() || t("执行 SQL", "Run SQL"),
         sql_override: editSql.trim(),
         execute: true,
+        ...(askSkillId ? { skill_id: askSkillId } : {}),
       });
       setAskResult(data as typeof askResult);
       if ((data as { files_released?: boolean }).files_released) {
@@ -660,14 +692,15 @@ export default function DataSourceDetailPage() {
 
   // ── ER 图关系编辑 ──
   const startEditRelations = () => {
-    const init = (graph?.edges || [])
+    const init: RelationDraft[] = (graph?.edges || [])
       .filter((e) => e.from && e.to)
-      .map((e) => ({
-        from_table: e.from,
-        from_column: (e as { from_column?: string }).from_column || e.label || "",
-        to_table: e.to,
-        to_column: (e as { to_column?: string }).to_column || e.label || "",
-      }));
+      .map((e) => {
+        const pairs = (e.pairs?.length
+          ? e.pairs
+          : [{ from_column: e.from_column || e.label || "", to_column: e.to_column || e.label || "" }]
+        ).map((p) => ({ from_column: p.from_column, to_column: p.to_column }));
+        return { from_table: e.from, to_table: e.to, pairs };
+      });
     setRelations(init);
     setEditingRelations(true);
   };
@@ -680,26 +713,63 @@ export default function DataSourceDetailPage() {
   const addRelation = () => {
     const first = dataTables[0]?.table_name || "";
     const second = dataTables[1]?.table_name || first;
-    setRelations([...relations, { from_table: first, from_column: "", to_table: second, to_column: "" }]);
+    setRelations([...relations, {
+      from_table: first,
+      to_table: second,
+      pairs: [{ from_column: "", to_column: "" }],
+    }]);
   };
 
   const removeRelation = (idx: number) => {
     setRelations(relations.filter((_, i) => i !== idx));
   };
 
-  const updateRelation = (idx: number, patch: Partial<{ from_table: string; from_column: string; to_table: string; to_column: string }>) => {
-    setRelations(relations.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  const updateRelation = (idx: number, patch: Partial<Pick<RelationDraft, "from_table" | "to_table">>) => {
+    setRelations(relations.map((r, i) => {
+      if (i !== idx) return r;
+      if (patch.from_table !== undefined) {
+        // 换表后原来选的列不再适用，清空本端列
+        return { ...r, from_table: patch.from_table, pairs: r.pairs.map((p) => ({ ...p, from_column: "" })) };
+      }
+      if (patch.to_table !== undefined) {
+        return { ...r, to_table: patch.to_table, pairs: r.pairs.map((p) => ({ ...p, to_column: "" })) };
+      }
+      return r;
+    }));
+  };
+
+  const addRelationPair = (idx: number) => {
+    setRelations(relations.map((r, i) => (
+      i === idx ? { ...r, pairs: [...r.pairs, { from_column: "", to_column: "" }] } : r
+    )));
+  };
+
+  const removeRelationPair = (idx: number, pairIdx: number) => {
+    setRelations(relations.map((r, i) => (
+      i === idx ? { ...r, pairs: r.pairs.filter((_, j) => j !== pairIdx) } : r
+    )));
+  };
+
+  const updateRelationPair = (idx: number, pairIdx: number, patch: Partial<RelationPair>) => {
+    setRelations(relations.map((r, i) => (
+      i === idx ? { ...r, pairs: r.pairs.map((p, j) => (j === pairIdx ? { ...p, ...patch } : p)) } : r
+    )));
   };
 
   const saveRelations = async () => {
     if (!id) return;
     const cleaned = relations
-      .filter((r) => r.from_table && r.to_table && r.from_column && r.to_column)
-      .filter((r) => r.from_table !== r.to_table);
-    // 去重（A-B 与 B-A 视为同一条）
+      .filter((r) => r.from_table && r.to_table && r.from_table !== r.to_table)
+      .map((r) => ({ ...r, pairs: r.pairs.filter((p) => p.from_column && p.to_column) }))
+      .filter((r) => r.pairs.length > 0);
+    // 去重（A-B 与 B-A 视为同一条；复合键按字段对集合比较）
     const seen = new Set<string>();
     const deduped = cleaned.filter((r) => {
-      const key = [r.from_table, r.to_table].sort().join("|") + "|" + [r.from_column, r.to_column].sort().join("|");
+      const pairKey = r.pairs
+        .map((p) => `${p.from_column}=${p.to_column}`)
+        .sort()
+        .join(",");
+      const key = [r.from_table, r.to_table].sort().join("|") + "|" + pairKey;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1002,56 +1072,71 @@ export default function DataSourceDetailPage() {
               <div className="space-y-3">
                 <p className="text-xs theme-muted">
                   {t(
-                    "手动指定表之间的关联列。保存后问数将优先按你定义的关系生成 JOIN，不再依赖自动推断。",
-                    "Manually define join columns between tables. Saved relations take precedence over auto-detection when generating SQL.",
+                    "手动指定表之间的关联列，一条关系可加多个字段对（复合键，如 RQ + FDBH）。保存后问数将优先按你定义的关系生成 JOIN，不再依赖自动推断。",
+                    "Manually define join columns between tables. One relation can hold several column pairs (composite key, e.g. RQ + FDBH). Saved relations take precedence over auto-detection when generating SQL.",
                   )}
                 </p>
                 {relations.length === 0 && (
                   <p className="text-xs theme-muted italic">{t("暂无关系，点击「添加关系」开始。", "No relations yet. Click 'Add relation' to start.")}</p>
                 )}
                 {relations.map((r, idx) => (
-                  <div key={`rel-${idx}`} className="flex flex-wrap items-center gap-2 text-xs">
-                    <select
-                      value={r.from_table}
-                      onChange={(e) => updateRelation(idx, { from_table: e.target.value, from_column: "" })}
-                      className="theme-input rounded px-2 py-1"
-                    >
-                      {dataTables.map((t) => (
-                        <option key={t.table_name} value={t.table_name}>{t.table_name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={r.from_column}
-                      onChange={(e) => updateRelation(idx, { from_column: e.target.value })}
-                      className="theme-input rounded px-2 py-1"
-                    >
-                      <option value="">{t("选列", "col")}</option>
-                      {columnsOf(r.from_table).map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                    <span className="theme-muted">=</span>
-                    <select
-                      value={r.to_table}
-                      onChange={(e) => updateRelation(idx, { to_table: e.target.value, to_column: "" })}
-                      className="theme-input rounded px-2 py-1"
-                    >
-                      {dataTables.map((t) => (
-                        <option key={t.table_name} value={t.table_name}>{t.table_name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={r.to_column}
-                      onChange={(e) => updateRelation(idx, { to_column: e.target.value })}
-                      className="theme-input rounded px-2 py-1"
-                    >
-                      <option value="">{t("选列", "col")}</option>
-                      {columnsOf(r.to_table).map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={() => removeRelation(idx)} className="text-red-500 hover:text-red-600 text-xs">
-                      {t("删除", "Delete")}
+                  <div key={`rel-${idx}`} className="rounded-lg border theme-border p-2 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <select
+                        value={r.from_table}
+                        onChange={(e) => updateRelation(idx, { from_table: e.target.value })}
+                        className="theme-input rounded px-2 py-1"
+                      >
+                        {dataTables.map((t) => (
+                          <option key={t.table_name} value={t.table_name}>{t.table_name}</option>
+                        ))}
+                      </select>
+                      <span className="theme-muted">→</span>
+                      <select
+                        value={r.to_table}
+                        onChange={(e) => updateRelation(idx, { to_table: e.target.value })}
+                        className="theme-input rounded px-2 py-1"
+                      >
+                        {dataTables.map((t) => (
+                          <option key={t.table_name} value={t.table_name}>{t.table_name}</option>
+                        ))}
+                      </select>
+                      <button type="button" onClick={() => removeRelation(idx)} className="ml-auto text-red-500 hover:text-red-600 text-xs">
+                        {t("删除关系", "Delete relation")}
+                      </button>
+                    </div>
+                    {r.pairs.map((p, pairIdx) => (
+                      <div key={`pair-${pairIdx}`} className="flex flex-wrap items-center gap-2 text-xs pl-2">
+                        <select
+                          value={p.from_column}
+                          onChange={(e) => updateRelationPair(idx, pairIdx, { from_column: e.target.value })}
+                          className="theme-input rounded px-2 py-1"
+                        >
+                          <option value="">{t("选列", "col")}</option>
+                          {columnsOf(r.from_table).map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        <span className="theme-muted">=</span>
+                        <select
+                          value={p.to_column}
+                          onChange={(e) => updateRelationPair(idx, pairIdx, { to_column: e.target.value })}
+                          className="theme-input rounded px-2 py-1"
+                        >
+                          <option value="">{t("选列", "col")}</option>
+                          {columnsOf(r.to_table).map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        {r.pairs.length > 1 && (
+                          <button type="button" onClick={() => removeRelationPair(idx, pairIdx)} className="text-red-500 hover:text-red-600 text-xs">
+                            {t("删除字段", "Delete column")}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <button type="button" onClick={() => addRelationPair(idx)} className="text-blue-500 text-xs">
+                      + {t("添加关联字段（复合键）", "Add join column (composite key)")}
                     </button>
                   </div>
                 ))}
@@ -1181,6 +1266,30 @@ export default function DataSourceDetailPage() {
                 "临时分析模式：点击「执行」并成功返回结果后，服务器上的 Excel 将自动删除。下次分析需重新上传。",
                 "Ephemeral mode: Excel files are deleted from the server after a successful run. Re-upload for the next analysis.",
               )}
+            </p>
+          )}
+          <label className="flex flex-wrap items-center gap-2 text-xs theme-muted">
+            {t("分析技能", "Analysis skill")}
+            <select
+              className="input py-1 text-sm"
+              value={askSkillId}
+              onChange={(e) => setAskSkillId(e.target.value)}
+            >
+              <option value="">{t("自动匹配", "Auto")}</option>
+              <option value="none">{t("不使用技能", "No skill")}</option>
+              {analysisSkills.map((skill) => (
+                <option key={skill.id} value={skill.id}>{skill.display_name}</option>
+              ))}
+            </select>
+          </label>
+          {askResult && (
+            <p className="text-xs theme-muted">
+              {askResult.skill_used?.display_name
+                ? t(
+                  `命中技能：${askResult.skill_used.display_name} v${askResult.skill_used.version ?? ""}`,
+                  `Skill: ${askResult.skill_used.display_name} v${askResult.skill_used.version ?? ""}`,
+                )
+                : t("本次未使用分析技能", "No analysis skill used")}
             </p>
           )}
           <input
@@ -1324,9 +1433,30 @@ export default function DataSourceDetailPage() {
           </p>
           <textarea className="input w-full min-h-[320px] font-mono text-xs" value={mdlText} onChange={(e) => setMdlText(e.target.value)} readOnly={!ds.can_manage} />
           {ds.can_manage ? (
+            <div className="flex flex-wrap gap-2">
             <button disabled={savingMdl} onClick={onSaveMdl} className="btn-primary px-4 py-2 text-sm">
               {savingMdl ? "…" : t("保存", "Save")}
             </button>
+            <button type="button" className="btn-secondary px-4 py-2 text-sm" onClick={async () => {
+              const { data } = await dataSourcesApi.exportSemantic(id!);
+              const blob = new Blob([data.yaml || ""], { type: "text/yaml" });
+              const link = document.createElement("a");
+              link.href = URL.createObjectURL(blob);
+              link.download = "semantic-model.yaml";
+              link.click();
+            }}>{t("导出 YAML", "Export YAML")}</button>
+            <button type="button" className="btn-secondary px-4 py-2 text-sm" onClick={async () => {
+              const raw = window.prompt(t("粘贴语义模型 YAML", "Paste semantic model YAML"));
+              if (!raw || !id) return;
+              try {
+                await dataSourcesApi.importSemantic(id, raw);
+                toast.success(t("语义模型已导入", "Semantic model imported"));
+                load();
+              } catch (e: unknown) {
+                toast.error(String((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || t("导入失败", "Import failed")));
+              }
+            }}>{t("导入 YAML", "Import YAML")}</button>
+            </div>
           ) : (
             <p className="text-xs theme-muted">{t("仅管理员可编辑语义模型", "Only managers can edit the semantic model")}</p>
           )}

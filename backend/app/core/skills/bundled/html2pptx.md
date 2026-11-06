@@ -108,3 +108,19 @@ const html2pptx = require('./scripts/html2pptx.js'); // 来自 huashu-design 仓
 2. 用户要 PPTX → 本 skill：**按 4 约束重写/另存 editable 版**  
 3. 交付 slides/*.html + build.js + 导出说明  
 4. 验收：PPT 内文字可双击编辑
+
+## 案例
+
+### 案例 1：周报做成可改字的 PPT
+
+用户：把这份门店周报做成可以改字的 PPT，封面加三页：销售额、下滑门店、下周动作
+
+1. 每页单独一个 HTML，`body` 为 `960×540pt`。标题放进 `h1`，正文放进 `p`，背景用纯色，不要把文字直接写在 `div` 里。
+2. 同时调用 `create_presentation`，用同样的四页结构生成 `.pptx`，回复里带上 `download_url`。
+3. 若原稿有渐变，说明平台导出会改成纯色，并给出可编辑版。
+
+### 案例 2：导出报错
+
+用户：导出提示 unwrapped text in DIV
+
+把裸文字包进 `p` 或 `h1` 后再导出，不要改页面尺寸来绕过这条错误。

@@ -28,7 +28,7 @@ import time as _time
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth.deps import get_current_user
@@ -45,6 +45,7 @@ from app.db.models import (
     DataAskTrainTask,
     DataSource,
     DsBusinessRule,
+    DsRunbook,
     MemoryHitLog,
     User,
 )
@@ -58,6 +59,7 @@ from app.schemas.ds_distill import (
     MaterializeOut,
     RuleOut,
     RuleUpdateIn,
+    RunbookOut,
     ShadowCompareIn,
     TemplateOut,
     TemplateUpdateIn,
@@ -95,6 +97,18 @@ def _template_out(row: AskTemplate) -> TemplateOut:
         sample_questions=[str(q) for q in (row.sample_questions or [])],
         keywords=[str(k) for k in (row.keywords or [])],
         member_count=row.member_count or 0, hit_count=row.hit_count or 0,
+        status=row.status, source=row.source,
+        success_criteria=row.success_criteria,
+        quality_score=float(row.quality_score or 0),
+        created_at=row.created_at,
+    )
+
+
+def _runbook_out(row: DsRunbook) -> RunbookOut:
+    return RunbookOut(
+        id=row.id, data_source_id=row.data_source_id, slug=row.slug,
+        name=row.name, description=row.description,
+        roster=row.roster or [], trigger=row.trigger or {},
         status=row.status, source=row.source, created_at=row.created_at,
     )
 
@@ -213,6 +227,26 @@ async def list_templates(
         .order_by(AskTemplate.status.desc(), AskTemplate.member_count.desc())
     )
     return [_template_out(row) for row in res.scalars().all()]
+
+
+@router.get("/data-sources/{sid}/runbooks", response_model=list[RunbookOut])
+async def list_runbooks(
+    sid: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """分析套餐：全局配置 + 当前数据源专属配置（只读）。"""
+    source = await _get_source(db, sid)
+    await assert_data_source_access(db, source, user)
+    res = await db.execute(
+        select(DsRunbook)
+        .where(
+            DsRunbook.status == "active",
+            or_(DsRunbook.data_source_id.is_(None), DsRunbook.data_source_id == str(sid)),
+        )
+        .order_by(DsRunbook.created_at.asc())
+    )
+    return [_runbook_out(row) for row in res.scalars().all()]
 
 
 @router.post("/data-sources/{sid}/templates/mine", response_model=DistillOut)

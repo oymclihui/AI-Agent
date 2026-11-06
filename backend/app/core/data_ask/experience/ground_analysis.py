@@ -53,7 +53,12 @@ def result_numbers(rows: list[list[Any]] | None) -> set[str]:
             if isinstance(cell, (int, float)):
                 found.add(_canon(cell))
             # 同时按文本扫描：保证与 _clause_ok 用同一套正则、正负号一致。
-            for match in _NUMBER.findall(_unseparate(str(cell))):
+            text = _unseparate(str(cell)).strip()
+            if _DATE_TIME.fullmatch(text):
+                # 日期/时间单元格（2026-10-01、13:20）不是数据数字，
+                # 否则会把 2026、10、13 放行，分析文案里就能凭空写「低于13万元」。
+                continue
+            for match in _NUMBER.findall(text):
                 found.add(_canon(match))
     return found
 

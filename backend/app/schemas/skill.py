@@ -66,6 +66,10 @@ class SkillUpdate(BaseModel):
     tools_required: Optional[list[str]] = None
     knowledge_base_ids: Optional[list[str]] = None
     tags: Optional[list[str]] = None
+    metadata_: Optional[dict[str, Any]] = Field(default=None, alias="metadata")
+
+    class Config:
+        populate_by_name = True
 
 
 class SkillResponse(BaseModel):

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Plus, Bot, Trash2, Sparkles, PenLine, Loader2, RefreshCw,
-  Search, Layers, Share2, Copy,
+  Search, Layers, Share2, Copy, MessageSquare,
 } from "lucide-react";
 import { agentsApi, modelsApi, skillsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
@@ -50,6 +50,45 @@ interface ShareTargetUser { id: string; display_name: string; employee_no?: stri
 interface ShareTargetDepartment { id: string; name: string; path: string; }
 interface ShareGrant { grantee_type: "user" | "department"; grantee_id: string; permission: "use"; grantee_name?: string; }
 
+interface WecomBot {
+  bot_id: string;
+  bot_id_masked: string;
+  bot_name?: string;
+  secret_set: boolean;
+  enabled: boolean;
+  connection: { state: string; raw?: string };
+  binding: { id: string; name: string; enabled: boolean } | null;
+}
+
+interface WecomAgentState {
+  agent_id: string;
+  bound: boolean;
+  bot_id: string;
+  bot_id_masked: string;
+  enabled: boolean;
+  chat_ids: string[];
+  reply_template: string;
+  style?: Record<string, unknown>;
+  bot_configured: boolean;
+  bot_config_enabled: boolean;
+  receiver_chat_ids: string[];
+  connection: { state: string; raw?: string };
+}
+
+const WECOM_TEMPLATE_PRESETS: Record<string, string> = {
+  standard: "{结论}\n\n{分析}\n{建议}\n{行数}",
+  concise: "{结论}\n\n{行数}",
+  detail: "{分析}\n{行数}",
+};
+
+const inferWecomPreset = (template: string): string => {
+  const value = template.trim();
+  if (!value || value === WECOM_TEMPLATE_PRESETS.standard) return "standard";
+  if (value === WECOM_TEMPLATE_PRESETS.concise) return "concise";
+  if (value === WECOM_TEMPLATE_PRESETS.detail) return "detail";
+  return "custom";
+};
+
 export default function AgentsPage() {
   const router = useRouter();
   const { lang } = useLangStore();
@@ -82,6 +121,18 @@ export default function AgentsPage() {
   const [showNameEdit, setShowNameEdit] = useState<string | null>(null);
   const [nameEditValue, setNameEditValue] = useState("");
   const [savingName, setSavingName] = useState(false);
+  const [showWecom, setShowWecom] = useState<string | null>(null);
+  const [wecomState, setWecomState] = useState<WecomAgentState | null>(null);
+  const [wecomBots, setWecomBots] = useState<WecomBot[]>([]);
+  const [wecomConfigured, setWecomConfigured] = useState(false);
+  const [wecomEnabled, setWecomEnabled] = useState(false);
+  const [wecomLoading, setWecomLoading] = useState(false);
+  const [wecomSaving, setWecomSaving] = useState(false);
+  const [wecomTesting, setWecomTesting] = useState(false);
+  const [wecomTemplate, setWecomTemplate] = useState("");
+  const [wecomStyle, setWecomStyle] = useState<Record<string, unknown>>({});
+  const [wecomPreset, setWecomPreset] = useState("standard");
+  const [wecomConflict, setWecomConflict] = useState<{ name: string } | null>(null);
   const [mode, setMode] = useState<"nl" | "manual">("nl");
   const [nlText, setNlText] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -121,8 +172,17 @@ export default function AgentsPage() {
     } catch { /* optional */ }
   };
 
+  const loadWecomBots = async () => {
+    try {
+      const { data } = await agentsApi.wecomBots();
+      setWecomBots(data?.bots ?? []);
+      setWecomConfigured(!!data?.configured);
+    } catch { /* optional */ }
+  };
+
   useEffect(() => { setLoading(true); load(); loadModels(); }, [lang, listScope]);
   useEffect(() => { loadSkills(); }, [lang]);
+  useEffect(() => { void loadWecomBots(); }, []);
 
   const openCreate = () => {
     setMode("nl");
@@ -312,6 +372,131 @@ export default function AgentsPage() {
   };
 
   const skillName = (id: string) => skills.find((s) => s.id === id)?.display_name ?? id.slice(0, 8);
+
+  const wecomBoundAgentId = (agentId: string) =>
+    wecomBots.find((b) => b.binding?.id === agentId && b.binding?.enabled)?.binding?.id ?? "";
+
+  const openWecom = async (agentId: string) => {
+    setShowWecom(agentId);
+    setWecomState(null);
+    setWecomConflict(null);
+    setWecomLoading(true);
+    try {
+      const [{ data: state }] = await Promise.all([agentsApi.getWecom(agentId), loadWecomBots()]);
+      setWecomState(state);
+      setWecomEnabled(!!state.enabled);
+      const template = (state as WecomAgentState | null)?.reply_template ?? "";
+      setWecomTemplate(template);
+      setWecomPreset(inferWecomPreset(template));
+      setWecomStyle(((state as WecomAgentState | null)?.style as Record<string, unknown>) ?? {});
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      toast.error(
+        status === 403
+          ? (lang === "zh" ? "仅智能体所有者或管理员可配置企业微信" : "Only the owner or an admin can configure WeCom")
+          : (lang === "zh" ? "加载企业微信配置失败" : "Failed to load WeCom config"),
+      );
+      setShowWecom(null);
+    } finally {
+      setWecomLoading(false);
+    }
+  };
+
+  // 样式覆盖：留空（继承）时删除该键，只把用户明确选择的项提交给后端
+  const setOverride = (key: string, value: unknown) => {
+    setWecomStyle((prev) => {
+      const next = { ...prev };
+      if (value === "" || value === undefined || value === null || value === "inherit") {
+        delete next[key];
+      } else {
+        next[key] = value;
+      }
+      return next;
+    });
+  };
+
+  const saveWecom = async (force = false) => {
+    if (!showWecom) return;
+    const botId = wecomState?.bot_id || wecomBots[0]?.bot_id || "";
+    if (!botId) {
+      toast.error(a.wecomNone[lang]);
+      return;
+    }
+    setWecomSaving(true);
+    setWecomConflict(null);
+    try {
+      await agentsApi.saveWecom(showWecom, {
+        bot_id: botId,
+        enabled: wecomEnabled,
+        chat_ids: wecomState?.chat_ids ?? [],
+        reply_template: wecomTemplate.trim(),
+        style: wecomStyle,
+        force,
+      });
+      toast.success(
+        wecomEnabled
+          ? (lang === "zh" ? "已关联并启用" : "Linked and enabled")
+          : (lang === "zh" ? "已保存（当前未启用）" : "Saved (disabled)"),
+      );
+      setShowWecom(null);
+      void load();
+      void loadWecomBots();
+    } catch (err: unknown) {
+      const resp = (err as { response?: { status?: number; data?: { detail?: unknown } } })?.response;
+      const detail = resp?.data?.detail;
+      if (resp?.status === 409 && detail && typeof detail === "object") {
+        const payload = detail as { detail?: string; conflict_agent?: { name?: string } };
+        setWecomConflict({ name: payload.conflict_agent?.name ?? "" });
+        toast.error(payload.detail ?? a.wecomConflict[lang]);
+      } else {
+        toast.error(typeof detail === "string" ? detail : (lang === "zh" ? "保存失败" : "Save failed"));
+      }
+    } finally {
+      setWecomSaving(false);
+    }
+  };
+
+  const testWecom = async () => {
+    if (!showWecom) return;
+    setWecomTesting(true);
+    try {
+      const { data } = await agentsApi.testWecom(showWecom);
+      if (data?.ok) {
+        toast.success(a.wecomTestOk[lang]);
+      } else {
+        const errors = (data?.errors as Array<{ error?: string }> | undefined) ?? [];
+        toast.error(errors[0]?.error || data?.error || (lang === "zh" ? "测试消息发送失败" : "Test message failed"));
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : (lang === "zh" ? "测试失败" : "Test failed"));
+    } finally {
+      setWecomTesting(false);
+    }
+  };
+
+  const unbindWecom = async () => {
+    if (!showWecom) return;
+    if (!confirm(a.wecomUnbindConfirm[lang])) return;
+    try {
+      await agentsApi.deleteWecom(showWecom);
+      toast.success(lang === "zh" ? "已解除关联" : "Unlinked");
+      setShowWecom(null);
+      void load();
+      void loadWecomBots();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : (lang === "zh" ? "解除失败" : "Unlink failed"));
+    }
+  };
+  const wecomStatusLabel = () => {
+    const state = wecomState?.connection?.state;
+    if (!wecomState?.bot_config_enabled) return a.wecomDisabled[lang];
+    if (state === "online") return a.wecomOnline[lang];
+    if (state === "disabled") return a.wecomDisabled[lang];
+    return a.wecomOffline[lang];
+  };
+
 
   const filteredAgents = useMemo(() => {
     let list = [...agents];
@@ -556,6 +741,9 @@ export default function AgentsPage() {
                       ) : (
                         <span className="agents-badge agents-badge-beta">{visibilityLabel(agent.visibility)}</span>
                       )}
+                      {wecomBoundAgentId(agent.id) && (
+                        <span className="agents-badge agents-badge-chat">{a.wecom[lang]}</span>
+                      )}
                     </div>
                     <p className="agents-card-role">{agent.role}</p>
                   </div>
@@ -582,6 +770,16 @@ export default function AgentsPage() {
                         title={a.share[lang]}
                       >
                         <Share2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {(canEditAgent(agent) || !!user?.is_admin) && (
+                      <button
+                        type="button"
+                        onClick={() => void openWecom(agent.id)}
+                        className="agents-icon-btn"
+                        title={a.wecom[lang]}
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
                       </button>
                     )}
                     {canEditAgent(agent) && (
@@ -922,6 +1120,324 @@ export default function AgentsPage() {
             <div className="mt-6 flex justify-end gap-3">
               <button onClick={() => setShowSkillEdit(null)} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white">{c.cancel[lang]}</button>
               <button onClick={saveSkillEdit} disabled={savingSkills} className="rounded-lg bg-teal-600 px-4 py-2 text-sm text-white hover:bg-teal-700 disabled:opacity-40">{c.save[lang]}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showWecom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="theme-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+            <h2 className="mb-2 text-lg font-semibold theme-text">{a.wecomTitle[lang]}</h2>
+            <p className="mb-4 text-xs text-slate-500">{a.wecomHint[lang]}</p>
+
+            {wecomLoading ? (
+              <div className="flex items-center gap-2 py-6 text-sm text-slate-400">
+                <Loader2 className="h-4 w-4 animate-spin" /> {c.loading[lang]}
+              </div>
+            ) : !wecomConfigured ? (
+              <div className="space-y-4">
+                <p className="rounded-lg border border-[#2d2d4e] px-3 py-3 text-sm text-slate-300">{a.wecomNone[lang]}</p>
+                <Link
+                  href="/settings/integrations"
+                  onClick={() => setShowWecom(null)}
+                  className="block w-full rounded-lg bg-blue-600 py-2.5 text-center text-sm text-white hover:bg-blue-700"
+                >
+                  {a.wecomGoConfig[lang]}
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1 block text-xs text-slate-400">{a.wecomBot[lang]}</label>
+                  <div className="flex items-center justify-between rounded-lg border border-[#2d2d4e] px-3 py-2 text-sm text-white">
+                    <span>
+                      {wecomState?.bot_id_masked || wecomBots[0]?.bot_id_masked || ""}
+                      {wecomState?.bot_config_enabled ? "" : ` · ${a.wecomDisabled[lang]}`}
+                    </span>
+                    <span className={`text-xs ${wecomState?.connection?.state === "online" ? "text-emerald-400" : "text-amber-400"}`}>
+                      {wecomStatusLabel()}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {lang === "zh" ? "Bot 来自「设置 → 集成 → 企业微信」。" : "The bot comes from Settings → Integrations → WeCom."}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-[#2d2d4e] px-3 py-2">
+                    <span className="text-sm text-slate-200">{a.wecomEnable[lang]}</span>
+                    <input
+                      type="checkbox"
+                      checked={wecomEnabled}
+                      onChange={(e) => { setWecomEnabled(e.target.checked); setWecomConflict(null); }}
+                    />
+                  </label>
+                  <p className="mt-1 text-[11px] text-slate-500">{a.wecomEnableHint[lang]}</p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs text-slate-400">{a.wecomScope[lang]}</label>
+                  <div className="rounded-lg border border-[#2d2d4e] px-3 py-2 text-sm text-slate-300">{a.wecomScopeAll[lang]}</div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs text-slate-400">{a.wecomTemplate[lang]}</label>
+                  <select
+                    value={wecomPreset}
+                    onChange={(e) => {
+                      const preset = e.target.value;
+                      setWecomPreset(preset);
+                      if (preset !== "custom") setWecomTemplate(WECOM_TEMPLATE_PRESETS[preset] ?? "");
+                    }}
+                    className="w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                  >
+                    <option value="standard">{a.wecomTemplateStandard[lang]}</option>
+                    <option value="concise">{a.wecomTemplateConcise[lang]}</option>
+                    <option value="detail">{a.wecomTemplateDetail[lang]}</option>
+                    <option value="custom">{a.wecomTemplateCustom[lang]}</option>
+                  </select>
+                  <textarea
+                    value={wecomTemplate}
+                    onChange={(e) => {
+                      setWecomTemplate(e.target.value);
+                      setWecomPreset(inferWecomPreset(e.target.value));
+                    }}
+                    rows={6}
+                    maxLength={2000}
+                    spellCheck={false}
+                    placeholder={WECOM_TEMPLATE_PRESETS.standard}
+                    className="mt-2 w-full rounded-lg border border-[#2d2d4e] bg-transparent px-3 py-2 font-mono text-xs leading-5 text-slate-200"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">{a.wecomTemplateHint[lang]}</p>
+                  <p className="mt-1 font-mono text-[11px] text-slate-500">{a.wecomTemplatePlaceholders[lang]}</p>
+                </div>
+
+                <details className="rounded-lg border border-[#2d2d4e] bg-[#16162a]/60 px-3 py-2">
+                  <summary className="cursor-pointer select-none text-xs text-slate-300">
+                    {lang === "zh" ? "样式覆盖（不选则继承全局）" : "Style override (inherit global)"}
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "主题色" : "Theme"}
+                      <select
+                        value={(wecomStyle.theme as string) ?? ""}
+                        onChange={(e) => setOverride("theme", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="blue">{lang === "zh" ? "商务蓝" : "Business blue"}</option>
+                        <option value="green">{lang === "zh" ? "青绿" : "Green"}</option>
+                        <option value="purple">{lang === "zh" ? "紫罗兰" : "Purple"}</option>
+                        <option value="orange">{lang === "zh" ? "暖橙" : "Orange"}</option>
+                        <option value="dark">{lang === "zh" ? "石墨黑" : "Dark"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "字号" : "Font size"}
+                      <select
+                        value={(wecomStyle.font_size as string) ?? ""}
+                        onChange={(e) => setOverride("font_size", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="small">{lang === "zh" ? "小" : "Small"}</option>
+                        <option value="medium">{lang === "zh" ? "中" : "Medium"}</option>
+                        <option value="large">{lang === "zh" ? "大" : "Large"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "表格最大行数" : "Table max rows"}
+                      <input
+                        type="number" min={1} max={500}
+                        value={wecomStyle.table_max_rows === undefined ? "" : String(wecomStyle.table_max_rows)}
+                        onChange={(e) => setOverride("table_max_rows", e.target.value === "" ? "" : Number(e.target.value))}
+                        placeholder={lang === "zh" ? "继承全局" : "Inherit"}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      />
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "图表类型" : "Chart type"}
+                      <select
+                        value={(wecomStyle.chart_type as string) ?? ""}
+                        onChange={(e) => setOverride("chart_type", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="auto">{lang === "zh" ? "自动" : "Auto"}</option>
+                        <option value="bar">{lang === "zh" ? "柱状" : "Bar"}</option>
+                        <option value="barh">{lang === "zh" ? "条形" : "Horizontal"}</option>
+                        <option value="line">{lang === "zh" ? "折线" : "Line"}</option>
+                        <option value="area">{lang === "zh" ? "面积" : "Area"}</option>
+                        <option value="pie">{lang === "zh" ? "饼图" : "Pie"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "数字千分位" : "Thousands separator"}
+                      <select
+                        value={wecomStyle.show_thousands === undefined ? "" : wecomStyle.show_thousands ? "on" : "off"}
+                        onChange={(e) =>
+                          setOverride("show_thousands", e.target.value === "" ? "" : e.target.value === "on")
+                        }
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="on">{lang === "zh" ? "开" : "On"}</option>
+                        <option value="off">{lang === "zh" ? "关" : "Off"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "语音播报" : "Voice reply"}
+                      <select
+                        value={wecomStyle.voice_reply === undefined ? "" : wecomStyle.voice_reply ? "on" : "off"}
+                        onChange={(e) =>
+                          setOverride("voice_reply", e.target.value === "" ? "" : e.target.value === "on")
+                        }
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="on">{lang === "zh" ? "开" : "On"}</option>
+                        <option value="off">{lang === "zh" ? "关" : "Off"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "语音音色" : "Voice"}
+                      <select
+                        value={(wecomStyle.voice_name as string) ?? ""}
+                        onChange={(e) => setOverride("voice_name", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="zh-CN-XiaoxiaoNeural">{lang === "zh" ? "晓晓（女声·默认）" : "Xiaoxiao (F)"}</option>
+                        <option value="zh-CN-XiaoyiNeural">{lang === "zh" ? "晓伊（女声）" : "Xiaoyi (F)"}</option>
+                        <option value="zh-CN-YunxiNeural">{lang === "zh" ? "云希（男声）" : "Yunxi (M)"}</option>
+                        <option value="zh-CN-YunyangNeural">{lang === "zh" ? "云扬（男声）" : "Yunyang (M)"}</option>
+                        <option value="zh-CN-YunjianNeural">{lang === "zh" ? "云健（男声）" : "Yunjian (M)"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "语音最大字数" : "Voice max chars"}
+                      <input
+                        type="number" min={40} max={400}
+                        value={wecomStyle.voice_max_chars === undefined ? "" : String(wecomStyle.voice_max_chars)}
+                        onChange={(e) => setOverride("voice_max_chars", e.target.value === "" ? "" : Number(e.target.value))}
+                        placeholder={lang === "zh" ? "继承全局（默认 260）" : "Inherit (default 260)"}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      />
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "语速" : "Rate"}
+                      <select
+                        value={(wecomStyle.voice_rate as string) ?? ""}
+                        onChange={(e) => setOverride("voice_rate", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="-30%">{lang === "zh" ? "慢 30%" : "-30%"}</option>
+                        <option value="-10%">{lang === "zh" ? "慢 10%" : "-10%"}</option>
+                        <option value="+0%">{lang === "zh" ? "正常" : "+0%"}</option>
+                        <option value="+10%">{lang === "zh" ? "快 10%" : "+10%"}</option>
+                        <option value="+30%">{lang === "zh" ? "快 30%" : "+30%"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "音量" : "Volume"}
+                      <select
+                        value={(wecomStyle.voice_volume as string) ?? ""}
+                        onChange={(e) => setOverride("voice_volume", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="-30%">{lang === "zh" ? "低 30%" : "-30%"}</option>
+                        <option value="-10%">{lang === "zh" ? "低 10%" : "-10%"}</option>
+                        <option value="+0%">{lang === "zh" ? "正常" : "+0%"}</option>
+                        <option value="+10%">{lang === "zh" ? "高 10%" : "+10%"}</option>
+                        <option value="+30%">{lang === "zh" ? "高 30%" : "+30%"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "音调" : "Pitch"}
+                      <select
+                        value={(wecomStyle.voice_pitch as string) ?? ""}
+                        onChange={(e) => setOverride("voice_pitch", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      >
+                        <option value="">{lang === "zh" ? "继承全局" : "Inherit"}</option>
+                        <option value="-10Hz">{lang === "zh" ? "低 10Hz" : "-10Hz"}</option>
+                        <option value="-5Hz">{lang === "zh" ? "低 5Hz" : "-5Hz"}</option>
+                        <option value="+0Hz">{lang === "zh" ? "正常" : "+0Hz"}</option>
+                        <option value="+5Hz">{lang === "zh" ? "高 5Hz" : "+5Hz"}</option>
+                        <option value="+10Hz">{lang === "zh" ? "高 10Hz" : "+10Hz"}</option>
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "静音开始（整点）" : "Quiet from"}
+                      <input
+                        type="number" min={-1} max={23}
+                        value={wecomStyle.voice_quiet_from === undefined ? "" : String(wecomStyle.voice_quiet_from)}
+                        onChange={(e) => setOverride("voice_quiet_from", e.target.value === "" ? "" : Math.max(-1, Math.min(23, Number(e.target.value)) || 0))}
+                        placeholder={lang === "zh" ? "继承全局（-1 不启用）" : "Inherit (-1 off)"}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      />
+                    </label>
+                    <label className="text-[11px] text-slate-400">
+                      {lang === "zh" ? "静音结束（整点，可跨夜）" : "Quiet to"}
+                      <input
+                        type="number" min={-1} max={23}
+                        value={wecomStyle.voice_quiet_to === undefined ? "" : String(wecomStyle.voice_quiet_to)}
+                        onChange={(e) => setOverride("voice_quiet_to", e.target.value === "" ? "" : Math.max(-1, Math.min(23, Number(e.target.value)) || 0))}
+                        placeholder={lang === "zh" ? "继承全局" : "Inherit"}
+                        className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#16162a] px-3 py-2 text-sm text-white"
+                      />
+                    </label>
+                  </div>
+                </details>
+
+                {wecomConflict && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    {a.wecomConflict[lang]}
+                    {wecomConflict.name ? `（${wecomConflict.name}）` : ""}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {wecomState?.bound && (
+                    <button
+                      type="button"
+                      onClick={() => void unbindWecom()}
+                      className="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10"
+                    >
+                      {a.wecomUnbind[lang]}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void testWecom()}
+                    disabled={wecomTesting || !wecomState?.bound}
+                    className="rounded-lg border border-[#2d2d4e] px-3 py-1.5 text-xs text-slate-200 hover:border-blue-500 disabled:opacity-40"
+                  >
+                    {wecomTesting ? <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> : null}
+                    {a.wecomTest[lang]}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setShowWecom(null)}
+                className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white"
+              >
+                {c.cancel[lang]}
+              </button>
+              {wecomConfigured && (
+                <button
+                  onClick={() => void saveWecom(!!wecomConflict)}
+                  disabled={wecomSaving || wecomLoading}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-40"
+                >
+                  {wecomConflict ? (lang === "zh" ? "确认改绑并保存" : "Rebind and save") : c.save[lang]}
+                </button>
+              )}
             </div>
           </div>
         </div>

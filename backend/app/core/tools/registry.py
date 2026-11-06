@@ -30,6 +30,7 @@ class ToolRegistry:
         from app.core.tools.builtin.http_request import HttpRequestTool
         from app.core.tools.builtin.datetime_tool import DatetimeTool
         from app.core.tools.builtin.create_presentation import CreatePresentationTool
+        from app.core.tools.builtin.create_html import CreateHtmlTool
         from app.core.tools.builtin.fetch_mail import FetchMailTool
         from app.core.tools.builtin.desktop_automation import (
             DesktopListDemosTool,
@@ -37,6 +38,8 @@ class ToolRegistry:
             DesktopCaptureTool,
         )
         from app.core.tools.builtin.batch_parse_excel import BatchParseExcelTool
+        from app.core.tools.builtin.ui_render import UiRenderTool, UiPatchTool
+        from app.core.tools.builtin.analysis_ops import AnalysisOperatorTool
 
         builtins = [
             WebSearchTool,
@@ -44,11 +47,15 @@ class ToolRegistry:
             HttpRequestTool,
             DatetimeTool,
             CreatePresentationTool,
+            CreateHtmlTool,
             FetchMailTool,
             DesktopListDemosTool,
             DesktopReplayTool,
             DesktopCaptureTool,
             BatchParseExcelTool,
+            UiRenderTool,
+            UiPatchTool,
+            AnalysisOperatorTool,
         ]
         for tool in builtins:
             self.register(tool)

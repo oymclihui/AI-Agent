@@ -4,6 +4,37 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Zap, Globe, Calculator, Link2, Clock, Search, MousePointer2 } from "lucide-react";
 import { toolsApi } from "@/lib/api";
+import toast from "react-hot-toast";
+
+function HttpOperatorBox() {
+  const { lang } = useLangStore();
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [description, setDescription] = useState("");
+  const save = async () => {
+    try {
+      await toolsApi.createHttpOperator({ name, url, description, method: "POST" });
+      toast.success(lang === "zh" ? "HTTP 算子已登记" : "HTTP operator saved");
+      setName("");
+      setUrl("");
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || (lang === "zh" ? "登记失败" : "Save failed"));
+    }
+  };
+  return (
+    <section className="mb-4 rounded-xl border theme-border theme-surface p-4">
+      <h2 className="mb-2 text-sm font-medium">{lang === "zh" ? "自定义 HTTP 分析算子" : "Custom HTTP operator"}</h2>
+      <div className="grid gap-2 md:grid-cols-3">
+        <input className="input text-sm" placeholder={lang === "zh" ? "名称，如 store_kpi" : "name"} value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="input text-sm" placeholder="https://example.com/facts" value={url} onChange={(e) => setUrl(e.target.value)} />
+        <input className="input text-sm" placeholder={lang === "zh" ? "用途" : "description"} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </div>
+      <button type="button" onClick={save} className="btn-primary mt-2 px-3 py-1 text-sm">{lang === "zh" ? "登记" : "Save"}</button>
+    </section>
+  );
+}
+
 import { useLangStore } from "@/lib/langStore";
 import { translations } from "@/lib/i18n";
 import { agentAvatarTone } from "@/lib/agentCatalog";
@@ -77,6 +108,7 @@ export default function ToolsPage() {
   const chatT = translations.chat;
 
   const [tools, setTools] = useState<Tool[]>([]);
+  const [operators, setOperators] = useState<{ name: string; display_name?: string; description: string; parameters_schema?: { properties?: Record<string, { description?: string }> } }[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<ToolCategory>("all");
@@ -86,6 +118,9 @@ export default function ToolsPage() {
       .then(({ data }) => setTools(data))
       .catch(() => {})
       .finally(() => setLoading(false));
+    toolsApi.analysis()
+      .then(({ data }) => setOperators(Array.isArray(data) ? data : []))
+      .catch(() => setOperators([]));
   }, []);
 
   const filteredTools = useMemo(() => {
@@ -119,6 +154,7 @@ export default function ToolsPage() {
 
   return (
     <div className="agents-hub">
+      <HttpOperatorBox />
       <div className="agents-hub-header">
         <div>
           <h1>{t.title[lang]}</h1>
@@ -236,6 +272,36 @@ export default function ToolsPage() {
             );
           })}
         </div>
+      )}
+
+      {operators.length > 0 && (
+        <section className="hub-section mb-6">
+          <h2 className="mb-3 text-sm font-medium theme-text">{lang === "zh" ? "分析算子" : "Analysis operators"}</h2>
+          <div className="agents-grid">
+            {operators.map((op) => (
+              <article key={op.name} className="agents-card">
+                <div className="agents-card-top">
+                  <div className={`agents-avatar ${agentAvatarTone(op.name)}`} aria-hidden>
+                    <Zap className="h-4 w-4" />
+                  </div>
+                  <div className="agents-card-head">
+                    <div className="agents-card-title-row">
+                      <h3 title={op.display_name || op.name}>{op.display_name || op.name}</h3>
+                      <span className="agents-badge">{lang === "zh" ? "只读" : "Read-only"}</span>
+                    </div>
+                    <p className="agents-card-role font-mono">{op.name}</p>
+                  </div>
+                </div>
+                <p className="agents-card-desc">{op.description}</p>
+                <div className="agents-card-tags">
+                  {Object.keys(op.parameters_schema?.properties || {}).map((key) => (
+                    <span key={key} className="agents-tag" title={op.parameters_schema?.properties?.[key]?.description}>{key}</span>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       )}
 
       <section className="hub-section">

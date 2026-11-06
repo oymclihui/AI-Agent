@@ -268,6 +268,7 @@ async def _run_data_ask_task(
             user=owner,
             llm_provider=None,
             llm_model=None,
+            employee_id=employee.id,
         )
         snapshot_lines = [
             f"Columns: {', '.join(qr['columns'])}",
@@ -280,6 +281,16 @@ async def _run_data_ask_task(
     agent_model = await _resolve_agent(db, employee)
     if not agent_model:
         raise ValueError(f"Agent not found: {employee.agent_id}")
+    # 蓝图 P0：定时报告也走员工绑定的分析技能（方法论/结论风格），异常兜底 None
+    employee_skill = None
+    try:
+        from app.core.data_ask.skills_router import match_analysis_skill
+
+        employee_skill = await match_analysis_skill(
+            db, question=filled_prompt, employee_id=employee.id,
+        )
+    except Exception:
+        employee_skill = None
     report_body = await analyze_results(
         db,
         question=filled_prompt,
@@ -288,6 +299,7 @@ async def _run_data_ask_task(
         rows=qr.get("rows") or [],
         llm_provider=agent_model.llm_provider,
         llm_model=agent_model.llm_model,
+        skill_style=employee_skill,
     )
     duration_ms = int((time.monotonic() - start) * 1000)
     report_name = run_report_filename(run, task)

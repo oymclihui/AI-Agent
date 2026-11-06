@@ -14,6 +14,7 @@ import asyncio
 import functools
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -47,13 +48,16 @@ def merge_examples(primary: list[dict], secondary: list[dict], limit: int = 4) -
             continue
         seen.add(key)
         ref_id = str(item.get("ref_id") or item.get("example_id") or "")
+        ref_type = item.get("ref_type")
+        if not ref_type and ref_id:
+            ref_type = "example" if item.get("example_id") else "golden"
         out.append(
             {
                 "question": question,
                 "sql": str(item.get("sql") or ""),
                 "score": float(item.get("score") or 0),
                 "ref_id": ref_id or None,
-                "ref_type": ("example" if item.get("example_id") else "golden") if ref_id else None,
+                "ref_type": ref_type or None,
             }
         )
         if len(out) >= limit:
@@ -69,8 +73,11 @@ async def gather_memory_examples(
     top_k: int = 3,
     min_score: float | None = None,
     strong_score: float | None = None,
+    skill_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """golden queries（词面相似）+ 蒸馏示例库（向量相似）合并，供 nl2sql few-shot 注入。
+
+    skill_id 非空时，该技能的专属示例排在金标之前（不足 top_k 再回落全源金标）。
 
     min_score：P0-C 记忆先验分档阈值（None=query_memory 默认 0.35）。
     strong_score：P1-C 相似度分档阈值（归一化刻度，None=不标注）。非空时为每条
@@ -85,6 +92,18 @@ async def gather_memory_examples(
     base = await retrieve_similar_queries(
         db, data_source_id=data_source_id, question=question, top_k=top_k, **kwargs
     )
+    if skill_id:
+        try:
+            from app.core.data_ask.skill_memory import retrieve_skill_examples
+
+            skill_hits = await retrieve_skill_examples(
+                db, skill_id=skill_id, question=question,
+                data_source_id=data_source_id, top_k=top_k,
+                min_score=float(min_score) if min_score is not None else 0.35,
+            )
+            base = list(skill_hits) + list(base)
+        except Exception as exc:
+            logger.warning("gather_skill_memory_failed skill=%s err=%s", skill_id, str(exc)[:150])
     distilled: list[dict[str, Any]] = []
     try:
         distilled = await asyncio.to_thread(
@@ -98,7 +117,9 @@ async def gather_memory_examples(
     except Exception as exc:
         logger.warning("gather_distilled_failed ds=%s err=%s", data_source_id, str(exc)[:150])
     strong = [d for d in distilled if float(d.get("score") or 0) >= SCORE_FLOOR]
-    merged = merge_examples(strong, base, limit=max(top_k, 4))
+    # 金标在前：同一问题去重时保留金标（反馈时同步写入，纠正后立即生效），
+    # 蒸馏示例由 Celery 异步产出，可能短暂滞后于最新纠正。
+    merged = merge_examples(base, strong, limit=max(top_k, 4))
     if strong_score is not None:
         from app.core.data_ask.intelligence.query_memory import normalized_score
 
@@ -117,7 +138,7 @@ async def distill_examples(db: AsyncSession, *, data_source_id: str) -> dict[str
     fb_res = await db.execute(
         select(AskFeedback)
         .where(AskFeedback.data_source_id == str(data_source_id))
-        .order_by(AskFeedback.id.desc())
+        .order_by(AskFeedback.id.asc())
         .limit(500)
     )
     feedbacks = list(fb_res.scalars().all())
@@ -128,9 +149,29 @@ async def distill_examples(db: AsyncSession, *, data_source_id: str) -> dict[str
         select(AskExample).where(AskExample.data_source_id == str(data_source_id)).limit(1000)
     )
     existing = list(ex_res.scalars().all())
-    key_map: dict[tuple[str, str], AskExample] = {
-        (_compact(e.question), str(e.kind)): e for e in existing
-    }
+
+    # 同一问题+类型只保留最新一行：旧反馈按时间顺序回放时，"最新纠正"必须最终生效，
+    # 历史同 key 行一律停用并从向量库删除，避免旧 SQL 以高分示例抢占 prompt。
+    def _ts(row: AskExample):
+        return row.updated_at or row.created_at or datetime.min.replace(tzinfo=timezone.utc)
+
+    keep: dict[tuple[str, str], AskExample] = {}
+    for row in sorted(existing, key=_ts):
+        keep[(_compact(row.question), str(row.kind))] = row
+    for row in existing:
+        key = (_compact(row.question), str(row.kind))
+        if row is keep.get(key):
+            continue
+        if row.active:
+            row.active = False
+            await asyncio.to_thread(
+                functools.partial(
+                    vector_index.delete_example,
+                    data_source_id=str(data_source_id),
+                    example_id=str(row.id),
+                )
+            )
+    key_map: dict[tuple[str, str], AskExample] = dict(keep)
 
     candidates: list[dict[str, Any]] = []
 
@@ -170,6 +211,9 @@ async def distill_examples(db: AsyncSession, *, data_source_id: str) -> dict[str
         key = (_compact(cand["question"]), cand["kind"])
         row = key_map.get(key)
         if row is not None:
+            # 低质量信号（like/example=0.8~0.9）不得覆盖高质量信号（correction=0.95）
+            if float(cand["quality"]) < float(row.quality or 0):
+                continue
             row.sql_text = cand["sql"]
             row.quality = max(float(row.quality or 0), cand["quality"])
             row.trace_id = cand["trace_id"] or row.trace_id

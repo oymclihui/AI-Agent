@@ -170,12 +170,138 @@ def _and_where(select, predicate) -> None:
 
 
 def permission_config_from_rules(rules: dict[str, Any] | None) -> dict[str, str]:
+    """读取行级权限列配置。
+
+    不做 country_code/user_id 之类的默认值兜底：历史上这些默认值被直接拼进
+    SQL，新数据源（真实列是 RYID/FDBH 等）一问数就报「未知列」。
+    未配置时留空，交给 resolve_permission_columns 按真实列自动推断；
+    推断不出来就显式报错，绝不生成非法 SQL 或退化为不加过滤。
+    """
     rules = rules or {}
     return {
-        "user_column": str(rules.get("user_column") or "user_id"),
-        "scope_column": str(rules.get("scope_column") or "country_code"),
-        "data_column": str(rules.get("data_column") or "country_code"),
+        "user_column": str(rules.get("user_column") or "").strip(),
+        "scope_column": str(rules.get("scope_column") or "").strip(),
+        "data_column": str(rules.get("data_column") or "").strip(),
     }
+
+
+_PERM_USER_CANDIDATES = ("RYID", "YGID", "EMPLOYEE_NO", "EMP_NO", "USER_ID", "USERID", "工号")
+_PERM_SCOPE_CANDIDATES = ("FDBH", "FDMC", "ORG_ID", "ORGID", "STORE_ID", "门店编号", "门店")
+
+
+async def read_table_columns(source: Any, table_name: str) -> set[str]:
+    """读取一张表的列名集合（UPPER）。
+
+    不能用 `SELECT * ... LIMIT 0`：多数驱动在零行时拿不到列描述（Doris/MySQL 实测
+    返回空列名），会被误判成「读不到列」。这里改用 information_schema / DESC，
+    最后才用 LIMIT 1 兜底。
+    """
+    table = str(table_name or "").strip()
+    if not table:
+        return set()
+    driver = str(getattr(source, "driver", "") or "").lower()
+    bare = table.split(".")[-1]
+    from app.core.data_ask.connectors.factory import build_connector_from_source
+
+    if driver in ("mysql", "doris", "starrocks", "hive"):
+        probes: list[tuple[str, str]] = [
+            (f"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{bare}'", "first_col")
+        ]
+    else:
+        probes = [
+            (f"SELECT column_name FROM information_schema.columns WHERE table_name = '{bare}'", "first_col")
+        ]
+    probes.append((f"DESC {table}", "first_col"))
+    probes.append((f"SELECT * FROM {table} LIMIT 1", "columns"))
+
+    try:
+        conn = build_connector_from_source(source)
+    except Exception:
+        return set()
+    try:
+        for sql, mode in probes:
+            try:
+                qr = await conn.execute_select(sql, limit=200)
+            except Exception:
+                continue
+            names: set[str] = set()
+            if mode == "first_col":
+                for row in qr.rows or []:
+                    cells = list(row or [])
+                    if cells and cells[0]:
+                        names.add(str(cells[0]).upper())
+            else:
+                for column in qr.columns or []:
+                    raw = column.get("name") if isinstance(column, dict) else column
+                    if raw:
+                        names.add(str(raw).upper())
+            if names:
+                return names
+    finally:
+        try:
+            await conn.close()
+        except Exception:
+            pass
+    return set()
+
+
+async def resolve_permission_columns(
+    source: Any,
+    permission_table: str,
+    rules: dict[str, Any] | None,
+    business_columns: set[str] | None,
+) -> tuple[dict[str, str], str | None]:
+    """校正并校验行级权限列，返回 (生效配置, 错误信息)。
+
+    新数据源/新表接入时最常见的坑：
+    1. permission_rules 为空或沿用旧默认列（country_code/user_id），但真实列是 RYID/FDBH；
+    2. 数据列（data_column）在业务表里不存在。
+    这里按权限表真实列自动纠正，并在无法唯一确定时显式报错（fail-closed）。
+    """
+    rules = rules or {}
+    user_col = str(rules.get("user_column") or "").strip().upper()
+    scope_col = str(rules.get("scope_column") or "").strip().upper()
+    data_col = str(rules.get("data_column") or "").strip().upper()
+
+    perm_cols = await read_table_columns(source, permission_table)
+    if not perm_cols:
+        return {}, f"无法读取权限表 {permission_table} 的列（请确认表名与连接权限）"
+
+    biz_cols = {str(c or "").upper() for c in (business_columns or set()) if str(c or "").strip()}
+    if not biz_cols:
+        return {}, "无法读取业务表列，不能校验行级权限数据列"
+
+    def _pick(current: str, candidates: tuple[str, ...], allowed: set[str]) -> str:
+        if current and current in allowed:
+            return current
+        hits = [c for c in candidates if c in allowed]
+        return hits[0] if len(hits) == 1 else ""
+
+    user_col = _pick(user_col, _PERM_USER_CANDIDATES, perm_cols)
+    scope_col = _pick(scope_col, _PERM_SCOPE_CANDIDATES, perm_cols)
+    if not user_col or not scope_col:
+        return {}, (
+            f"权限表 {permission_table} 中无法唯一确定用户列/范围列"
+            f"（配置 {rules.get('user_column') or '空'}/{rules.get('scope_column') or '空'}，"
+            f"实际列 {sorted(perm_cols)}）"
+        )
+
+    if not data_col or data_col not in biz_cols:
+        shared = sorted(c for c in (perm_cols & biz_cols) if c != user_col)
+        if len(shared) == 1:
+            data_col = shared[0]
+        elif not shared:
+            return {}, (
+                f"权限表 {permission_table} 与业务表没有可用于过滤的公共列"
+                f"（权限表列 {sorted(perm_cols)}）"
+            )
+        else:
+            return {}, (
+                f"数据列 {rules.get('data_column') or '未配置'} 不在业务表中，"
+                f"且候选公共列 {shared} 不唯一，请在数据源设置中指定 data_column"
+            )
+
+    return {"user_column": user_col, "scope_column": scope_col, "data_column": data_col}, None
 
 
 def _quote_ident(name: str, dialect: str) -> str:

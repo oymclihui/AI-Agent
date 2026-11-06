@@ -9,6 +9,7 @@ import {
   ClipboardList,
   Database,
   FlaskConical,
+  LayoutDashboard,
   Loader2,
   MessageSquare,
   Play,
@@ -18,7 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { dsDistillApi, dsEvalApi, dsFactoryApi, dsProfileApi, formatApiError } from "@/lib/api";
+import { dsDashboardApi, dsDistillApi, dsEvalApi, dsFactoryApi, dsProfileApi, formatApiError } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 
 // ── 后端返回类型（与 app/schemas/ds_factory.py / ds_distill.py / ds_eval.py 对齐）──
@@ -94,6 +95,14 @@ interface DistillStats {
   feedback_total: number;
 }
 
+interface AnswerModeStats {
+  days: number;
+  total: number;
+  modes: { answer_mode: string; count: number; ratio: number }[];
+  feedback: { feedback_type: string; count: number }[];
+  top_questions: { question: string; count: number }[];
+}
+
 interface ExampleRow {
   id: string;
   question: string;
@@ -136,6 +145,22 @@ interface ProgressEvent {
   text: string;
 }
 
+interface DashboardRow {
+  id: string;
+  title: string;
+  status: string;
+  stage?: string | null;
+  progress?: number;
+  period_start?: string | null;
+  period_end?: string | null;
+  kpis?: { label: string; value: string }[];
+  anchor_status?: string | null;
+  error?: string | null;
+  created_at?: string | null;
+  view_url: string;
+  widget_url: string;
+}
+
 interface Props {
   dsId: string;
   agentId?: string | null;
@@ -152,10 +177,12 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
   const [loading, setLoading] = useState(true);
   const [coach, setCoach] = useState<CoachData | null>(null);
   const [stats, setStats] = useState<DistillStats | null>(null);
+  const [modeStats, setModeStats] = useState<AnswerModeStats | null>(null);
   const [examples, setExamples] = useState<ExampleRow[]>([]);
   const [quality, setQuality] = useState<EvalQuality | null>(null);
   const [runs, setRuns] = useState<EvalRun[]>([]);
   const [releases, setReleases] = useState<ReleaseRow[]>([]);
+  const [boards, setBoards] = useState<DashboardRow[]>([]);
 
   const [spec, setSpec] = useState<AgentSpec | null>(null);
   const [specName, setSpecName] = useState("");
@@ -176,13 +203,15 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
   const loadAll = useCallback(async () => {
     if (!dsId) return;
     setLoading(true);
-    const [coachR, statsR, exR, qualityR, runsR, releasesR] = await Promise.allSettled([
+    const [coachR, statsR, exR, qualityR, runsR, releasesR, modeR, boardsR] = await Promise.allSettled([
       dsFactoryApi.coach(dsId),
       dsDistillApi.stats(dsId),
       dsDistillApi.examples(dsId),
       dsEvalApi.quality(dsId),
       dsEvalApi.runs(dsId, 10),
       agentId ? dsFactoryApi.releases(agentId) : Promise.reject(new Error("no agent")),
+      dsDistillApi.answerModeStats(dsId, 14),
+      dsDashboardApi.list(dsId),
     ]);
     if (coachR.status === "fulfilled") setCoach(coachR.value.data as CoachData);
     if (statsR.status === "fulfilled") setStats(statsR.value.data as DistillStats);
@@ -190,6 +219,11 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
     if (qualityR.status === "fulfilled") setQuality(qualityR.value.data as EvalQuality);
     if (runsR.status === "fulfilled") setRuns((runsR.value.data as EvalRun[]) || []);
     if (releasesR.status === "fulfilled") setReleases((releasesR.value.data as ReleaseRow[]) || []);
+    if (modeR.status === "fulfilled") setModeStats(modeR.value.data as AnswerModeStats);
+    if (boardsR.status === "fulfilled") {
+      const body = boardsR.value.data as { items?: DashboardRow[] };
+      setBoards(body?.items || []);
+    }
     setLoading(false);
   }, [dsId, agentId]);
 
@@ -583,6 +617,63 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
               </div>
             </div>
 
+            {/* 回答模式分布：L1/L2/L3 占比 + 反馈构成（支撑冗长度与词表观测） */}
+            <div className="rounded-lg border border-black/10 dark:border-white/10 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-medium">{t("回答模式分布（近 14 天）", "Answer modes (last 14 days)")}</p>
+                <span className="text-xs theme-muted">
+                  {t("共", "Total")} {modeStats?.total ?? 0} {t("次问数", "asks")}
+                </span>
+              </div>
+              {modeStats && modeStats.total > 0 ? (
+                <>
+                  <div className="space-y-1.5">
+                    {modeStats.modes.map((m) => (
+                      <div key={m.answer_mode} className="flex items-center gap-2 text-xs">
+                        <span className="w-8 shrink-0 font-mono">{m.answer_mode}</span>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                          <div
+                            className="h-full rounded-full bg-emerald-500/70"
+                            style={{ width: `${Math.min(100, m.ratio)}%` }}
+                          />
+                        </div>
+                        <span className="w-24 shrink-0 text-right theme-muted tabular-nums">
+                          {m.count} · {m.ratio}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {modeStats.feedback.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                      {modeStats.feedback.map((f) => {
+                        const label =
+                          f.feedback_type === "like" ? t("点赞", "Like")
+                          : f.feedback_type === "dislike" ? t("点踩", "Dislike")
+                          : f.feedback_type === "example" ? t("存为示例", "Saved")
+                          : f.feedback_type === "correction" ? t("纠正 SQL", "Corrected")
+                          : f.feedback_type === "verbose" ? t("仍觉冗余", "Too verbose")
+                          : f.feedback_type;
+                        return (
+                          <span
+                            key={f.feedback_type}
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 border ${
+                              f.feedback_type === "verbose"
+                                ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                : "border-black/10 dark:border-white/10 theme-muted"
+                            }`}
+                          >
+                            {label} <b className="tabular-nums">{f.count}</b>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs theme-muted">{t("近 14 天暂无问数记录", "No asks in the last 14 days")}</p>
+              )}
+            </div>
+
             {/* 数据质量提示（来自真实画像，非就绪度项） */}
             {(coach.profile?.quality_gaps?.length ?? 0) > 0 && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
@@ -765,6 +856,9 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
             <Link href="/knowledge-distill" className="btn-secondary inline-flex items-center gap-1 px-3 py-1.5 text-xs">
               {t("管理问数范文集", "Manage examples")} →
             </Link>
+            <Link href="/training-center" className="btn-secondary inline-flex items-center gap-1 px-3 py-1.5 text-xs">
+              {t("进入训练中心", "Training center")} →
+            </Link>
           </div>
         )}
         {examples.length > 0 && (
@@ -877,6 +971,75 @@ export function GrowthPanel({ dsId, agentId, canManage, onPublished, onGoAsk, on
           {t("系统每周会自动学习并自测，达标后才晋升新版本。", "The system learns and self-tests weekly; new versions are promoted only when they pass.")}{" "}
           <Link href="/agent-quality" className="text-blue-500">{t("质量看板", "Quality board")} →</Link>
         </p>
+      </div>
+
+      {/* ── 段五：我的看板（组件化视图入口）── */}
+      <div className="theme-surface rounded-xl border theme-border p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-medium inline-flex items-center gap-2">
+            <LayoutDashboard className="h-4 w-4 text-blue-500" />
+            {t("我的看板", "My dashboards")}
+          </h2>
+          <div className="flex items-center gap-3">
+            <Link href={`/dashboards/studio?ds=${dsId}`} className="text-[11px] text-blue-500 hover:underline">
+              {t("自助看板", "Dashboard studio")} →
+            </Link>
+            <span className="text-[11px] theme-muted">{boards.length}</span>
+          </div>
+        </div>
+        {boards.length === 0 ? (
+          <p className="text-xs theme-muted">
+            {t("还没有看板，在对话里说「生成经营看板」即可创建。", "No dashboards yet — ask in chat to generate one.")}
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {boards.map((b) => {
+              const badge =
+                b.status === "done"
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : b.status === "failed"
+                    ? "bg-rose-500/10 text-rose-500"
+                    : "bg-amber-500/10 text-amber-600 dark:text-amber-400";
+              const label =
+                b.status === "done"
+                  ? t("已完成", "done")
+                  : b.status === "failed"
+                    ? t("失败", "failed")
+                    : t("生成中", "running");
+              return (
+                <div key={b.id} className="rounded-lg border theme-border p-2.5">
+                  <div className="flex items-center gap-2">
+                    <Link href={b.widget_url} className="min-w-0 flex-1 truncate text-xs font-medium hover:text-blue-500">
+                      {b.title || t("未命名看板", "Untitled dashboard")}
+                    </Link>
+                    <span className={`inline-block rounded-full px-1.5 py-0.5 text-[10px] ${badge}`}>{label}</span>
+                  </div>
+                  <div className="mt-1 text-[11px] theme-muted">
+                    {b.period_start && b.period_end ? `${b.period_start} ~ ${b.period_end}` : b.created_at ? b.created_at.slice(0, 16).replace("T", " ") : "—"}
+                  </div>
+                  {b.kpis && b.kpis.length > 0 && (
+                    <div className="mt-1.5 grid grid-cols-2 gap-1">
+                      {b.kpis.slice(0, 4).map((k) => (
+                        <div key={k.label} className="rounded bg-black/5 dark:bg-white/5 px-1.5 py-1">
+                          <div className="text-[10px] theme-muted">{k.label}</div>
+                          <div className="truncate font-mono text-[11px] font-semibold">{k.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {b.status === "failed" && b.error && (
+                    <p className="mt-1 truncate text-[11px] text-rose-500">{b.error}</p>
+                  )}
+                  <div className="mt-1.5">
+                    <Link href={b.widget_url} className="text-[11px] text-blue-500">
+                      {t("打开组件视图", "Open widget view")} →
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

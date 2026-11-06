@@ -19,6 +19,7 @@ from app.core.data_ask.govern.permission import (
     build_permission_scope_sql,
     inject_permission_filter,
     permission_config_from_rules,
+    resolve_permission_columns,
 )
 from app.core.data_ask.govern.sql_guard import validate_select_sql
 from app.db.models import DataSource, DataSourceTable, DataSourceTableRole, User
@@ -105,6 +106,20 @@ async def fetch_snapshot(db: AsyncSession, source: DataSource, user: User) -> di
     apply_perm = bool(perm_table) and not bypass_row_permission(user, scope)
     allowed = {str(t.table_name) for t in tables if t.role == DataSourceTableRole.data}
     is_admin = bool(user and user.is_admin)
+    if apply_perm and perm_table is not None:
+        biz_cols: set[str] = set()
+        for t in tables:
+            if t.role != DataSourceTableRole.data:
+                continue
+            meta = t.column_meta if isinstance(t.column_meta, dict) else {}
+            for c in meta.get("columns") or []:
+                if isinstance(c, dict) and c.get("name"):
+                    biz_cols.add(str(c["name"]).upper())
+        perm_rules, perm_error = await resolve_permission_columns(
+            source, str(perm_table.table_name), perm_rules, biz_cols,
+        )
+        if perm_error:
+            raise DashboardBuildError(f"行级权限配置与数据源不一致：{perm_error}")
 
     conn = build_connector_from_source(source)
     out: dict[str, Any] = {"_table": table, "_govern": {"row_permission": apply_perm}}

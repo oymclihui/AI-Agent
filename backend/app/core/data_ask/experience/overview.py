@@ -483,6 +483,7 @@ async def run_overview_analysis(
     agent_backstory: str | None,
     user_id: str | None = None,
     stage_queue: Any = None,
+    skill_style: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     conn = build_connector_from_source(source)
     raw_table = table_name
@@ -667,6 +668,16 @@ async def run_overview_analysis(
     data_text = "\n\n".join(data_parts)
 
     system = "你是一位资深零售数据分析师兼机器学习工程师，基于以下多维度真实数据撰写一份完整的经营分析报告。重点识别异常点（负毛利、折扣侵蚀、低毛利分类）并给出可执行的优化建议。严格基于提供的数据，禁止编造。"
+    # 蓝图 P0：分析技能覆盖（技能 persona/方法论 > 硬编码默认；未命中走原提示词，行为零改动）
+    if isinstance(skill_style, dict) and skill_style:
+        style = skill_style.get("answer_style")
+        style = style if isinstance(style, dict) else {}
+        skill_persona = str(style.get("persona") or "").strip()
+        if skill_persona:
+            system = skill_persona + "\n基于以下多维度真实数据撰写分析，严格基于提供的数据，禁止编造。"
+        methodology = str(skill_style.get("instructions_md") or "").strip()
+        if methodology:
+            system = "【分析方法论】\n" + methodology[:12000] + "\n\n" + system
     if agent_goal:
         system = agent_goal + "\n\n" + system
     if agent_backstory:
@@ -682,6 +693,8 @@ async def run_overview_analysis(
         "- 若提供了机器学习 / 异常诊断结果，在相关段落中引用其结论与方法即可，不必单开章节；\n"
         "- 结论要可执行：指出问题点并给出具体改进建议。"
     )
+    if isinstance(skill_style, dict) and skill_style:
+        user_prompt += "\n（注意：必须严格按上述人设的口吻与排版要求输出报告，包括任何指定的开头标记。）"
 
     report = "（分析生成失败）"
     await step_start("生成综合分析报告（大模型）")

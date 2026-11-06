@@ -163,6 +163,11 @@ export const agentsApi = {
   getSharing: (id: string) => api.get(`/agents/${id}/sharing`),
   updateSharing: (id: string, data: object) => api.put(`/agents/${id}/sharing`, data),
   shareTargets: (q?: string) => api.get("/agents/share-targets", { params: q ? { q } : {} }),
+  getWecom: (id: string) => api.get(`/agents/${id}/wecom`),
+  saveWecom: (id: string, data: object) => api.put(`/agents/${id}/wecom`, data),
+  deleteWecom: (id: string) => api.delete(`/agents/${id}/wecom`),
+  testWecom: (id: string) => api.post(`/agents/${id}/wecom/test`),
+  wecomBots: () => api.get("/integrations/wecom/bots"),
   seedTemplates: () => api.post("/agents/seed-templates"),
   librarySources: () => api.get("/agents/library/sources"),
   libraryCatalog: (params?: { source?: string; division?: string; q?: string }) =>
@@ -382,6 +387,8 @@ export const modelsApi = {
 // ── Tools ─────────────────────────────────────────────
 export const toolsApi = {
   list: () => api.get("/tools"),
+  analysis: () => api.get("/tools/", { params: { category: "analysis" } }),
+  createHttpOperator: (data: object) => api.post("/tools/http-operators", data),
 };
 
 // ── Desktop Automation ────────────────────────────────
@@ -411,7 +418,8 @@ export const harnessApi = {
 
 // ── Skills ────────────────────────────────────────────
 export const skillsApi = {
-  list: (lang?: string) => api.get("/skills", { params: lang ? { lang } : {} }),
+  list: (lang?: string, category?: string) =>
+    api.get("/skills", { params: { ...(lang ? { lang } : {}), ...(category ? { category } : {}) } }),
   create: (data: object) => api.post("/skills/", data),
   get: (id: string, opts?: { lang?: string; raw?: boolean }) =>
     api.get(`/skills/${id}`, { params: { ...(opts?.lang ? { lang: opts.lang } : {}), ...(opts?.raw ? { raw: true } : {}) } }),
@@ -428,6 +436,15 @@ export const skillsApi = {
     api.post("/skills/library/sync", null, { params: { source } }),
   libraryImport: (data: { items: { source: string; slug: string }[]; overwrite?: boolean }) =>
     api.post("/skills/library/import", data),
+  examples: (id: string) => api.get(`/skills/${id}/examples`),
+  deleteExample: (id: string, exampleId: string) => api.delete(`/skills/${id}/examples/${exampleId}`),
+  dryRun: (id: string, data: object) => api.post(`/skills/${id}/dry-run`, data, { timeout: 180000 }),
+  regress: (id: string, data: object) => api.post(`/skills/${id}/regress`, data, { timeout: 180000 }),
+  exportYaml: (id: string) => api.get(`/skills/${id}/export`),
+  leaderboard: (days = 30) => api.get("/skills/leaderboard", { params: { days } }),
+  compareVersions: (id: string, data: object) => api.post(`/skills/${id}/ab`, data, { timeout: 180000 }),
+  submitReview: (id: string) => api.post(`/skills/${id}/submit`),
+  review: (id: string, data: object) => api.post(`/skills/${id}/review`, data),
 };
 
 // ── Dashboard / Screen ─────────────────────────────
@@ -496,7 +513,9 @@ export const integrationsApi = {
   adminStatus: () => api.get("/integrations/admin/status"),
   wecom: () => api.get("/integrations/wecom"),
   saveWecom: (data: object) => api.put("/integrations/wecom", data),
+  syncWecomContacts: () => api.post("/integrations/wecom/sync-contacts"),
   testWecom: () => api.post("/integrations/wecom/test"),
+  imStats: () => api.get("/integrations/im-stats"),
 };
 
 export const databaseApi = {
@@ -553,6 +572,8 @@ export const dataSourcesApi = {
     api.get(`/data-sources/${id}/tables/remote`, { params }),
   setTables: (id: string, data: object) => api.put(`/data-sources/${id}/tables`, data),
   updateSemanticModel: (id: string, data: object) => api.put(`/data-sources/${id}/semantic-model`, data),
+  exportSemantic: (id: string) => api.get(`/data-sources/${id}/semantic-model/export`),
+  importSemantic: (id: string, yaml: string) => api.post(`/data-sources/${id}/semantic-model/import`, { yaml }),
   schemaDrift: (id: string) => api.get(`/data-sources/${id}/schema-drift`),
   reindexSchema: (id: string) => api.post(`/data-sources/${id}/schema/reindex`),
   auditLogs: (id: string, params?: { limit?: number; offset?: number }) =>
@@ -561,7 +582,11 @@ export const dataSourcesApi = {
   recommendedQuestions: (id: string) => api.get(`/data-sources/${id}/recommended-questions`),
   saveGoldenQuery: (id: string, data: object) => api.post(`/data-sources/${id}/golden-queries`, data),
   schemaGraph: (id: string) => api.get(`/data-sources/${id}/schema-graph`),
-  setTableRelations: (id: string, relations: Array<{ from_table: string; from_column: string; to_table: string; to_column: string }>) =>
+  setTableRelations: (id: string, relations: Array<{
+    from_table: string;
+    to_table: string;
+    pairs: Array<{ from_column: string; to_column: string }>;
+  }>) =>
     api.patch(`/data-sources/${id}/tables/relations`, { relations }),
   blueprint: (id: string, data: object) => api.post(`/data-sources/${id}/blueprint`, data),
   bindAgent: (id: string, data: object) => api.post(`/data-sources/${id}/bind-agent`, data),
@@ -592,7 +617,21 @@ export const dataSourcesApi = {
 export const dataAskApi = {
   query: (data: object) => api.post("/data-ask/query", data),
   feedback: (data: object) => api.post("/data-ask/feedback", data),
+  reanalyze: (traceId: number | string) => api.post(`/data-ask/reanalyze/${traceId}`, {}, { timeout: 180000 }),
   trainTask: (id: number | string) => api.get(`/data-ask/train/tasks/${id}`),
+  feedbackStatus: (id: number | string) => api.get(`/data-ask/feedback/${id}/status`),
+  recentFeedback: (dataSourceId: string, limit = 10) =>
+    api.get("/data-ask/feedback/recent", { params: { data_source_id: dataSourceId, limit } }),
+};
+
+// ── 一句话分析工作台（Analysis Studio）──
+export const analysisStudioApi = {
+  presets: (sid: string) => api.get("/analysis-studio/presets", { params: { data_source_id: sid } }),
+  templates: (sid: string) => api.get("/analysis-studio/templates", { params: { data_source_id: sid } }),
+  createTemplate: (data: object) => api.post("/analysis-studio/templates", data),
+  updateTemplate: (id: string, data: object) => api.put(`/analysis-studio/templates/${id}`, data),
+  deleteTemplate: (id: string) => api.delete(`/analysis-studio/templates/${id}`),
+  run: (data: object) => api.post("/analysis-studio/run", data, { timeout: 240000 }),
 };
 
 // ── 经营分析看板技能（Dashboard Skill P0）──
@@ -600,7 +639,80 @@ export const dsDashboardApi = {
   generate: (sid: string, data: { conversation_id?: string; title?: string; template?: string }) =>
     api.post(`/data-sources/${sid}/dashboards/generate`, data, { timeout: 30000 }),
   task: (tid: string) => api.get(`/dashboards/tasks/${tid}`),
+  list: (sid: string) => api.get(`/data-sources/${sid}/dashboards`),
+  manifest: (id: string) => api.get(`/dashboards/${id}/manifest`),
   viewUrl: (id: string) => `/api/v1/dashboards/${id}/view`,
+};
+
+// ── 高级分析 AnalysisSpec（P1/P2）──
+export const analysisApi = {
+  run: (spec: object, save = false) =>
+    api.post("/analysis/spec", { spec, save }, { timeout: 120000 }),
+  dimensions: (sid: string) => api.get(`/analysis/dimensions?data_source_id=${encodeURIComponent(sid)}`),
+  dimensionValues: (sid: string, field: string, q?: string) =>
+    api.get(
+      `/analysis/dimension-values?data_source_id=${encodeURIComponent(sid)}&field=${encodeURIComponent(field)}${
+        q ? `&q=${encodeURIComponent(q)}` : ""
+      }`,
+    ),
+  specs: (sid?: string) =>
+    api.get(`/analysis/specs${sid ? `?data_source_id=${encodeURIComponent(sid)}` : ""}`),
+  detail: (id: string) => api.get(`/analysis/specs/${id}`),
+};
+
+// ── P2 自助看板 Studio ──
+export const studioApi = {
+  list: (sid?: string) =>
+    api.get(`/studio/dashboards${sid ? `?data_source_id=${encodeURIComponent(sid)}` : ""}`),
+  create: (data: { data_source_id: string; name?: string }) => api.post("/studio/dashboards", data),
+  get: (id: string) => api.get(`/studio/dashboards/${id}`),
+  patch: (id: string, data: { name?: string; filters?: unknown[] }) =>
+    api.patch(`/studio/dashboards/${id}`, data),
+  remove: (id: string) => api.delete(`/studio/dashboards/${id}`),
+  addWidget: (id: string, data: object) => api.post(`/studio/dashboards/${id}/widgets`, data),
+  patchWidget: (id: string, wid: string, data: object) =>
+    api.patch(`/studio/dashboards/${id}/widgets/${wid}`, data),
+  deleteWidget: (id: string, wid: string) => api.delete(`/studio/dashboards/${id}/widgets/${wid}`),
+  publish: (id: string) => api.post(`/studio/dashboards/${id}/publish`),
+  versions: (id: string) => api.get(`/studio/dashboards/${id}/versions`),
+  version: (id: string, version: number) => api.get(`/studio/dashboards/${id}/versions/${version}`),
+  htmlUrl: (id: string, version?: number) =>
+    `/api/v1/studio/dashboards/${id}/html${version ? `?version=${version}` : ""}`,
+  // P3 订阅
+  listSubs: (did: string) => api.get(`/studio/dashboards/${did}/subscriptions`),
+  createSub: (did: string, data: object) => api.post(`/studio/dashboards/${did}/subscriptions`, data),
+  patchSub: (sid: string, data: object) => api.patch(`/studio/subscriptions/${sid}`, data),
+  deleteSub: (sid: string) => api.delete(`/studio/subscriptions/${sid}`),
+  runSub: (sid: string) => api.post(`/studio/subscriptions/${sid}/run`),
+  subRuns: (sid: string) => api.get(`/studio/subscriptions/${sid}/runs`),
+  runHtmlUrl: (rid: string) => `/api/v1/studio/runs/${rid}/html`,
+  // P3 嵌入
+  embedLink: (did: string, days: number) =>
+    api.post(`/studio/dashboards/${did}/embed-link`, { days }),
+  // P3 告警
+  listAlerts: (dsId: string) =>
+    api.get(`/studio/alerts?data_source_id=${encodeURIComponent(dsId)}`),
+  createAlert: (data: object) => api.post(`/studio/alerts`, data),
+  patchAlert: (rid: string, data: object) => api.patch(`/studio/alerts/${rid}`, data),
+  deleteAlert: (rid: string) => api.delete(`/studio/alerts/${rid}`),
+  checkAlert: (rid: string) => api.post(`/studio/alerts/${rid}/check`),
+  alertEvents: (rid: string) => api.get(`/studio/alerts/${rid}/events`),
+  // P4 行级权限（管理员）
+  listRowPerms: (dsId: string) =>
+    api.get(`/studio/row-permissions?data_source_id=${encodeURIComponent(dsId)}`),
+  permUsers: () => api.get(`/studio/row-permission-users`),
+  createRowPerm: (data: object) => api.post(`/studio/row-permissions`, data),
+  patchRowPerm: (pid: string, data: object) => api.patch(`/studio/row-permissions/${pid}`, data),
+  deleteRowPerm: (pid: string) => api.delete(`/studio/row-permissions/${pid}`),
+  // P6 预聚合与缓存（管理员）
+  listPreaggs: (dsId: string) =>
+    api.get(`/studio/preaggs?data_source_id=${encodeURIComponent(dsId)}`),
+  createPreagg: (data: object) => api.post(`/studio/preaggs`, data),
+  refreshPreagg: (pid: string) => api.post(`/studio/preaggs/${pid}/refresh`),
+  patchPreagg: (pid: string, data: object) => api.patch(`/studio/preaggs/${pid}`, data),
+  deletePreagg: (pid: string) => api.delete(`/studio/preaggs/${pid}`),
+  clearAnalysisCache: () => api.post(`/studio/cache/clear`),
+  cacheInfo: () => api.get(`/studio/cache/info`),
 };
 
 export const dsDistillApi = {
@@ -621,6 +733,9 @@ export const dsDistillApi = {
     api.post("/data-ask/train/preview", data),
   trainMetrics: (id: string, days = 30) =>
     api.get(`/data-sources/${id}/train/metrics`, { params: { days } }),
+  // L1/L2/L3 分布 + 反馈构成 + 高频问句
+  answerModeStats: (id: string, days = 14) =>
+    api.get(`/data-sources/${id}/answer-mode-stats`, { params: { days } }),
   materializeMetrics: (id: string, days = 7) =>
     api.post(`/data-sources/${id}/train/metrics/materialize`, null, { params: { days } }),
   // P2：影子对比 / 效果归因 / 进化闭环 / 训练 SSE
@@ -668,6 +783,25 @@ export const dsEvalApi = {
   quality: (sid: string) => api.get(`/data-sources/${sid}/eval/quality`),
   gaps: (sid: string) => api.get(`/data-sources/${sid}/eval/gaps`),
   weekly: () => api.post(`/eval/weekly`),
+};
+
+// ── 训练中心 P1：统一训练工单（五步向导）──
+export const trainCenterApi = {
+  create: (data: { target_type: string; target_id: string; kind: string; note?: string }) =>
+    api.post("/train/jobs", data),
+  list: (targetId: string, targetType = "ds", limit = 20) =>
+    api.get("/train/jobs", { params: { target_id: targetId, target_type: targetType, limit } }),
+  get: (id: string) => api.get(`/train/jobs/${id}`),
+  retry: (id: string, fromStage: string) =>
+    api.post(`/train/jobs/${id}/retry`, { from_stage: fromStage }),
+  listPromptCandidates: (agentId: string, trainJobId?: string, limit = 20) =>
+    api.get("/train/prompt-candidates", { params: { agent_id: agentId, train_job_id: trainJobId, limit } }),
+  // P4: RL 训练数据导出
+  exportRl: (data: { data_source_id: string; range?: string; reward_rule?: string }) =>
+    api.post("/train/export/rl", data),
+  listRlExports: (dataSourceId: string, limit = 20) =>
+    api.get("/train/exports", { params: { data_source_id: dataSourceId, limit } }),
+  rlExportDownloadUrl: (exportId: string) => `${API_BASE}/train/exports/${exportId}/download`,
 };
 
 // ── 苏格拉底反问评估 (S4) ────────────────────────────
@@ -836,11 +970,13 @@ async function* readChatSseStream(response: Response): AsyncGenerator<ChatStream
         if (parsed.thinking) event.thinking = parsed.thinking;
         if (parsed.error) event.error = parsed.error;
         if (parsed.chart_data) event.chart_data = parsed.chart_data;
+        if (parsed.tool_call) event.tool_call = parsed.tool_call;
+        if (parsed.tool_result) event.tool_result = parsed.tool_result;
         if (parsed.event) {
           Object.assign(event, parsed);
         }
         if (event.error) throw new Error(event.error);
-        if (event.token || event.thinking || event.event || event.chart_data) yield event;
+        if (event.token || event.thinking || event.event || event.chart_data || event.tool_call || event.tool_result) yield event;
       } catch (e) {
         if (e instanceof SyntaxError) continue;
         throw e;

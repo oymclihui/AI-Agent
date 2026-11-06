@@ -28,17 +28,35 @@ def build_profile_task(data_source_id: str, trigger: str = "manual", profile_id:
     from app.db.models import DataSource
 
     async def _run() -> None:
+        from app.db.models import DsSchemaProfile
+
         async with ProfileSessionLocal() as db:
-            source = await db.get(DataSource, data_source_id)
-            if not source:
-                logger.warning("build_profile_task: data source %s not found", data_source_id)
-                return
-            row = await build_schema_profile(db, source, trigger=trigger, profile_id=profile_id)
-            await db.commit()
-            logger.info(
-                "build_profile_task done ds=%s version=%s status=%s tables=%s cols=%s ms=%s",
-                data_source_id, row.version, row.status, row.table_count, row.column_count, row.duration_ms,
-            )
+            try:
+                source = await db.get(DataSource, data_source_id)
+                if not source:
+                    logger.warning("build_profile_task: data source %s not found", data_source_id)
+                    if profile_id is not None:
+                        missing = await db.get(DsSchemaProfile, profile_id)
+                        if missing is not None and missing.status == "building":
+                            missing.status = "failed"
+                            missing.error = "数据源不存在，构建已中止"
+                            await db.commit()
+                    return
+                row = await build_schema_profile(db, source, trigger=trigger, profile_id=profile_id)
+                await db.commit()
+                logger.info(
+                    "build_profile_task done ds=%s version=%s status=%s tables=%s cols=%s ms=%s",
+                    data_source_id, row.version, row.status, row.table_count, row.column_count, row.duration_ms,
+                )
+            except Exception as exc:
+                await db.rollback()
+                if profile_id is not None:
+                    failed = await db.get(DsSchemaProfile, profile_id)
+                    if failed is not None and failed.status == "building":
+                        failed.status = "failed"
+                        failed.error = str(exc)[:2000]
+                        await db.commit()
+                raise
 
     try:
         run_in_persistent_loop(_run())

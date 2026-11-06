@@ -102,6 +102,49 @@ async def execute_tool(
     return out
 
 
+def _preview_url(result: str) -> str | None:
+    import json
+    import re
+
+    try:
+        payload = json.loads(result)
+    except Exception:
+        payload = None
+    if isinstance(payload, dict) and payload.get("preview_url"):
+        return str(payload["preview_url"])
+    match = re.search(r"/api/v1/artifacts/[A-Za-z0-9._-]+\.html", result or "")
+    return match.group(0) if match else None
+
+
+async def _publish_chat_preview(db: AsyncSession, action: HarnessPendingAction) -> None:
+    """After approval, put the preview link into the chat so the result panel can open it."""
+    if action.source != "chat" or not action.source_id or not action.result:
+        return
+    preview = _preview_url(action.result)
+    if not preview:
+        return
+    from sqlalchemy import select
+
+    from app.db.models import Message, MessageRole
+
+    existing = await db.execute(
+        select(Message.id)
+        .where(Message.conversation_id == action.source_id, Message.content.contains(preview))
+        .limit(1)
+    )
+    if existing.scalar_one_or_none():
+        return
+    db.add(
+        Message(
+            id=generate_uuid(),
+            conversation_id=action.source_id,
+            role=MessageRole.assistant,
+            content=f"页面已生成，可在右侧结果区预览。\n\n{preview}",
+            metadata_={"harness_action_id": action.id},
+        )
+    )
+
+
 async def confirm_pending_action(
     db: AsyncSession,
     user_id: str,
@@ -137,6 +180,7 @@ async def confirm_pending_action(
         action.result = result[:8000]
         action.status = ExecutionStatus.completed
         action.completed_at = _utcnow()
+        await _publish_chat_preview(db, action)
     except Exception as exc:
         action.status = ExecutionStatus.failed
         action.error_message = str(exc)

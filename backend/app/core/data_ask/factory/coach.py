@@ -111,6 +111,14 @@ async def build_coach_profile(db: AsyncSession, source: DataSource) -> dict[str,
 
     terms = await _count(db, DsSemanticTerm, DsSemanticTerm.data_source_id == ds)
     metrics = await _count(db, DsSemanticMetric, DsSemanticMetric.data_source_id == ds)
+    model = source.semantic_model if isinstance(getattr(source, "semantic_model", None), dict) else {}
+    json_terms = sum(
+        1 for item in (model.get("terms") or [])
+        if (isinstance(item, dict) and (item.get("term") or item.get("name"))) or isinstance(item, str)
+    )
+    json_metrics = sum(1 for item in (model.get("metrics") or []) if isinstance(item, dict) and item.get("name"))
+    terms = max(terms, json_terms)
+    metrics = max(metrics, json_metrics)
     ex_pos = await _count(db, AskExample, AskExample.data_source_id == ds, AskExample.kind == "positive")
     ex_neg = await _count(db, AskExample, AskExample.data_source_id == ds, AskExample.kind == "negative")
     ex_idx = await _count(db, AskExample, AskExample.data_source_id == ds, AskExample.indexed.is_(True))

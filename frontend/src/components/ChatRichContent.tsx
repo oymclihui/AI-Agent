@@ -1,6 +1,7 @@
 "use client";
 
 import MarkdownView, { type MarkdownViewSize } from "@/components/MarkdownView";
+import HtmlPreviewCard from "@/components/HtmlPreviewCard";
 import {
   QaChartBlock,
   QaChoicesRow,
@@ -13,6 +14,28 @@ import {
   parseQaIntentContent,
   stripIncompleteQaBlocks,
 } from "@/lib/qaIntentProtocol";
+
+const HTML_ARTIFACT_RE = /(?:https?:\/\/[^\s)]+)?\/api\/v1\/artifacts\/([A-Za-z0-9._-]+\.html)(?:\?download=1)?/gi;
+
+function extractHtmlArtifacts(content: string): {
+  text: string;
+  files: { filename: string; previewUrl: string }[];
+} {
+  const files: { filename: string; previewUrl: string }[] = [];
+  const seen = new Set<string>();
+  const text = content
+    .replace(HTML_ARTIFACT_RE, (_full, name: string) => {
+      if (!seen.has(name)) {
+        seen.add(name);
+        files.push({ filename: name, previewUrl: `/api/v1/artifacts/${name}` });
+      }
+      return "";
+    })
+    .replace(/\[[^\]]*\]\(\s*\)/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+  return { text, files };
+}
 
 /** Convert ```chart fenced blocks to [chart:{...}] inline notation. */
 function preprocessChartBlocks(content: string): string {
@@ -43,17 +66,25 @@ export default function ChatRichContent({
 }: ChatRichContentProps) {
   const raw = streaming ? stripIncompleteQaBlocks(children) : children;
   const processed = preprocessChartBlocks(raw);
-  if (!processed?.trim()) return null;
+  const { text, files } = extractHtmlArtifacts(processed);
+  const cards = files.map((file) => (
+    <HtmlPreviewCard key={file.filename} filename={file.filename} previewUrl={file.previewUrl} lang={lang} />
+  ));
+  if (!text.trim() && files.length === 0) return null;
+  if (!text.trim()) return <div className="chat-rich-content">{cards}</div>;
 
-  if (!hasQaIntentBlocks(processed)) {
+  if (!hasQaIntentBlocks(text)) {
     return (
-      <MarkdownView size={size} highlight={highlight}>
-        {processed}
-      </MarkdownView>
+      <div className="chat-rich-content">
+        <MarkdownView size={size} highlight={highlight}>
+          {text}
+        </MarkdownView>
+        {cards}
+      </div>
     );
   }
 
-  const segments = parseQaIntentContent(processed);
+  const segments = parseQaIntentContent(text);
 
   return (
     <div className="chat-rich-content">
@@ -115,6 +146,7 @@ export default function ChatRichContent({
         }
         return null;
       })}
+      {cards}
     </div>
   );
 }

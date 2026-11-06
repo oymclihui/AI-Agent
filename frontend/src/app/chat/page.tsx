@@ -6,9 +6,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Send, Square, Plus, MessageSquare, Paperclip, X, Sparkles, Trash2, Mic, Volume2, Bot, BookOpen, FolderOpen, ChevronRight, Cpu, PlugZap, Layers, Menu, LayoutGrid, Globe, Pencil, Download, Search } from "lucide-react";
 import MarkdownView from "@/components/MarkdownView";
 import ChatRichContent from "@/components/ChatRichContent";
+import ArtifactResultPanel from "@/components/ArtifactResultPanel";
 import ClarifyCard from "@/components/chat/ClarifyCard";
 import DashboardCard, { type DashboardCardData } from "@/components/chat/DashboardCard";
+import UiRender, { type UiRenderData, type UiNode } from "@/components/chat/UiRender";
+import { applyUiPatch, type UiPatch } from "@/components/chat/UiRender/patch";
 import { ChartRenderer, type ChatChartData } from "@/components/ChartRenderer";
+import { DrillPanel } from "@/components/chat/DrillPanel";
 import { MessageCopyButton } from "@/components/MessageCopyButton";
 import { MessageTrainActions } from "@/components/MessageTrainActions";
 import { GroupChatPanel, getGroupConfigFromState } from "@/components/chat/GroupChatPanel";
@@ -59,6 +63,7 @@ interface Message {
     thinking?: string;
     citations?: { document_id?: string; document_name?: string; snippet?: string }[];
     harness_trace?: HarnessTraceEvent[];
+    ui_render?: UiRenderData | null;
     subtask_id?: string;
     data_ask?: boolean;
     data_source_id?: string;
@@ -66,10 +71,30 @@ interface Message {
     sql?: string | null;
     trace_id?: number | null;
     memory_hits?: number;
+    answer_mode?: string | null;
+    route?: string | null;
+    confidence?: string | null;
+    suggestions?: string[];
     dashboard_card?: DashboardCardData;
   } & GroupMessageMeta;
   chartData?: ChatChartData[] | null;
   clarify?: ClarifyPayload | null;
+}
+
+// 问数口径来源徽章（蓝图 L1 置信度分级：模板/指标层=高，LLM+校验=中）
+const DATAASK_ROUTE_BADGES: Record<string, { label: string; cls: string }> = {
+  metric: { label: "指标层 · 高置信", cls: "border-emerald-600/50 bg-emerald-600/15 text-emerald-300" },
+  memory_reuse: { label: "口径复用 · 高置信", cls: "border-emerald-600/50 bg-emerald-600/15 text-emerald-300" },
+  override: { label: "人工指定 SQL", cls: "border-sky-600/50 bg-sky-600/15 text-sky-300" },
+};
+
+function dataAskRouteBadge(route: string | null | undefined, confidence: string | null | undefined) {
+  if (!route) return null;
+  if (DATAASK_ROUTE_BADGES[route]) return DATAASK_ROUTE_BADGES[route];
+  const high = confidence === "high";
+  return high
+    ? { label: "高置信度", cls: "border-emerald-600/50 bg-emerald-600/15 text-emerald-300" }
+    : { label: "AI 生成 · 中置信", cls: "border-amber-600/50 bg-amber-600/15 text-amber-300" };
 }
 
 interface Conversation {
@@ -245,6 +270,70 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** p2-4 订阅日报按钮：对 chat 生成的看板一键建每日订阅（message 渠道投递到当前会话）。 */
+function DashboardSubscribeButton({
+  dashboardId,
+  convId,
+  lang,
+}: {
+  dashboardId: string;
+  convId?: string | null;
+  lang?: string;
+}) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
+  const go = async () => {
+    if (state === "busy" || state === "done") return;
+    setState("busy");
+    try {
+      const res = await fetch(`/api/v1/studio/dashboards/${encodeURIComponent(dashboardId)}/subscriptions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+        },
+        body: JSON.stringify({ period: "daily", hour: 9, minute: 0, channel: "message", target: convId || "" }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setState("done");
+    } catch {
+      setState("error");
+    }
+  };
+  if (state === "done") {
+    return (
+      <span className="relative z-20 mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-medium text-emerald-300">
+        ✓ {lang === "en" ? "Subscribed · daily 09:00 to this chat" : "已订阅 · 每天 09:00 推送到本会话"}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void go()}
+      disabled={state === "busy"}
+      className="relative z-20 mt-2 inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-[11px] font-medium text-blue-300 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
+    >
+      {state === "busy"
+        ? lang === "en" ? "Subscribing…" : "订阅中…"
+        : state === "error"
+          ? lang === "en" ? "Failed, click to retry" : "订阅失败，点击重试"
+          : lang === "en"
+            ? "Subscribe daily report (09:00 to this chat)"
+            : "订阅日报（每天 9:00 推送到本会话）"}
+    </button>
+  );
+}
+
+/** 把答案里的 Markdown 表格拆出来：正文 → 图表 → 表格，避免图表永远挂在长表后面。 */
+function splitMarkdownTable(markdown: string): [string, string] {
+  const lines = (markdown || "").split("\n");
+  const start = lines.findIndex((line) => /^\s*\|/.test(line));
+  if (start < 0) return [markdown || "", ""];
+  let end = start;
+  while (end < lines.length && /^\s*\|/.test(lines[end])) end += 1;
+  return [lines.slice(0, start).join("\n"), lines.slice(start).join("\n")];
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const { lang } = useLangStore();
@@ -269,6 +358,8 @@ export default function ChatPage() {
   const chatAbortRef = useRef<AbortController | null>(null);
   const userStoppedRef = useRef(false);
   const [streaming, setStreaming] = useState(false);
+  // p2-1 图表下钻：seed = 点击的图表数据点上下文
+  const [drillSeed, setDrillSeed] = useState<{ msgKey: string; dataSourceId: string; label: string; labels: string[]; seriesLabel: string } | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingThinking, setStreamingThinking] = useState("");
   const [streamingHarness, setStreamingHarness] = useState<HarnessTraceEvent[]>([]);
@@ -529,9 +620,19 @@ export default function ChatPage() {
   const approveHarnessAction = async (actionId: string) => {
     setHarnessConfirmBusy(actionId);
     try {
-      await harnessApi.confirmAction(actionId);
+      const { data: confirmed } = await harnessApi.confirmAction(actionId);
       toast.success(t.harnessConfirmOk[lang]);
       await loadPendingActions();
+      if (confirmed?.source === "chat" && confirmed.source_id) {
+        setActiveConv(confirmed.source_id);
+        const { data: msgs } = await chatApi.getMessages(confirmed.source_id);
+        setMessages(
+          (msgs || []).map((m: { charts_data?: unknown; chartData?: unknown }) => ({
+            ...m,
+            chartData: m.charts_data ?? m.chartData ?? null,
+          })),
+        );
+      }
     } catch {
       toast.error(translations.common.actionFailed[lang]);
     } finally {
@@ -1326,23 +1427,323 @@ const dedupeCharts = (charts: ChatChartData[] | null): ChatChartData[] | null =>
   return out;
 };
 
-const appendAssistant = (content: string, thinking?: string, extras?: { chartData?: ChatChartData[] | null; harnessTrace?: HarnessTraceEvent[]; citations?: { document_name?: string; snippet?: string }[]; train?: { data_source_id?: string; question?: string; sql?: string | null; trace_id?: number | null; memory_hits?: number } | null }) => {
+
+
+
+/** 把 LLM 直接写在正文里的 ui_render(...) / ui_patch(...) 调用块从展示文本中移除。 */
+function stripUiCalls(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const name of ["ui_render", "ui_patch"]) {
+    for (let guard = 0; guard < 10; guard += 1) {
+      const m = new RegExp(`${name}\\s*\\(`, "i").exec(out);
+      if (!m) break;
+      const start = m.index;
+      let depth = 0;
+      let inStr = false;
+      let esc = false;
+      let end = -1;
+      const from = m.index + m[0].length - 1;
+      for (let i = from; i < out.length; i += 1) {
+        const ch = out[i];
+        if (esc) { esc = false; continue; }
+        if (ch === "\\" && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === "(") depth += 1;
+        else if (ch === ")") {
+          depth -= 1;
+          if (depth === 0) { end = i + 1; break; }
+        }
+      }
+      if (end < 0) break;
+      out = out.slice(0, start) + out.slice(end);
+    }
+  }
+  return out.replace(/```(?:json|javascript)?\s*\n?\s*```/g, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** LLM 常把组件写成嵌套树（{type, props, children}）；这里扁平化成 {root, components}。 */
+function normalizeNestedUi(node: unknown): UiRenderData | null {
+  if (!node || typeof node !== "object") return null;
+  const rootNode = node as Record<string, unknown>;
+  if (typeof rootNode.type !== "string") return null;
+  const components: UiRenderData["components"] = [];
+  let counter = 0;
+  const walk = (n: Record<string, unknown>, id: string): string => {
+    const kids: string[] = [];
+    const rawKids = Array.isArray(n.children) ? (n.children as Record<string, unknown>[]) : [];
+    for (const child of rawKids) {
+      if (!child || typeof child !== "object" || typeof (child as Record<string, unknown>).type !== "string") continue;
+      counter += 1;
+      const cid = typeof child.id === "string" && child.id ? (child.id as string) : `n${counter}`;
+      kids.push(walk(child, cid));
+    }
+    components.push({
+      id,
+      type: n.type as string,
+      props: (n.props as Record<string, unknown>) || {},
+      ...(kids.length ? { children: kids } : {}),
+    } as UiRenderData["components"][number]);
+    return id;
+  };
+  walk(rootNode, "root");
+  return { root: "root", components };
+}
+
+// Extract ui_render JSON from LLM text output (fallback when no structured tool_call)
+function extractUiPatchFromContent(text: string): UiPatch | null {
+  if (!text || !/ui_patch/i.test(text)) return null;
+
+  const pick = (raw: string): UiPatch | null => {
+    try {
+      const normalized = raw.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+      const parsed = JSON.parse(normalized);
+      if (parsed && Array.isArray(parsed.ops)) return parsed as UiPatch;
+      if (parsed && parsed.content && Array.isArray(parsed.content.ops)) return parsed.content as UiPatch;
+      if (parsed && parsed.args && Array.isArray(parsed.args.ops)) return parsed.args as UiPatch;
+      const single =
+        parsed && parsed.content && (parsed.content.op || parsed.content.type || parsed.content.operation)
+          ? parsed.content
+          : parsed;
+      if (single && (single.op || single.type || single.operation)) return { ops: [single] } as UiPatch;
+    } catch {}
+    return null;
+  };
+
+  // Pattern 1: ui_patch({...}) 花括号匹配
+  const fnIdx = text.search(/ui_patch\s*\(/i);
+  if (fnIdx >= 0) {
+    const start = text.indexOf("{", fnIdx);
+    if (start >= 0) {
+      let depth = 0;
+      for (let i = start; i < text.length; i += 1) {
+        if (text[i] === "{") depth += 1;
+        else if (text[i] === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            const r = pick(text.slice(start, i + 1));
+            if (r) return r;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Pattern 2: json code block 内含 ops
+  const blockRegex = /```(?:json)?\s*\n?([\s\S]*?)```/g;
+  let m;
+  while ((m = blockRegex.exec(text)) !== null) {
+    if (m[1].includes('"ops"')) {
+      const r = pick(m[1].trim());
+      if (r) return r;
+    }
+  }
+
+  return null;
+}
+
+/** 规范化单个组件的 props，兼容 LLM 常见的字段名变体 */
+function normalizeComponentProps(type: string, props: Record<string, unknown>): Record<string, unknown> {
+  const p = { ...props };
+  if (type === "Table") {
+    if (!Array.isArray(p.rows) && Array.isArray(p.data)) p.rows = p.data;
+  }
+  if (type === "Chart") {
+    if (!p.kind && p.type) p.kind = p.type;
+    if (Array.isArray(p.series)) {
+      p.series = (p.series as Record<string, unknown>[]).map((s) => {
+        const ns = { ...s };
+        if (!Array.isArray(ns.values) && Array.isArray(ns.data)) ns.values = ns.data;
+        return ns;
+      });
+    }
+  }
+  if (type === "Stat") {
+    if (!p.trend && p.deltaType) {
+      const dt = String(p.deltaType).toLowerCase();
+      if (dt === "up" || dt === "down" || dt === "flat") p.trend = dt;
+    }
+  }
+  return p;
+}
+
+/** 把解析后的任意 ui_render 结构统一成 {root, components} 扁平格式 */
+function coerceUiRenderData(parsed: unknown): UiRenderData | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+
+  // 解包 {type:"ui_render", payload:{...}} 或 {type:"ui_render", content:[...]}
+  let body: Record<string, unknown> = obj;
+  if (obj.type === "ui_render") {
+    if (obj.payload && typeof obj.payload === "object") body = obj.payload as Record<string, unknown>;
+    else if (Array.isArray(obj.content)) {
+      return {
+        root: "root",
+        components: (obj.content as Record<string, unknown>[]).map((c, i) => {
+          const t = String((c as Record<string, unknown>).type || "Text");
+          return {
+            id: String((c as Record<string, unknown>).id) || `c${i}`,
+            type: t as UiNode["type"],
+            props: normalizeComponentProps(t, ((c as Record<string, unknown>).props || {}) as Record<string, unknown>),
+          };
+        }),
+      };
+    }
+  }
+
+  // 取 components 数组
+  const compsRaw = body.components;
+  if (!Array.isArray(compsRaw)) return null;
+
+  // 扁平化成 {id, type, props, children} 列表
+  const flat: UiRenderData["components"] = [];
+  let counter = 0;
+  const walk = (node: Record<string, unknown>): string => {
+    counter += 1;
+    const id = typeof node.id === "string" && node.id ? node.id : `c${counter}`;
+    // 类型别名：LLM 常用的容器类型映射到内置组件
+    const rawType = String(node.type || "Text");
+    const aliasMap: Record<string, string> = {
+      StatGroup: "Stack", Row: "Stack", Column: "Stack", Container: "Stack",
+      Section: "Card", Dashboard: "Card", Group: "Stack",
+    };
+    const type = aliasMap[rawType] || rawType;
+    const props = normalizeComponentProps(type, ((node.props || {}) as Record<string, unknown>));
+    // StatGroup/Row 默认横向排列
+    if ((rawType === "StatGroup" || rawType === "Row") && !props.direction) props.direction = "horizontal";
+    const childIds: string[] = [];
+    const rawKids = Array.isArray(node.children) ? (node.children as Record<string, unknown>[]) : [];
+    for (const child of rawKids) {
+      if (child && typeof child === "object") childIds.push(walk(child));
+    }
+    flat.push({ id, type: type as UiNode["type"], props, ...(childIds.length ? { children: childIds } : {}) });
+    return id;
+  };
+  const rootIds: string[] = [];
+  for (const node of compsRaw) {
+    if (node && typeof node === "object") rootIds.push(walk(node as Record<string, unknown>));
+  }
+  if (!flat.length) return null;
+
+  // 若有多个顶层兄弟组件，用虚拟 Stack 根容器包裹，避免只渲染第一个
+  let root: string;
+  if (rootIds.length > 1) {
+    counter += 1;
+    root = `root${counter}`;
+    flat.unshift({ id: root, type: "Stack", props: { direction: "vertical" }, children: rootIds });
+  } else {
+    root = typeof body.root === "string" && flat.some((c) => c.id === body.root) ? body.root : rootIds[0];
+  }
+
+  const title = typeof body.title === "string" ? body.title : undefined;
+  return { root, components: flat, ...(title ? { title } : {}) };
+}
+
+function extractUiRenderFromContent(text: string): UiRenderData | null {
+  if (!text) return null;
+
+  const tryParse = (raw: string): UiRenderData | null => {
+    try {
+      const normalized = raw.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+      return coerceUiRenderData(JSON.parse(normalized));
+    } catch {
+      return null;
+    }
+  };
+
+  // Pattern 1: ui_render({...}) with matching parens
+  const funcMatch = text.match(/ui_render\s*\(/);
+  if (funcMatch) {
+    const startIdx = funcMatch.index! + funcMatch[0].length;
+    let depth = 1;
+    let endIdx = startIdx;
+    for (let i = startIdx; i < text.length; i++) {
+      if (text[i] === "(") depth++;
+      else if (text[i] === ")") {
+        depth--;
+        if (depth === 0) { endIdx = i; break; }
+      }
+    }
+    const r = tryParse(text.slice(startIdx, endIdx));
+    if (r) return r;
+  }
+
+  // Pattern 2: JSON code block — match ```json or ``` followed by anything
+  const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    const inner = match[1].trim();
+    if (
+      inner.includes('"component"') ||
+      inner.includes('"type"') && inner.includes('ui_render') ||
+      inner.includes('"root"') && inner.includes('"components"') ||
+      inner.includes('"components"') && inner.includes('"type"')
+    ) {
+      const r = tryParse(inner);
+      if (r) return r;
+    }
+  }
+
+  // Pattern 3: Inline JSON with component definitions (no code block)
+  const componentRegex = /\{\s*"component"\s*:|\{\s*"type"\s*:\s*"ui_render"/g;
+  if (componentRegex.test(text)) {
+    const braceStart = text.search(/\{[\s\S]*("component"|"ui_render")[\s\S]*\}/);
+    if (braceStart >= 0) {
+      let depth = 0;
+      let endIdx = braceStart;
+      for (let i = braceStart; i < text.length; i++) {
+        if (text[i] === "{") depth++;
+        else if (text[i] === "}") {
+          depth--;
+          if (depth === 0) { endIdx = i + 1; break; }
+        }
+      }
+      const r = tryParse(text.slice(braceStart, endIdx));
+      if (r) return r;
+    }
+  }
+
+  return null;
+}
+
+const appendAssistant = (content: string, thinking?: string, extras?: { chartData?: ChatChartData[] | null; harnessTrace?: HarnessTraceEvent[]; citations?: { document_name?: string; snippet?: string }[]; train?: { data_source_id?: string; question?: string; sql?: string | null; trace_id?: number | null; memory_hits?: number; answer_mode?: string | null; route?: string | null; confidence?: string | null; suggestions?: string[] } | null; uiRender?: UiRenderData | null; uiPatch?: UiPatch | null; dashboardCard?: DashboardCardData | null }) => {
     const trace = extras?.harnessTrace?.length ? extras.harnessTrace : undefined;
     const train = extras?.train || null;
-    setMessages((m) => [
+    const uiRender = extras?.uiRender ?? null;
+    // Fallback: extract from content if no structured tool_call
+    const extractedUi = uiRender ?? extractUiRenderFromContent(content);
+    const extractedPatch = extras?.uiPatch ?? extractUiPatchFromContent(content);
+    setMessages((m) => {
+      // ui_patch 以最后一个已渲染视图为基准
+      let base: UiRenderData | null = extractedUi;
+      if (extractedPatch && !base) {
+        for (let i = m.length - 1; i >= 0; i -= 1) {
+          const prev = m[i]?.metadata?.ui_render;
+          if (prev) {
+            base = prev;
+            break;
+          }
+        }
+      }
+      const finalUiRender = base && extractedPatch ? applyUiPatch(base, extractedPatch) : base;
+      return [
       ...m,
       {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: stripChartBlocks(content) || t.emptyResponse[lang],
+        content: stripChartBlocks(stripUiCalls(content)) || (finalUiRender ? "" : t.emptyResponse[lang]),
         chartData: extras?.chartData ?? null,
         created_at: new Date().toISOString(),
         metadata:
-          thinking || trace || extras?.citations?.length || train
+          thinking || trace || extras?.citations?.length || train || finalUiRender || extras?.dashboardCard
             ? {
                 thinking,
                 harness_trace: trace,
                 citations: extras?.citations,
+                ui_render: finalUiRender,
+                ...(extras?.dashboardCard ? { dashboard_card: extras.dashboardCard } : {}),
                 ...(train
                   ? {
                       data_ask: true,
@@ -1351,12 +1752,17 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
                       sql: train.sql ?? null,
                       trace_id: train.trace_id ?? null,
                       memory_hits: train.memory_hits || 0,
+                      answer_mode: train.answer_mode ?? null,
+                      route: train.route ?? null,
+                      confidence: train.confidence ?? null,
+                      suggestions: train.suggestions ?? [],
                     }
                   : {}),
               }
             : undefined,
       },
-    ]);
+      ];
+    });
   };
 
   const stopGeneration = useCallback(() => {
@@ -1497,10 +1903,17 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
     let thinking = "";
     let clarifyEvent: ClarifyPayload | null = null;
     const harnessTrace: HarnessTraceEvent[] = [];
-    const noteHarness = (event: { tool_call?: { name?: string }; tool_result?: { content?: string } }) => {
+    const noteHarness = (event: { tool_call?: { name?: string; args?: Record<string, unknown> }; tool_result?: { content?: string } }) => {
       if (event.tool_call) {
         harnessTrace.push({ event: "tool/call", tool: event.tool_call.name, phase: "pre-execute" });
         setStreamingHarness([...harnessTrace]);
+        // 检测 ui_render tool call → 提取组件树
+        if (event.tool_call.name === "ui_render" && event.tool_call.args) {
+          _uiRenderData = event.tool_call.args as unknown as UiRenderData;
+        }
+        if (event.tool_call.name === "ui_patch" && event.tool_call.args) {
+          _uiPatchData = event.tool_call.args as unknown as UiPatch;
+        }
       }
       if (event.tool_result) {
         harnessTrace.push({
@@ -1515,6 +1928,8 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
     let userStopped = false;
     let lastSynthesis = "";
     let _chartData: ChatChartData[] = [];
+    let _uiRenderData: UiRenderData | null = null;
+    let _uiPatchData: UiPatch | null = null;
     let currentStreamAgent: {
       id: string;
       name: string;
@@ -1619,6 +2034,11 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
     let streamSql: string | null = null;
     let streamTraceId: number | null = null;
     let streamMemoryHits = 0;
+    let streamAnswerMode: string | null = null;
+    let streamRoute: string | null = null;
+    let streamConfidence: string | null = null;
+    let streamSuggestions: string[] = [];
+    let streamDashboardCard: DashboardCardData | null = null;
     try {
       if (filesToSend.length > 0) {
         const form = chatApi.sendMessageWithFiles(convId!, msg, filesToSend, true, messageExtras());
@@ -1655,9 +2075,20 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
             if (event.event === "sql" && event.sql) {
               streamSql = event.sql;
             }
+            if ((event as { dashboard_card?: DashboardCardData }).dashboard_card) {
+              streamDashboardCard = (event as { dashboard_card?: DashboardCardData }).dashboard_card ?? null;
+            }
             if (event.event === "done") {
               if (typeof event.trace_id === "number") streamTraceId = event.trace_id;
               streamMemoryHits = Number(event.memory_hits || 0);
+              const mode = (event as Record<string, unknown>).answer_mode;
+              if (typeof mode === "string") streamAnswerMode = mode;
+              const rtev = (event as Record<string, unknown>).route;
+              if (typeof rtev === "string") streamRoute = rtev;
+              const cfev = (event as Record<string, unknown>).confidence;
+              if (typeof cfev === "string") streamConfidence = cfev;
+              const sugg = (event as Record<string, unknown>).suggestions;
+              if (Array.isArray(sugg)) streamSuggestions = sugg.filter((s): s is string => typeof s === "string");
             }
             noteHarness(event);
           }
@@ -1700,9 +2131,20 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
             if (event.event === "sql" && event.sql) {
               streamSql = event.sql;
             }
+            if ((event as { dashboard_card?: DashboardCardData }).dashboard_card) {
+              streamDashboardCard = (event as { dashboard_card?: DashboardCardData }).dashboard_card ?? null;
+            }
             if (event.event === "done") {
               if (typeof event.trace_id === "number") streamTraceId = event.trace_id;
               streamMemoryHits = Number(event.memory_hits || 0);
+              const mode = (event as Record<string, unknown>).answer_mode;
+              if (typeof mode === "string") streamAnswerMode = mode;
+              const rtev = (event as Record<string, unknown>).route;
+              if (typeof rtev === "string") streamRoute = rtev;
+              const cfev = (event as Record<string, unknown>).confidence;
+              if (typeof cfev === "string") streamConfidence = cfev;
+              const sugg = (event as Record<string, unknown>).suggestions;
+              if (Array.isArray(sugg)) streamSuggestions = sugg.filter((s): s is string => typeof s === "string");
             }
             noteHarness(event);
           }
@@ -1729,7 +2171,7 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
         }
         toast(t.generationStopped[lang], { icon: "⏹" });
       } else if (full || thinking) {
-        appendAssistant(full, thinking || undefined, { chartData: _chartData.length > 0 ? _chartData : null, harnessTrace, citations: streamCitations, train: streamTraceId ? { data_source_id: activeConversation?.data_source_id || dataSourceFromUrl || undefined, question: msg, sql: streamSql, trace_id: streamTraceId, memory_hits: streamMemoryHits } : null });
+        appendAssistant(full, thinking || undefined, { chartData: _chartData.length > 0 ? _chartData : null, harnessTrace, citations: streamCitations, uiRender: _uiRenderData, uiPatch: _uiPatchData, dashboardCard: streamDashboardCard, train: (streamTraceId || streamRoute || streamSuggestions.length) ? { data_source_id: activeConversation?.data_source_id || dataSourceFromUrl || undefined, question: msg, sql: streamSql, trace_id: streamTraceId, memory_hits: streamMemoryHits, answer_mode: streamAnswerMode, route: streamRoute, confidence: streamConfidence, suggestions: streamSuggestions } : null });
       } else {
         toast(t.generationStopped[lang], { icon: "⏹" });
       }
@@ -1828,7 +2270,7 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
       }
     }
 
-    appendAssistant(full, thinking || undefined, { chartData: _chartData.length > 0 ? _chartData : null, harnessTrace, citations: streamCitations, train: streamTraceId ? { data_source_id: activeConversation?.data_source_id || dataSourceFromUrl || undefined, question: msg, sql: streamSql, trace_id: streamTraceId, memory_hits: streamMemoryHits } : null });
+    appendAssistant(full, thinking || undefined, { chartData: _chartData.length > 0 ? _chartData : null, harnessTrace, citations: streamCitations, uiRender: _uiRenderData, uiPatch: _uiPatchData, dashboardCard: streamDashboardCard, train: (streamTraceId || streamRoute || streamSuggestions.length) ? { data_source_id: activeConversation?.data_source_id || dataSourceFromUrl || undefined, question: msg, sql: streamSql, trace_id: streamTraceId, memory_hits: streamMemoryHits, answer_mode: streamAnswerMode, route: streamRoute, confidence: streamConfidence, suggestions: streamSuggestions } : null });
     setStreamingContent("");
     setStreamingThinking("");
     setStreaming(false);
@@ -2245,6 +2687,8 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
               );
             }
             const trainDataSourceId = msg.metadata?.data_source_id || activeConversation?.data_source_id || "";
+            const hasChart = (msg.chartData?.length ?? 0) > 0;
+            const [contentHead, contentTable] = hasChart ? splitMarkdownTable(msg.content) : [msg.content, ""];
             return (
             <div key={msg.id} className={clsx("group flex gap-1.5", msg.role === "user" ? "justify-end" : "justify-start")}>
               {msg.role === "assistant" && (
@@ -2282,6 +2726,9 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
                 {msg.role === "assistant" && msg.metadata?.thinking && (
                   <ThinkingBlock content={msg.metadata.thinking} lang={lang} />
                 )}
+                {msg.role === "assistant" && msg.metadata?.ui_render && (
+                  <UiRender data={msg.metadata.ui_render} />
+                )}
                 {msg.role === "assistant" ? (
                   <>
                     {msg.clarify ? (
@@ -2292,14 +2739,60 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
                         onSelect={(opt) => { void sendRef.current?.(opt); }}
                       />
                     ) : (
-                    <ChatRichContent
-                      size="sm"
-                      lang={lang}
-                      onChoiceSelect={handleQaChoice}
-                      choicesDisabled={streaming}
-                    >
-                      {msg.content}
-                    </ChatRichContent>
+                    <>
+                      <ChatRichContent
+                        size="sm"
+                        lang={lang}
+                        onChoiceSelect={handleQaChoice}
+                        choicesDisabled={streaming}
+                      >
+                        {contentHead}
+                      </ChatRichContent>
+                      {hasChart && (
+                        <div className="chat-chart-stack">
+                          {msg.chartData!.map((chart, idx) => {
+                            const drillDsId = (msg.metadata as any)?.data_source_id
+                              || activeConversation?.data_source_id
+                              || dataSourceFromUrl
+                              || "";
+                            const mk = `${msg.id || "live"}-${idx}`;
+                            return (
+                              <div key={idx}>
+                                <ChartRenderer
+                                  chart={chart}
+                                  onDrill={drillDsId
+                                    ? (label) => setDrillSeed({
+                                        msgKey: mk,
+                                        dataSourceId: drillDsId,
+                                        label,
+                                        labels: chart.labels,
+                                        seriesLabel: chart.datasets?.[0]?.label || "",
+                                      })
+                                    : undefined}
+                                />
+                                {drillSeed?.msgKey === mk && (
+                                  <DrillPanel
+                                    dataSourceId={drillSeed.dataSourceId}
+                                    seed={{ label: drillSeed.label, labels: drillSeed.labels, seriesLabel: drillSeed.seriesLabel }}
+                                    onClose={() => setDrillSeed(null)}
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {hasChart && contentTable.trim() && (
+                        <ChatRichContent
+                          size="sm"
+                          lang={lang}
+                          onChoiceSelect={handleQaChoice}
+                          choicesDisabled={streaming}
+                        >
+                          {contentTable}
+                        </ChatRichContent>
+                      )}
+                    </>
                     )}
                     {msg.metadata?.citations && msg.metadata.citations.length > 0 && (
                       <div className="mt-2 flex flex-col gap-1">
@@ -2310,10 +2803,28 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
                         ))}
                       </div>
                     )}
-                    {msg.chartData && msg.chartData.length > 0 && (
-                      <div className="chat-chart-stack">
-                        {msg.chartData.map((chart, idx) => (
-                          <ChartRenderer key={idx} chart={chart} />
+                    {(() => {
+                      const badge = dataAskRouteBadge(msg.metadata?.route, msg.metadata?.confidence);
+                      return badge ? (
+                        <span className={`mt-2 inline-flex items-center gap-1 self-start rounded-full border px-2 py-0.5 text-[11px] leading-4 ${badge.cls}`}>
+                          <svg viewBox="0 0 12 12" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M6 1.5 7.6 4.3l3.2.5-2.3 2.2.5 3.2L6 8.6l-3 1.6.5-3.2L1.2 4.8l3.2-.5L6 1.5Z" strokeLinejoin="round" />
+                          </svg>
+                          {badge.label}
+                        </span>
+                      ) : null;
+                    })()}
+                    {msg.metadata?.data_ask && (msg.metadata?.suggestions?.length ?? 0) > 0 && !streaming && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {msg.metadata!.suggestions!.slice(0, 3).map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => { void sendRef.current?.(s); }}
+                            className="rounded-full border border-[#3a3a5e] bg-[#1a1a2e] px-3 py-1 text-xs text-slate-300 transition hover:border-blue-500 hover:text-blue-300"
+                          >
+                            {s}
+                          </button>
                         ))}
                       </div>
                     )}
@@ -2324,14 +2835,31 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
                         question={msg.metadata?.question || ""}
                         originalSql={msg.metadata?.sql ?? null}
                         memoryHits={msg.metadata?.memory_hits || 0}
+                        answerMode={msg.metadata?.answer_mode ?? null}
                         lang={lang}
                         onSaved={(kind) => {
                           if (kind === "example" || kind === "correction") setMemPoolVersion((v) => v + 1);
                         }}
+                        onReanalyzed={(answer) =>
+                          setMessages((list) =>
+                            list.map((m) =>
+                              m.id === msg.id
+                                ? { ...m, content: answer, metadata: { ...m.metadata, answer_mode: "L3" } }
+                                : m,
+                            ),
+                          )
+                        }
                       />
                     )}
                     {msg.metadata?.dashboard_card && (
                       <DashboardCard card={msg.metadata.dashboard_card} lang={lang} />
+                    )}
+                    {msg.metadata?.dashboard_card?.artifact_id && (
+                      <DashboardSubscribeButton
+                        dashboardId={String(msg.metadata.dashboard_card.artifact_id)}
+                        convId={activeConversation?.id}
+                        lang={lang}
+                      />
                     )}
                   </>
                 ) : msg.content}
@@ -2954,6 +3482,8 @@ const appendAssistant = (content: string, thinking?: string, extras?: { chartDat
         </div>
         </div>
       </div>
+
+      <ArtifactResultPanel lang={lang} />
 
       {connectorSetup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

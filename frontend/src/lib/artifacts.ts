@@ -11,6 +11,7 @@ export function formatsForFilename(filename: string): DownloadFormat[] {
   if (ext === "pptx") return ["pptx"];
   if (ext === "xlsx") return ["xlsx"];
   if (ext === "docx") return ["docx"];
+  if (ext === "html" || ext === "htm") return [];
   return ["md", "docx", "xlsx", "pptx"];
 }
 

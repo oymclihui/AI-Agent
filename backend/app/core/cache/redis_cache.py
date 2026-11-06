@@ -43,6 +43,12 @@ _client_loop = None  # 持有创建该客户端的事件循环对象（身份比
 _failed_until = 0.0
 _FAIL_BACKOFF = 30.0
 
+try:  # 企微侧运行时可调 TTL；缺失时退回环境变量默认值
+    from app.core.data_ask.runtime_config import current_cache_ttl as _runtime_ttl
+except Exception:  # pragma: no cover
+    def _runtime_ttl(default: int = 300) -> int:
+        return default
+
 
 def _mark_failed():
     global _failed_until
@@ -98,12 +104,19 @@ async def cache_get_json(key: str):
 
 
 async def cache_set_json(key: str, value, ttl: int = None) -> bool:
-    """写入 JSON 缓存（default=str 兜底 datetime/Decimal 等类型）；失败静默"""
+    """写入 JSON 缓存（default=str 兜底 datetime/Decimal 等类型）；失败静默
+
+    TTL 优先级：显式入参 > 运行时配置（企微可调）> 环境变量默认值。
+    ttl <= 0 表示本次不缓存（企微侧关闭缓存）。
+    """
     cli = await _get_client()
     if cli is None:
         return False
     try:
-        await cli.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=int(ttl or DATAASK_CACHE_TTL))
+        resolved = int(ttl if ttl is not None else _runtime_ttl(DATAASK_CACHE_TTL))
+        if resolved <= 0:
+            return True
+        await cli.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=resolved)
         return True
     except Exception as exc:
         logger.warning("cache_set_failed: %s", exc)
@@ -133,7 +146,8 @@ async def rate_limit_check(key: str, limit: int = None, window: int = 60):
 # ── 问数缓存 key ──
 
 def make_dataask_cache_key(*, data_source_id, question, sql_override=None,
-                           llm_provider=None, llm_model=None, execute=None, history=None) -> str:
+                           llm_provider=None, llm_model=None, execute=None, history=None,
+                           user_key=None) -> str:
     raw = json.dumps({
         "ds": str(data_source_id),
         "q": question,
@@ -142,6 +156,8 @@ def make_dataask_cache_key(*, data_source_id, question, sql_override=None,
         "model": llm_model or "",
         "exec": bool(execute),
         "hist": history or [],
+        # 行级权限随用户不同而不同：缓存必须按用户隔离，否则受限结果会串给其他用户
+        "user": str(user_key or ""),
     }, ensure_ascii=False, sort_keys=True, default=str)
     return "dataask:cache:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

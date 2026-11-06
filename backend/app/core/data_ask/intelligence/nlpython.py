@@ -43,8 +43,14 @@ async def generate_python(
     llm_model: str | None,
     memory_examples: list[dict[str, Any]] | None = None,
     user_id: str | None = None,
+    skill_style: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     system = _python_rules()
+    # 蓝图 P0：分析技能方法论注入（影响分析步骤编排，如先同比再 TOPN）
+    if isinstance(skill_style, dict) and skill_style:
+        methodology = str(skill_style.get("instructions_md") or "").strip()
+        if methodology:
+            system = system + "\n分析方法论（生成代码时按此步骤组织分析）：\n" + methodology[:12000]
     user = (
         f"{format_semantic_context(semantic_model)}"
         f"{expand_metrics_in_prompt(semantic_model)}"
@@ -124,12 +130,23 @@ async def analyze_python_results(
     llm_provider: str | None,
     llm_model: str | None,
     user_id: str | None = None,
+    skill_style: dict[str, Any] | None = None,
 ) -> str:
     if inline_summary.strip():
         return inline_summary
     preview_rows = rows[:30]
     data_text = json.dumps({"columns": columns, "rows": preview_rows}, ensure_ascii=False, default=str)
+    # 蓝图 P0：分析技能覆盖（技能 persona/方法论 > 硬编码默认；未命中走原提示词，行为零改动）
     system = "你是数据分析顾问。根据 Python 分析结果用中文回答用户问题，给出结论与建议。简洁专业。"
+    if isinstance(skill_style, dict) and skill_style:
+        style = skill_style.get("answer_style")
+        style = style if isinstance(style, dict) else {}
+        skill_persona = str(style.get("persona") or "").strip()
+        if skill_persona:
+            system = skill_persona
+        methodology = str(skill_style.get("instructions_md") or "").strip()
+        if methodology:
+            system = "【分析方法论】\n" + methodology[:12000] + "\n\n" + system
     user = f"问题: {question}\nPython:\n{code}\n结果: {data_text}"
     llm = await ModelRouter.get_llm(
         db=db,

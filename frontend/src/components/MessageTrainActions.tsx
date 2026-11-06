@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Loader2, Pencil, Play, Sparkles, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { CheckCircle2, Lightbulb, Loader2, Minimize2, Pencil, Play, Sparkles, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { clsx } from "clsx";
 import toast from "react-hot-toast";
 import type { Lang } from "@/lib/i18n";
 import { dataAskApi, dsDistillApi } from "@/lib/api";
 
-type FeedbackKind = "like" | "dislike" | "correction" | "example";
+type FeedbackKind = "like" | "dislike" | "correction" | "example" | "verbose";
 
 interface TrainTaskState {
   id: number;
@@ -58,6 +58,12 @@ const T: Record<string, { zh: string; en: string }> = {
   previewOk: { zh: "试跑通过", en: "Preview OK" },
   previewTruncated: { zh: "仅显示前 {n} 行", en: "Showing first {n} rows" },
   needChange: { zh: "修正 SQL 与原 SQL 相同", en: "Corrected SQL equals original" },
+  verbose: { zh: "仍觉冗余", en: "Too verbose" },
+  verboseDone: { zh: "已记录：回答偏冗长", en: "Noted: answer too verbose" },
+  needsAnalysis: { zh: "需要分析", en: "Analyze deeper" },
+  analyzing: { zh: "分析中", en: "Analyzing" },
+  analyzeDone: { zh: "已补充深度分析", en: "Deep analysis added" },
+  analyzeFail: { zh: "分析失败", en: "Analysis failed" },
 };
 
 function pick(key: string, lang: Lang): string {
@@ -71,17 +77,23 @@ export function MessageTrainActions({
   question,
   originalSql,
   memoryHits = 0,
+  answerMode,
   lang,
   onSaved,
+  onReanalyzed,
 }: {
   dataSourceId: string;
   traceId?: number | null;
   question?: string;
   originalSql?: string | null;
   memoryHits?: number;
+  /** 当前回答形态：L1 直答 / L2 表格 / L3 深度分析 */
+  answerMode?: string | null;
   lang: Lang;
   /** 反馈落库/蒸馏完成后回调，父组件可借此刷新金标联想列表 */
   onSaved?: (kind: FeedbackKind) => void;
+  /** 点击「需要分析」后回填新的 L3 回答 */
+  onReanalyzed?: (answer: string) => void;
 }) {
   const [feedback, setFeedback] = useState<FeedbackKind | null>(null);
   const [taskId, setTaskId] = useState<number | null>(null);
@@ -91,12 +103,17 @@ export function MessageTrainActions({
   const [corrected, setCorrected] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const timerRef = useRef<number | null>(null);
   // 用 ref 持有 onSaved，避免回调变化重启训练轮询
   const onSavedRef = useRef(onSaved);
   useEffect(() => {
     onSavedRef.current = onSaved;
   }, [onSaved]);
+  const onReanalyzedRef = useRef(onReanalyzed);
+  useEffect(() => {
+    onReanalyzedRef.current = onReanalyzed;
+  }, [onReanalyzed]);
 
   // 行级 diff（简单 LCS）：仅展示增/删差异行
   const origLines = (originalSql || "").replace(/\r/g, "").split("\n");
@@ -193,7 +210,10 @@ export function MessageTrainActions({
       if (data?.task_id) setTaskId(data.task_id);
       // 存为示例会同步写入金标问题，立即通知父组件刷新联想
       if (kind === "example") onSavedRef.current?.(kind);
-      toast.success(pick("submitted", lang), { id: "train-feedback" });
+      toast.success(
+        kind === "verbose" ? pick("verboseDone", lang) : pick("submitted", lang),
+        { id: "train-feedback" },
+      );
       if (kind === "correction") setOpenPanel(false);
     } catch (err: unknown) {
       const detail =
@@ -202,6 +222,27 @@ export function MessageTrainActions({
       toast.error(detail ? `${pick("failedMsg", lang)}: ${detail}` : pick("failedMsg", lang));
     } finally {
       setPending(null);
+    }
+  };
+
+  /** L2 表格回答的「需要分析」：复用原 SQL 重跑，按 L3 深度分析重新生成。 */
+  const analyzeDeeper = async () => {
+    if (!traceId || analyzing) return;
+    setAnalyzing(true);
+    try {
+      const { data } = await dataAskApi.reanalyze(traceId);
+      const answer = String((data as { answer?: string })?.answer || "");
+      if (!answer) throw new Error(pick("analyzeFail", lang));
+      onReanalyzedRef.current?.(answer);
+      setFeedback("example");
+      toast.success(pick("analyzeDone", lang), { id: "train-analyze" });
+    } catch (err: unknown) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (err instanceof Error ? err.message : "");
+      toast.error(detail ? `${pick("analyzeFail", lang)}: ${detail}` : pick("analyzeFail", lang));
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -260,6 +301,25 @@ export function MessageTrainActions({
         >
           <Star className="h-3.5 w-3.5" />
           {pick("example", lang)}
+        </button>
+        {answerMode === "L2" && traceId && (
+          <button
+            type="button"
+            className={btnCls(analyzing)}
+            disabled={analyzing}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              void analyzeDeeper();
+            }}
+          >
+            {analyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lightbulb className="h-3.5 w-3.5" />}
+            {analyzing ? pick("analyzing", lang) : pick("needsAnalysis", lang)}
+          </button>
+        )}
+        <button type="button" className={btnCls(feedback === "verbose")} onClick={() => void submit("verbose")}>
+          {pending === "verbose" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Minimize2 className="h-3.5 w-3.5" />}
+          {pick("verbose", lang)}
         </button>
         {!feedback && (
           <span className="text-[11px] text-slate-500">{lang === "zh" ? "你的反馈会让智能体更聪明" : "Your feedback makes the agent smarter"}</span>

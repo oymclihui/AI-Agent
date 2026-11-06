@@ -20,8 +20,16 @@ from app.core.data_ask.govern.permission import (
     build_permission_scope_sql,
     inject_permission_filter,
     permission_config_from_rules,
+    resolve_permission_columns,
 )
 from app.core.data_ask.govern.sql_guard import disambiguate_subquery_columns, validate_select_sql
+from app.core.data_ask.govern.fanout import FANOUT_HINT, detect_fanout, rewrite_fanout
+from app.core.data_ask.govern.date_scope import fix_single_day_sql
+from app.core.cache.redis_cache import (
+    cache_get_json,
+    cache_set_json,
+    make_dataask_cache_key,
+)
 from app.core.data_ask.analysis.python_runner import run_python_analysis, validate_python_code
 from app.core.data_ask.excel.session_cache import (
     build_provenance,
@@ -32,8 +40,15 @@ from app.core.data_ask.excel.session_cache import (
 from app.core.data_ask.excel.retention import release_ephemeral_excel_workspace
 from app.core.data_ask.intelligence.nlpython import analyze_python_results, generate_python, repair_python
 from app.core.data_ask.intelligence.intent import is_forecast_question, rewrite_question
-from app.core.data_ask.intelligence.answer_mode import MODE_ANALYSIS, classify_answer_mode
+from app.core.data_ask.metric_layer import try_metric_route
+from app.core.data_ask.intelligence.answer_mode import (
+    MODE_ANALYSIS,
+    classify_answer_mode,
+    keywords_from_semantic,
+)
 from app.core.data_ask.intelligence.nl2sql import analyze_results, generate_sql, generate_sql_candidates, repair_sql
+from app.core.data_ask.skills_router import match_analysis_skill, skill_used_brief
+from app.core.data_ask.analysis.orchestrator import run_skill_orchestration
 from app.core.data_ask.intelligence.query_memory import retrieve_similar_queries
 from app.core.data_ask.intelligence.schema_retriever import rank_tables
 from app.core.data_ask.intelligence.value_link import enrich_tables
@@ -51,6 +66,8 @@ SCHEMA_TOP_K = 5
 
 _RE_REL_WINDOW = re.compile(r"(?:最近|近|过去)\s*([0-9一二三四五六七八九十两]+)\s*(天|日|周|月|年)")
 _RE_REL_DAY = {"今天": 0, "昨天": 1, "前天": 2}
+# 会话引擎 v1：周/月级相对时间（锚定数据最新日期）
+_RE_REL_WEEKMONTH = re.compile(r"上个星期|上个月|上周|本周|这周|这星期|本月|这月|上月")
 _CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
 
@@ -66,6 +83,114 @@ def _count_of(token: str) -> int | None:
     return _CN_DIGITS.get(token)
 
 
+_RE_CN_YMD_EX = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]")
+_RE_CN_MD_EX = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]")
+_RE_DATE_STR = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
+
+# 日期列识别：类型是 date/time，或列名本身是日期语义。
+# 有些库把日期存成 varchar（如 SR_CS_KL.RQ），只按类型判断会漏掉整类数据源。
+_DATE_COL_NAMES = ("RQ", "DATE", "DT", "DAY", "BIZ_DATE")
+_DATE_COL_KEYS = ("日期", "时间")
+
+
+async def _latest_biz_date(source: DataSource, all_tables: list[dict[str, Any]] | None):
+    """取数据源中首个日期列的最新日期；取不到返回 None。
+
+    同时支持 date 类型与 varchar 存日期字符串的列，避免新数据源因列类型
+    不规范导致「显式日期无年份锚定」，进而让 LLM 编造年份。
+    """
+    from datetime import date as _date
+
+    for table in all_tables or []:
+        for column in table.get("columns") or []:
+            name = str(column.get("name") if isinstance(column, dict) else column)
+            col_type = str(column.get("type") if isinstance(column, dict) else "").lower()
+            is_typed = any(token in col_type for token in ("date", "time"))
+            is_named = name.upper() in _DATE_COL_NAMES or any(k in name for k in _DATE_COL_KEYS)
+            if not (is_typed or is_named):
+                continue
+            try:
+                conn = build_connector_from_source(source)
+                try:
+                    qr = await conn.execute_select(
+                        f"SELECT MAX({name}) FROM {table.get('table_name')}", limit=1,
+                    )
+                finally:
+                    await conn.close()
+                raw = str(qr.rows[0][0]) if qr.rows and qr.rows[0][0] is not None else ""
+                m = _RE_DATE_STR.match(raw)
+                if not m:
+                    continue
+                return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except Exception:
+                continue
+    return None
+
+
+async def _resolve_explicit_dates(
+    source: DataSource,
+    all_tables: list[dict[str, Any]] | None,
+    question: str,
+) -> str:
+    """把显式中文日期（2026年10月7日 / 10月7日）规范为 ISO 并追加标注。
+
+    LLM 路径没有日期锚定，会把「2026年10月6日」照抄成样例数据里的日期
+    （实测出现 2025-01-11）。规范为 ISO + 标注后，指标层与 LLM 都拿到确定日期。
+    """
+    from datetime import date as _date
+
+    text = (question or "").strip()
+    if not text:
+        return question
+    if "其中「" in text:  # 已由 _resolve_relative_time 标注，避免重复处理
+        return question
+
+    def _fmt(y: int, m: int, d: int) -> str | None:
+        try:
+            return _date(y, m, d).isoformat()
+        except Exception:
+            return None
+
+    hits: list[tuple[str, str]] = []
+    out = text
+    latest = await _latest_biz_date(source, all_tables)
+    for mm in _RE_CN_YMD_EX.finditer(text):
+        iso = _fmt(int(mm.group(1)), int(mm.group(2)), int(mm.group(3)))
+        if iso:
+            hits.append((mm.group(0), iso))
+
+    if hits:
+        for phrase, iso in hits:
+            out = out.replace(phrase, iso, 1)
+    else:
+        mds = list(_RE_CN_MD_EX.finditer(text))
+        if not mds or latest is None:
+            return question
+        for mm in mds:
+            iso = _fmt(latest.year, int(mm.group(1)), int(mm.group(2)))
+            if iso:
+                hits.append((mm.group(0), iso))
+        for phrase, iso in hits:
+            out = out.replace(phrase, iso, 1)
+
+    if not hits:
+        return question
+    ann = "、".join(f"「{phrase}」指 {iso}" for phrase, iso in hits)
+    tail = f"，数据最新日期为 {latest.isoformat()}" if latest else ""
+    return f"{out}（其中{ann}{tail}）"
+
+
+def _business_columns(all_tables: list[dict[str, Any]] | None) -> set[str]:
+    """业务表列名集合（UPPER），用于校验行级权限的数据列是否真实存在。"""
+    names: set[str] = set()
+    for table in all_tables or []:
+        for column in table.get("columns") or []:
+            raw = column.get("name") if isinstance(column, dict) else column
+            if raw:
+                names.add(str(raw).upper())
+    return names
+
+
 async def _resolve_relative_time(
     source: DataSource,
     all_tables: list[dict[str, Any]] | None,
@@ -76,13 +201,15 @@ async def _resolve_relative_time(
     缺少可用的日期列、取不到最新日期或解析失败时，原样返回问题（不引入错误口径）。
     """
     from datetime import date, timedelta
+    from calendar import monthrange
 
     text = (question or "").strip()
     if not text:
         return question
     window = _RE_REL_WINDOW.search(text)
     day_off = next((off for kw, off in _RE_REL_DAY.items() if kw in text), None)
-    if not window and day_off is None:
+    weekmonth = _RE_REL_WEEKMONTH.search(text)
+    if not window and day_off is None and not weekmonth:
         return question
 
     anchor: tuple[str, str] | None = None
@@ -114,7 +241,28 @@ async def _resolve_relative_time(
     except Exception:
         return question
 
-    if window:
+    end = latest
+    if weekmonth:
+        # 周/月级窗口：上周/本周/本月为至今（month-to-date），上月为完整自然月
+        phrase = weekmonth.group(0)
+        monday = latest - timedelta(days=latest.weekday())
+        if "月" in phrase:
+            if phrase.startswith("上"):
+                total = latest.year * 12 + (latest.month - 1) - 1
+                year, month = divmod(total, 12)
+                start = date(year, month + 1, 1)
+                end = date(year, month + 1, monthrange(year, month + 1)[1])
+            else:
+                start = date(latest.year, latest.month, 1)
+        else:
+            if phrase.startswith("上"):
+                start = monday - timedelta(days=7)
+                end = start + timedelta(days=6)
+            else:
+                start = monday
+        if end > latest:
+            end = latest
+    elif window:
         count = _count_of(window.group(1))
         unit = window.group(2)
         if not count or count <= 0:
@@ -131,19 +279,35 @@ async def _resolve_relative_time(
             start = date(latest.year - count, latest.month, 1)
         phrase = window.group(0)
     else:
-        start = latest - timedelta(days=day_off or 0)
+        # 单日相对词（今天/昨天/前天）：锚定数据最新日期的偏移，必须是单日窗口
+        start = end = latest - timedelta(days=day_off or 0)
         phrase = next(kw for kw, off in _RE_REL_DAY.items() if off == day_off)
 
     if start > latest:
         return question
-    resolved = latest.isoformat() if start == latest else f"{start.isoformat()} 至 {latest.isoformat()}"
+    resolved = end.isoformat() if start == end else f"{start.isoformat()} 至 {end.isoformat()}"
     return f"{text}（其中「{phrase}」指 {resolved}，数据最新日期为 {latest.isoformat()}）"
+
+
+def _edge_pairs(edge: dict[str, Any]) -> list[tuple[str, str]]:
+    """还原一条边上的「本端列 → 对端列」字段对；兼容旧的单列 on。"""
+    pairs = [
+        (str(p.get("from") or ""), str(p.get("to") or ""))
+        for p in (edge.get("pairs") or [])
+        if isinstance(p, dict)
+    ]
+    pairs = [(a, b) for a, b in pairs if a and b]
+    if pairs:
+        return pairs
+    on = str(edge.get("on") or "")
+    return [(on, on)] if on else []
 
 
 def user_join_edges_from_tables(tables: list[Any]) -> list[dict[str, Any]]:
     """从已注册数据表的 join_keys 还原用户自定义的关联边。
 
-    join_keys 结构：{"edges": [{"to": 对端表, "on": 本端列}]}（单表视角、双向存储）。
+    join_keys 结构：{"edges": [{"to": 对端表, "on": "本端列", "pairs": [{"from": 本端列, "to": 对端列}]}]}
+    （单表视角、双向存储；pairs 支持 RQ+FDBH 这类复合键）。
     还原时合并双向记录，输出与 infer_join_graph 一致的 edge 结构，
     并标记 kind="user" 以示区别。若用户未定义任何关系返回空列表。
     """
@@ -160,23 +324,28 @@ def user_join_edges_from_tables(tables: list[Any]) -> list[dict[str, Any]]:
     for src, jk in jk_by_name.items():
         for edge in (jk.get("edges") or []):
             dst = str(edge.get("to") or "")
-            on = str(edge.get("on") or "")
-            if not dst or not on or dst not in jk_by_name:
+            if not dst or dst not in jk_by_name:
                 continue
             if src >= dst:
                 continue
-            dst_jk = jk_by_name.get(dst) or {}
-            to_col = on
-            for de in (dst_jk.get("edges") or []):
-                if str(de.get("to") or "") == src:
-                    to_col = str(de.get("on") or on)
-                    break
+            pairs = _edge_pairs(edge)
+            if not pairs:
+                # 只有对端表存了关系时，从反向记录还原
+                for de in ((jk_by_name.get(dst) or {}).get("edges") or []):
+                    if str(de.get("to") or "") == src:
+                        pairs = [(b, a) for a, b in _edge_pairs(de)]
+                        break
+            if not pairs:
+                continue
             edges.append({
                 "from": src,
                 "to": dst,
-                "label": on,
-                "from_column": on,
-                "to_column": to_col,
+                "label": ",".join(a for a, _ in pairs),
+                "from_column": pairs[0][0],
+                "to_column": pairs[0][1],
+                "pairs": [
+                    {"from_column": a, "to_column": b} for a, b in pairs
+                ],
                 "kind": "user",
             })
     return edges
@@ -230,6 +399,20 @@ async def load_source_context(
     return source, table_meta, source.semantic_model, perm_name, join_graph_edges
 
 
+_CACHE_REF_WORDS = ("它", "这个", "那个", "刚才", "上面", "再", "呢", "那他", "那她")
+
+
+def _cacheable_question(question: str) -> bool:
+    """只缓存独立完整问句；带指代的追问依赖上下文，缓存会串答。"""
+    text = " ".join(str(question or "").split())
+    return len(text) >= 6 and not any(w in text for w in _CACHE_REF_WORDS)
+
+
+def _route_confidence(route_mode: str) -> str:
+    """置信度分级（蓝图 L1）：确定性路由=high，LLM 生成+校验=medium。"""
+    return "high" if route_mode in ("override", "memory_reuse", "metric") else "medium"
+
+
 def _user_key(user: User | None) -> str:
     if not user:
         return "anonymous"
@@ -273,14 +456,15 @@ async def _gather_memory_examples(
     db: AsyncSession, *, data_source_id: str, question: str, top_k: int = 3,
     min_score: float | None = None,
     strong_score: float | None = None,
+    skill_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """问数记忆：golden queries（词面相似）+ 蒸馏示例库（向量相似，阶段二 L2）合并。"""
+    """问数记忆：技能专属示例优先，再合并金标与蒸馏示例库。"""
     try:
         from app.core.data_ask.distill.example_store import gather_memory_examples as _gather
 
         return await _gather(
             db, data_source_id=data_source_id, question=question, top_k=top_k,
-            min_score=min_score, strong_score=strong_score,
+            min_score=min_score, strong_score=strong_score, skill_id=skill_id,
         )
     except Exception:
         from app.core.data_ask.intelligence.query_memory import retrieve_similar_queries
@@ -293,8 +477,14 @@ async def _gather_memory_examples(
         )
 
 
+def _compact_question(text: str) -> str:
+    """同问判定用的归一化：去掉空白、标点与大小写差异。"""
+    return re.sub(r"[\s，。！？、；：,.!?;:“”\"'（）()]+", "", (text or "").lower())
+
+
 # P0-C 策略 knobs 硬默认（线上现行行为）：网格扫（replay/knob-sweep）选出的操作点
 # 固化到 source.metadata_.policy_knobs 后覆盖；spec_override 仅评估路径注入。
+
 _DEFAULT_POLICY_KNOBS: dict[str, Any] = {
     "memory_min_score": 0.35,
     "memory_top_k": 3,
@@ -349,6 +539,9 @@ async def _run_data_ask_impl(
     bypass_row_perm: bool = False,
     use_memory: bool = True,
     spec_override: dict[str, Any] | None = None,
+    force_answer_mode: str | None = None,
+    employee_id: str | None = None,
+    skill_id: str | None = None,
 ) -> dict[str, Any]:
     _t_start = time.monotonic()
     source = await db.get(DataSource, data_source_id)
@@ -357,6 +550,44 @@ async def _run_data_ask_impl(
     agent_provider, agent_model, agent_goal, agent_backstory = await _resolve_llm(
         db, source, llm_provider, llm_model, spec_override=spec_override,
     )
+    # 蓝图 P0：分析技能路由——数字员工绑定的分析技能命中后，结论人设/排版/口径可被技能覆盖。
+    # 只影响结论层（analyze_results / analyze_python_results 的提示词），不碰 SQL 生成与治理链；
+    # 未命中/异常一律 skill_ctx=None，走原硬编码逻辑（零风险兜底）。
+    skill_ctx = None
+    if employee_id or skill_id:
+        try:
+            skill_ctx = await match_analysis_skill(
+                db, question=question, employee_id=employee_id, skill_id=skill_id,
+                data_source_id=data_source_id,
+            )
+        except Exception:
+            skill_ctx = None
+    # 蓝图 P1 末：批评意见只生成草案；「发布 / 回滚 / 对比」才动版本。不是这类话则继续问数。
+    dialogue_act = False
+    try:
+        from app.core.chat.reflector import is_dialogue_act
+        from app.core.chat.skill_dialogue import handle_skill_dialogue
+
+        dialogue_act = is_dialogue_act(question)
+        if dialogue_act:
+            dialogue = await handle_skill_dialogue(
+                db, source=source, question=question, user=user,
+                employee_id=employee_id, skill_id=skill_id, skill_ctx=skill_ctx,
+            )
+            if dialogue:
+                if skill_ctx:
+                    dialogue["skill_used"] = skill_used_brief(skill_ctx)
+                return dialogue
+    except Exception:
+        logging.getLogger("data_ask").warning("skill_dialogue_failed", exc_info=True)
+        if dialogue_act:
+            return {
+                "answer": "这句修改没有完成，技能未改动。请换个说法，或稍后再说「发布」。",
+                "sql": "", "display_sql": "", "explanation": "",
+                "columns": [], "rows": [], "row_count": 0, "truncated": False,
+                "chart": None, "analysis_mode": "skill_revision", "answer_mode": "L1",
+                "standalone_question": question,
+            }
     # P1-A 预算轴：评估专用 SQL 修复重试上限（仅 spec_override 注入，线上默认为 None=MAX_SQL_RETRIES）
     max_sql_retries: int | None = None
     if spec_override and spec_override.get("max_sql_retries") is not None:
@@ -379,6 +610,18 @@ async def _run_data_ask_impl(
             )
         except Exception:
             standalone = question
+    elif not sql_override:
+        # 会话引擎 v1：无对话历史时用 Redis 会话状态做确定性追问改写
+        # （「那上周呢」+ 上次答了销售额 → 「上周销售额是多少」），不依赖 LLM
+        try:
+            from app.core.data_ask.session_engine import load_session, resolve_followup
+            _sess = await load_session(user)
+            if _sess:
+                _fq = resolve_followup(question, _sess)
+                if _fq:
+                    standalone = _fq
+        except Exception:
+            pass
     if trace_marks is not None:
         trace_marks["rewrite_ms"] = int((time.monotonic() - _t_start) * 1000)
     if str(source.driver) in ("excel_folder", "excel_template"):
@@ -391,7 +634,44 @@ async def _run_data_ask_impl(
             llm_provider=llm_provider,
             llm_model=llm_model,
             execute=execute,
+            skill_style=skill_ctx,
         )
+
+    # 蓝图 P1-②：技能步骤编排——技能带 metadata_.steps 时走算子编排（逐步取 facts →
+    # 结论生成），不再走 LLM 生成 SQL 的主链路；无 steps 保持 P0 行为（零改动兜底）。
+    # excel 源不参与（无 SQL 算子）；编排失败按普通异常上抛，由外层统一写失败轨迹。
+    if execute and not sql_override and skill_ctx and skill_ctx.get("steps"):
+        result = await run_skill_orchestration(
+            db,
+            source=source,
+            question=standalone,
+            user=user,
+            skill_ctx=skill_ctx,
+            llm_provider=agent_provider,
+            llm_model=agent_model,
+            agent_goal=agent_goal,
+            agent_backstory=agent_backstory,
+            stage_queue=stage_queue,
+            trace_marks=trace_marks,
+        )
+        result["skill_used"] = skill_used_brief(skill_ctx)
+        # 治理链已在算子内执行。有事实才沉淀，失败编排不入库。
+        if result.get("facts") and result.get("sql") and skill_ctx.get("skill_id"):
+            try:
+                from app.core.data_ask.skill_memory import save_skill_example
+
+                await save_skill_example(
+                    db,
+                    data_source_id=str(source.id),
+                    skill_id=str(skill_ctx["skill_id"]),
+                    question=standalone,
+                    sql_text=str(result.get("sql") or ""),
+                    source="orchestration",
+                    note="编排步骤经治理链产出",
+                )
+            except Exception:
+                logging.getLogger("data_ask").warning("skill_memory_deposit_failed", exc_info=True)
+        return result
 
     source, all_tables, semantic, perm_table, join_edges = await load_source_context(db, data_source_id)
     semantic, _profile_lookup = await load_ds_semantic(db, data_source_id, semantic)
@@ -416,7 +696,7 @@ async def _run_data_ask_impl(
         if not table_name:
             table_name = all_tables[0].get("table_name") if all_tables else None
         if table_name:
-            return await run_overview_analysis(
+            result = await run_overview_analysis(
                 db,
                 source=source,
                 table_name=table_name,
@@ -427,7 +707,10 @@ async def _run_data_ask_impl(
                 agent_backstory=agent_backstory,
                 user_id=user.id if user else None,
                 stage_queue=stage_queue,
+                skill_style=skill_ctx,
             )
+            result["skill_used"] = skill_used_brief(skill_ctx)
+            return result
 
     scope = await resolve_data_scope(db, user) if user else None
     ranked = rank_tables(standalone, all_tables, top_k=SCHEMA_TOP_K)
@@ -440,6 +723,23 @@ async def _run_data_ask_impl(
                   and not bypass_row_perm)
     perm_hint = ""
     if apply_perm and perm_table:
+        # 先校验权限列是否真实存在：配错列时宁可明确报错，也不要生成非法 SQL
+        # 或退化为「不加过滤」导致越权看到全量数据。
+        effective, perm_error = await resolve_permission_columns(
+            source, perm_table, perm_rules, _business_columns(all_tables),
+        )
+        if perm_error:
+            raise ValueError(
+                f"行级权限配置与数据源不一致：{perm_error}。"
+                "请管理员在数据源设置中校正 permission_rules（用户列 / 范围列 / 数据列）。"
+            )
+        if effective != {k: str(perm_rules.get(k) or "").upper() for k in effective}:
+            logging.getLogger("data_ask").warning(
+                "permission_columns_autocorrected ds=%s configured=%s effective=%s",
+                str(source.id), dict(perm_rules), effective,
+            )
+        # 后续所有注入（perm_hint / _wrap_permission / _probe_candidate）统一用校正后的列
+        perm_rules = effective
         scope_sql = build_permission_scope_sql(
             user_key=_user_key(user),
             permission_table=perm_table,
@@ -454,6 +754,8 @@ async def _run_data_ask_impl(
 
     if not sql_override:
         standalone = await _resolve_relative_time(source, all_tables, standalone)
+        # 显式中文日期 → ISO（相对时间已标注时自动跳过）
+        standalone = await _resolve_explicit_dates(source, all_tables, standalone)
         # P0-C：clarify 判定统一走参数化版本（默认参数 == 线上现行行为），knobs 可调
         from app.core.data_ask.replay.strategies import clarify_decision
 
@@ -494,6 +796,7 @@ async def _run_data_ask_impl(
             db, data_source_id=data_source_id, question=standalone,
             top_k=knobs["memory_top_k"], min_score=knobs["memory_min_score"],
             strong_score=knobs["memory_strong_score"],
+            skill_id=(skill_ctx or {}).get("skill_id") if skill_ctx else None,
         )
         if use_memory else []
     )
@@ -511,6 +814,26 @@ async def _run_data_ask_impl(
                 for e in memory_examples
             ]
 
+    # 同一提问的强记忆直接复用其 SQL：few-shot 提示无法保证模型不改写口径，
+    # 而业务要求「纠正过的口径下次必须生效」，因此对完全同问（忽略空白/大小写）
+    # 的 strong 示例直接沿用 SQL；执行失败仍由 _execute_with_retry 修复兜底。
+    # 同问命中多条时优先金标（反馈时同步写入，纠正后立刻生效；蒸馏示例由 Celery 异步更新，可能滞后）。
+    memory_sql = ""
+    if not sql_override:
+        _asked = _compact_question(standalone)
+        _matched: list[dict[str, Any]] = []
+        for _ex in memory_examples or []:
+            if str(_ex.get("tier") or "strong") != "strong":
+                continue
+            if _compact_question(str(_ex.get("question") or "")) != _asked:
+                continue
+            _cand = str(_ex.get("sql") or "").strip()
+            if _cand.lower().lstrip("(").startswith(("select", "with")):
+                _matched.append(_ex)
+        if _matched:
+            _golden = [e for e in _matched if str(e.get("ref_type") or "") == "golden"]
+            memory_sql = str((_golden or _matched)[0].get("sql") or "").strip()
+
     # P1-D 发现树：root（提问/改写/用户）+ intent（记忆命中与生成方式）
     root_id = _tree_add(trace_marks, "root", None, {
         "question": question, "standalone": standalone,
@@ -526,15 +849,43 @@ async def _run_data_ask_impl(
             for e in (memory_examples or [])
         ],
         "sql_override": bool(sql_override),
+        "memory_reuse": bool(memory_sql),
     })
 
     _t_gen = time.monotonic()
     voted_qr: dict[str, Any] | None = None
+    # 指标层 v1（蓝图 L1）：意图→指标组合→确定性拼 SQL。
+    # 优先级：sql_override > memory_sql(金标) > 指标层 > LLM；未命中返回 None 走 LLM。
+    metric_hit: dict[str, Any] | None = None
+    if not sql_override and not memory_sql:
+        try:
+            metric_hit = await try_metric_route(source, standalone, all_tables)
+        except Exception:
+            metric_hit = None
+    route_mode = "single"
+    metric_intent: dict[str, Any] | None = None
     if sql_override:
+        route_mode = "override"
         sql, explanation = sql_override.strip(), "User provided SQL"
         _tree_add(trace_marks, "candidate", intent_id, {
             "index": 0, "mode": "override",
             "sql": sql[:8000], "explanation": explanation[:500],
+        })
+    elif memory_sql:
+        route_mode = "memory_reuse"
+        sql, explanation = memory_sql, "沿用已确认的问答口径"
+        _tree_add(trace_marks, "candidate", intent_id, {
+            "index": 0, "mode": "memory_reuse",
+            "sql": sql[:8000], "explanation": explanation[:500],
+        })
+    elif metric_hit:
+        route_mode = "metric"
+        sql, explanation = str(metric_hit["sql"]), str(metric_hit["explanation"])
+        metric_intent = {k: metric_hit.get(k) for k in ("metric_keys", "metric_names", "dimension", "time")}
+        _tree_add(trace_marks, "candidate", intent_id, {
+            "index": 0, "mode": "metric",
+            "sql": sql[:8000], "explanation": explanation[:500],
+            "metrics": metric_hit.get("metric_names") or [],
         })
     elif question_needs_variants(standalone, ranked):
         pairs = await generate_sql_candidates(
@@ -698,6 +1049,9 @@ async def _run_data_ask_impl(
             "chart": None,
             "generated_only": True,
             "standalone_question": standalone,
+            "route": route_mode,
+            "confidence": _route_confidence(route_mode),
+            "metric_intent": metric_intent,
         }
         await _emit_sql_stages(stage_queue, question, preview)
         return preview
@@ -768,21 +1122,41 @@ async def _run_data_ask_impl(
     )
 
     _t_ana = time.monotonic()
-    answer_mode = classify_answer_mode(standalone, qr["columns"], qr["rows"])
-    analysis = await analyze_results(
-        db,
-        question=standalone,
-        sql=qr["exec_sql"],
-        columns=qr["columns"],
-        rows=qr["rows"],
-        chart=chart,
-        answer_mode=answer_mode,
-        llm_provider=agent_provider,
-        llm_model=agent_model,
-        user_id=user.id if user else None,
-        agent_goal=agent_goal,
-        agent_backstory=agent_backstory,
+    answer_mode = force_answer_mode or classify_answer_mode(
+        standalone,
+        qr["columns"],
+        qr["rows"],
+        extra_keywords=keywords_from_semantic(semantic),
     )
+    # 指标层单值查询结果为空：给确定性兜底文案（数据未同步是常态，避免 LLM 自由发挥误导口径）
+    _metric_no_data = (
+        metric_intent is not None
+        and not metric_intent.get("dimension")
+        and qr["rows"]
+        and all(v is None for _row in qr["rows"] for v in _row)
+    )
+    if _metric_no_data:
+        _names = "、".join(metric_intent.get("metric_names") or []) or "该指标"
+        _t = metric_intent.get("time") or {}
+        _tstart, _tend = _t.get("start"), _t.get("end")
+        _tdesc = _tstart if _tstart == _tend else f"{_tstart} 至 {_tend}"
+        analysis = f"{_names}暂无数据（{_tdesc} 无记录，可能数据尚未同步）。"
+    else:
+        analysis = await analyze_results(
+            db,
+            question=standalone,
+            sql=qr["exec_sql"],
+            columns=qr["columns"],
+            rows=qr["rows"],
+            chart=chart,
+            answer_mode=answer_mode,
+            llm_provider=agent_provider,
+            llm_model=agent_model,
+            user_id=user.id if user else None,
+            agent_goal=agent_goal,
+            agent_backstory=agent_backstory,
+            skill_style=skill_ctx,
+        )
     analysis, next_chart = await _attach_forecast(
         str(source.id), qr["columns"], qr["rows"], standalone, analysis, chart
     )
@@ -808,6 +1182,10 @@ async def _run_data_ask_impl(
         "analysis_mode": "sql",
         "answer_mode": answer_mode,
         "standalone_question": standalone,
+        "route": route_mode,
+        "confidence": _route_confidence(route_mode),
+        "metric_intent": metric_intent,
+        "skill_used": skill_used_brief(skill_ctx),
     }
 
 
@@ -822,7 +1200,7 @@ async def write_ask_trace(
     success: bool = True,
     error_message: str | None = None,
     duration_ms: int | None = None,
-    marks: dict[str, int] | None = None,
+    marks: dict[str, Any] | None = None,
     cached: bool = False,
 ) -> int | None:
     """写问数轨迹（Agent Evolution 阶段一信号采集）。独立容错，绝不影响主流程。"""
@@ -853,6 +1231,7 @@ async def write_ask_trace(
             success=success,
             error_message=(error_message or "")[:2000] or None,
             analysis_mode=r.get("analysis_mode") or None,
+            answer_mode=r.get("answer_mode") or None,
             memory_hits=int(m.get("memory_hits") or 0),
             duration_ms=duration_ms,
             rewrite_ms=m.get("rewrite_ms"),
@@ -862,6 +1241,16 @@ async def write_ask_trace(
             result_signature=sig,
             clarification=bool(r.get("clarification")),
             cached=cached,
+            skill_id=(str((r.get("skill_used") or {}).get("skill_id"))[:36] or None)
+            if isinstance(r.get("skill_used"), dict) and (r.get("skill_used") or {}).get("skill_id")
+            else None,
+            skill_version=(
+                str((r.get("skill_used") or {}).get("version"))[:16]
+                if isinstance(r.get("skill_used"), dict)
+                and (r.get("skill_used") or {}).get("version") is not None
+                else None
+            ),
+            steps_profile=(r.get("steps_profile")[:12] if isinstance(r.get("steps_profile"), list) else None),
         )
         db.add(row)
         await db.flush()
@@ -961,6 +1350,47 @@ async def run_data_ask(
     """问数入口包装器：计时 + 写 ask_trace + 结果注入 trace_id（阶段一信号采集）。"""
     t0 = time.monotonic()
     marks: dict[str, int] = {}
+    # 同问短期缓存：语义提示对模型只是建议，结果必须可复现，重复提问直接复用
+    # 蓝图 P0：缓存键纳入技能维度（employee_id/skill_id），否则不同技能命中同一缓存会串风格
+    _skill_scope = ""
+    if kwargs.get("employee_id"):
+        _skill_scope += f":emp:{kwargs['employee_id']}"
+    if kwargs.get("skill_id"):
+        _skill_scope += f":skill:{kwargs['skill_id']}"
+    cache_key = None
+    try:
+        from app.core.chat.reflector import is_dialogue_act
+        _dialogue_act = is_dialogue_act(question)
+    except Exception:
+        _dialogue_act = False
+    if (
+        not _dialogue_act
+        and kwargs.get("execute", True)
+        and not kwargs.get("sql_override")
+        and _cacheable_question(question)
+    ):
+        cache_key = make_dataask_cache_key(
+            data_source_id=data_source_id,
+            question=question,
+            llm_provider=kwargs.get("llm_provider"),
+            llm_model=kwargs.get("llm_model"),
+            execute=True,
+            user_key=_user_key(user) + _skill_scope,
+        )
+        hit = await cache_get_json(cache_key)
+        if isinstance(hit, dict) and hit.get("answer"):
+            hit["cached"] = True
+            hit["trace_id"] = None
+            # 缓存命中也要更新会话状态（否则后续追问会跟到更早的问题上）
+            try:
+                from app.core.data_ask.session_engine import build_suggestions, extract_state, save_session
+                _state = extract_state(hit)
+                await save_session(user, _state)
+                if not hit.get("suggestions"):
+                    hit["suggestions"] = build_suggestions(_state)
+            except Exception:
+                pass
+            return hit
     try:
         result = await _run_data_ask_impl(
             db,
@@ -998,6 +1428,18 @@ async def run_data_ask(
         except Exception:
             pass
         raise
+    # 会话引擎 v1：记录会话状态（指标/维度/时间/SQL），附 3 个确定性追问建议
+    # （在写缓存前挂上，缓存命中时直接带回）
+    try:
+        from app.core.data_ask.session_engine import build_suggestions, extract_state, save_session
+        state = extract_state(result)
+        await save_session(user, state)
+        if not result.get("suggestions"):
+            result["suggestions"] = build_suggestions(state)
+    except Exception:
+        pass
+    if cache_key:
+        await cache_set_json(cache_key, result)
     trace_id = await write_ask_trace(
         db, data_source_id=data_source_id, question=question, user=user,
         result=result, duration_ms=int((time.monotonic() - t0) * 1000), marks=marks,
@@ -1118,8 +1560,15 @@ async def run_ml_data_ask(
         )
 
     # Step 2: Execute SQL to get data
-    perm_rules = permission_config_from_rules(source.permission_rules) if hasattr(source, 'permission_rules') and source.permission_rules else {}
-    apply_perm = bool(perm_table and scope)
+    perm_rules = permission_config_from_rules(getattr(source, "permission_rules", None))
+    apply_perm = bool(perm_table) and not bypass_row_permission(user, scope)
+    if apply_perm and perm_table:
+        effective, perm_error = await resolve_permission_columns(
+            source, perm_table, perm_rules, _business_columns(all_tables),
+        )
+        if perm_error:
+            raise ValueError(f"行级权限配置与数据源不一致：{perm_error}")
+        perm_rules = effective
     exec_sql = sql
     qr = await _execute_with_retry(
         db,
@@ -1164,7 +1613,7 @@ async def run_ml_data_ask(
             "explanation": explanation,
             "columns": columns, "rows": rows,
             "row_count": 0, "truncated": False,
-            "chart": None, "analysis_mode": "ml",
+            "chart": None, "analysis_mode": "ml", "answer_mode": "L1",
         }
 
     df = pd.DataFrame(rows, columns=columns)
@@ -1397,6 +1846,7 @@ Assign result to `result`.
         "truncated": len(ml_rows) > 500,
         "chart": chart,
         "analysis_mode": "ml",
+        "answer_mode": "L3",
     }
 
 
@@ -1419,6 +1869,7 @@ async def run_excel_data_ask(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     execute: bool = True,
+    skill_style: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not source.chat_enabled and execute:
         raise ValueError("Chat Q&A is disabled for this data source")
@@ -1437,6 +1888,7 @@ async def run_excel_data_ask(
         db, data_source_id=source.id, question=question,
         top_k=knobs["memory_top_k"], min_score=knobs["memory_min_score"],
         strong_score=knobs["memory_strong_score"],
+        skill_id=(skill_style or {}).get("skill_id") if skill_style else None,
     )
     _, _, semantic, _, _ = await load_source_context(db, source.id)
 
@@ -1452,6 +1904,7 @@ async def run_excel_data_ask(
             llm_model=agent_model,
             memory_examples=memory_examples,
             user_id=user.id if user else None,
+            skill_style=skill_style,
         )
 
     ok, msg = validate_python_code(code)
@@ -1534,6 +1987,7 @@ async def run_excel_data_ask(
         llm_provider=llm_provider,
         llm_model=llm_model,
         user_id=user.id if user else None,
+        skill_style=skill_style,
     )
 
     await log_query(
@@ -1561,6 +2015,7 @@ async def run_excel_data_ask(
         "analysis_mode": "python",
         "files_released": files_released,
         "provenance": provenance,
+        "skill_used": skill_used_brief(skill_style),
     }
 
 
@@ -1616,6 +2071,7 @@ async def _probe_candidate(
     perm_rules: dict[str, str],
 ) -> dict[str, Any]:
     expanded = expand_metric_sql(sql, question, semantic, ranked, str(source.driver))
+    expanded, _date_note = fix_single_day_sql(question, expanded)
     base = {
         "sql": expanded,
         "explanation": explanation,
@@ -1640,6 +2096,15 @@ async def _probe_candidate(
     )
     if not col_ok:
         base["error"] = col_msg
+        return base
+    # 扇出硬校验：明细级 JOIN 会把客流/客单价放大几千倍，候选直接判负
+    rewritten = rewrite_fanout(expanded)
+    if rewritten:
+        expanded = rewritten
+        base["sql"] = expanded
+        base["exec_sql"] = expanded
+    if detect_fanout(expanded):
+        base["error"] = FANOUT_HINT
         return base
     exec_sql = _wrap_permission(expanded, apply_perm, perm_table, perm_rules, user, source)
     base["exec_sql"] = exec_sql
@@ -1672,6 +2137,11 @@ def _wrap_permission(
 ) -> str:
     if not apply_perm or not perm_table:
         return sql
+    missing = [k for k in ("user_column", "scope_column", "data_column") if not perm_rules.get(k)]
+    if missing:
+        raise ValueError(
+            f"行级权限配置不完整（缺少 {', '.join(missing)}），已拒绝执行以避免越权取数"
+        )
     scope_sql = build_permission_scope_sql(
         user_key=_user_key(user),
         permission_table=perm_table,
@@ -1714,11 +2184,63 @@ async def _execute_with_retry(
     explanation = ""
     last_error = ""
     current_sql = sql
-    current_exec = exec_sql
+    # 单日口径硬约束：昨天/今天类提问，多日范围确定性收敛为最新营业日
+    current_sql, _date_note = fix_single_day_sql(question, current_sql)
+    if current_sql != sql:
+        display_sql = current_sql
+    # current_exec 必须无条件赋值：SQL 未被 fix_single_day 改写时，
+    # 旧代码会跳过赋值导致 UnboundLocalError（指标层规范 SQL 已是收敛形态，必踩）
+    current_exec = _wrap_permission(current_sql, apply_perm, perm_table, perm_rules, user, source)
     # P1-A：评估路径可用 spec_override 压低重试上限构造预算点；线上 None=MAX_SQL_RETRIES
     retry_limit = MAX_SQL_RETRIES if max_sql_retries is None else max(0, int(max_sql_retries))
+    fanout_fixes = 0  # 扇出修正独立计数，不占用 SQL 执行重试预算
 
     for attempt in range(retry_limit + 1):
+        # 扇出硬校验：执行前拦截明细级 JOIN，强制按「各自预聚合再关联」范式重写
+        while detect_fanout(current_sql):
+            rewritten = rewrite_fanout(current_sql)
+            if rewritten:
+                current_sql = rewritten
+                display_sql = rewritten
+                current_exec = _wrap_permission(
+                    rewritten, apply_perm, perm_table, perm_rules, user, source
+                )
+                explanation = "客流与销售已各自汇总后再关联，避免明细行放大客流"
+                continue
+            if fanout_fixes >= 2:
+                raise ValueError(FANOUT_HINT)
+            fanout_fixes += 1
+            fixed_sql, explanation = await repair_sql(
+                db,
+                question=question,
+                driver=str(source.driver),
+                tables=ranked,
+                failed_sql=current_sql,
+                error_message=FANOUT_HINT,
+                llm_provider=agent_provider,
+                llm_model=agent_model,
+                permission_hint=perm_hint,
+                join_edges=join_edges,
+                semantic_model=semantic,
+                user_id=user.id if user else None,
+            )
+            fixed_sql = disambiguate_subquery_columns(fixed_sql, dialect=str(source.driver))
+            ok, msg = validate_select_sql(fixed_sql, allowed_tables=allowed, dialect=str(source.driver))
+            if not ok:
+                raise ValueError(msg)
+            col_ok, col_msg = validate_sql_columns(
+                fixed_sql,
+                semantic_model=semantic,
+                user_is_admin=bool(user and user.is_admin),
+                scope=scope,
+            )
+            if not col_ok:
+                raise ValueError(col_msg)
+            current_sql = fixed_sql
+            display_sql = fixed_sql
+            current_exec = _wrap_permission(
+                fixed_sql, apply_perm, perm_table, perm_rules, user, source
+            )
         conn = build_connector_from_source(source)
         try:
             qr = await conn.execute_select(current_exec)
@@ -1873,7 +2395,7 @@ async def stream_data_ask(
     for _chart in (_charts or []):
         if _chart:
             yield json.dumps({"chart_data": _chart}, ensure_ascii=False, default=str) + "\n"
-    yield json.dumps({"event": "done", "row_count": result.get("row_count", 0), "trace_id": result.get("trace_id"), "memory_hits": int(result.get("memory_hits") or 0)}, ensure_ascii=False) + "\n"
+    yield json.dumps({"event": "done", "row_count": result.get("row_count", 0), "trace_id": result.get("trace_id"), "memory_hits": int(result.get("memory_hits") or 0), "answer_mode": result.get("answer_mode"), "route": result.get("route"), "confidence": result.get("confidence"), "suggestions": result.get("suggestions") or []}, ensure_ascii=False) + "\n"
 
 
 def _suggest_chart(columns: list[str], rows: list[list[Any]], question: str = "") -> dict[str, Any] | None:

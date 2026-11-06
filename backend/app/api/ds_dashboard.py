@@ -104,6 +104,46 @@ async def generate_dashboard(
     return DashboardGenerateOut(task_id=str(art.id), status=art.status, message="看板生成任务已启动")
 
 
+@router.get("/data-sources/{sid}/dashboards")
+async def list_dashboards(
+    sid: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """当前数据源的看板列表（最近 20 个），供数据源页「我的看板」入口使用。"""
+    source = await _get_source(db, sid)
+    await assert_data_source_access(db, source, user)
+    rows = (
+        await db.execute(
+            select(DashboardArtifact)
+            .where(DashboardArtifact.data_source_id == str(source.id))
+            .options(defer(DashboardArtifact.html), defer(DashboardArtifact.snapshot))
+            .order_by(DashboardArtifact.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(a.id),
+                "title": a.title or "",
+                "status": a.status,
+                "stage": a.stage,
+                "progress": a.progress or 0,
+                "period_start": a.period_start,
+                "period_end": a.period_end,
+                "kpis": list(a.kpis or []),
+                "anchor_status": a.anchor_status,
+                "error": a.error,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "view_url": f"/api/v1/dashboards/{a.id}/view",
+                "widget_url": f"/dashboards/{a.id}",
+            }
+            for a in rows
+        ]
+    }
+
+
 @router.get("/dashboards/tasks/{tid}", response_model=DashboardTaskOut)
 async def dashboard_task(
     tid: str,
@@ -159,6 +199,52 @@ async def view_dashboard(
         detail = art.error or f"看板尚未生成完成（status={art.status}, stage={art.stage}）"
         raise HTTPException(status_code=409, detail=detail)
     return HTMLResponse(content=art.html, status_code=200)
+
+
+@router.get("/dashboards/{tid}/manifest")
+async def dashboard_manifest(
+    tid: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """组件视图：把已完成看板拆成 widget 列表，供前端渲染与后续交互。"""
+    from app.core.dashboard.manifest import (
+        build_interaction,
+        build_manifest,
+        sort_rows_for_widget,
+        validate_manifest,
+    )
+    from app.db.models import MetricDimension
+
+    art, _ = await _get_artifact_with_access(db, tid, user, with_html=True)
+    if art.status != "done" or not art.snapshot:
+        detail = art.error or f"看板尚未生成完成（status={art.status}, stage={art.stage}）"
+        raise HTTPException(status_code=409, detail=detail)
+    manifest = build_manifest(art.snapshot, "retail_overview")
+    for w in manifest:
+        rows = sort_rows_for_widget(w, (art.snapshot.get(w["data_ref"]) or [])[:500])
+        w["data"] = {"columns": w["columns"], "rows": rows}
+    dims = (
+        await db.execute(
+            select(MetricDimension)
+            .where(MetricDimension.data_source_id == str(art.data_source_id))
+            .order_by(MetricDimension.hierarchy_level.asc(), MetricDimension.name.asc())
+        )
+    ).scalars().all()
+    dim_list = [
+        {"name": d.name, "field": d.column_name, "type": d.data_type, "level": d.hierarchy_level}
+        for d in dims
+    ]
+    interaction = build_interaction(dim_list, manifest)
+    return {
+        "dashboard_id": art.dashboard_id or art.id,
+        "artifact_id": art.id,
+        "data_source_id": str(art.data_source_id),
+        "template": art.template,
+        "widgets": manifest,
+        "issues": validate_manifest(manifest, art.snapshot),
+        **interaction,
+    }
 
 
 @router.get("/data-ask/dashboard/events")

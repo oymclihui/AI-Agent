@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 import json
 
 from app.db.session import get_db
 from app.db.models import (
     Agent as AgentModel,
+    AgentEvent,
     AgentExecution,
     AgentShare,
     AgentShareGranteeType,
@@ -16,9 +17,13 @@ from app.db.models import (
     Department,
     ExecutionStatus,
     User,
+    WecomAgentBinding,
 )
 from app.db.base import generate_uuid
 from pydantic import BaseModel, Field
+
+from typing import Any
+
 from app.schemas.agent import (
     AgentCreate,
     AgentUpdate,
@@ -582,19 +587,39 @@ async def run_agent(
     )
 
     if payload.stream:
-        async def token_stream():
+        def _map_event(raw: dict) -> dict:
+            """executor.stream_with_tools 原始事件 → SSE 事件（对标 Harness session/event）。
+
+            向后兼容：assistant/stream 事件仍保留 token 字段，老前端只消费 token 的不会炸。
+            """
+            if "thinking" in raw:
+                return {"type": "assistant/thinking", "thinking": raw["thinking"]}
+            if "token" in raw:
+                return {"type": "assistant/stream", "token": raw["token"]}
+            if "tool_call" in raw:
+                tc = raw["tool_call"]
+                return {"type": "tool/call", "tool_call": tc, "name": tc.get("name", "")}
+            if "tool_result" in raw:
+                tr = raw["tool_result"]
+                return {"type": "tool/result", "tool_result": tr, "name": tr.get("name", "")}
+            # 兜底：原样透传，type 为 unknown
+            return {"type": "unknown", **raw}
+
+        async def event_stream():
             try:
-                async for token in executor.stream(task):
-                    yield f"data: {json.dumps({'token': token})}\n\n"
+                async for raw in executor.stream_with_tools(task, db=db, execution_id=str(execution.id)):
+                    event = _map_event(raw)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'turn/end'})}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
                 reset_current_user_id(ctx)
                 reset_harness_context(harness_token)
 
-        return StreamingResponse(token_stream(), media_type="text/event-stream")
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     try:
-        result = await executor.run(task, context=payload.context, db=db)
+        result = await executor.run(task, context=payload.context, db=db, execution_id=str(execution.id))
         execution.status = ExecutionStatus.completed
         execution.output = result["output"]
         execution.token_usage = result.get("token_usage", {})
@@ -618,3 +643,280 @@ async def run_agent(
         "steps": execution.steps,
         "harness_trace": result.get("harness_trace", []),
     }
+
+
+# ── AgentExecution 事件回放（对标 Harness replay）──────────────────
+
+@router.get("/executions/{execution_id}/events")
+async def replay_execution_events(
+    execution_id: str,
+    limit: int = Query(default=500, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the append-only event log for an AgentExecution (按 seq 递增).
+
+    对标 Harness session event log replay：一条 execution 对应多条 AgentEvent，
+    可用于前端 timeline 展示、问题排查、LLM 输入回放等场景。
+    """
+    exec_obj = await db.get(AgentExecution, execution_id)
+    if not exec_obj:
+        raise HTTPException(status_code=404, detail="execution not found")
+
+    rows = (await db.execute(
+        select(AgentEvent).where(AgentEvent.execution_id == execution_id)
+        .order_by(AgentEvent.seq.asc())
+        .limit(limit)
+    )).scalars().all()
+
+    return {
+        "execution_id": execution_id,
+        "agent_id": exec_obj.agent_id,
+        "status": exec_obj.status.value if isinstance(exec_obj.status, ExecutionStatus) else exec_obj.status,
+        "total_events": len(rows),
+        "events": [
+            {
+                "seq": e.seq,
+                "turn": e.turn,
+                "step": e.step,
+                "type": e.event_type,
+                "name": e.name,
+                "source": e.source,
+                "level": e.level,
+                "payload": e.payload,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in rows
+        ],
+    }
+
+
+# ── 企业微信 Bot 关联（Bot → 智能体）─────────────────────────────
+
+class AgentWecomBindingIn(BaseModel):
+    bot_id: str = Field(..., min_length=1, max_length=128)
+    enabled: bool = False
+    chat_ids: list[str] = Field(default_factory=list)
+    force: bool = False
+    reply_template: str | None = Field(default=None, max_length=400)
+    # 该智能体的显示样式覆盖，只写要改的项，空则全部继承全局
+    style: dict[str, Any] | None = Field(default=None)
+
+
+# 智能体级样式覆盖允许的键，需与企微全局样式保持一致
+_STYLE_KEYS = frozenset({
+    "theme", "font_size", "zebra", "show_title", "show_table", "show_chart",
+    "table_max_rows", "table_dpi", "table_max_width", "show_thousands", "truncate_hint",
+    "chart_type", "show_value_labels", "show_legend",
+    "chart_width", "chart_height", "chart_dpi", "chart_max_labels",
+    "text_template", "clip_bytes", "chat_limit",
+    "voice_reply", "voice_name", "voice_max_chars",
+    "voice_rate", "voice_volume", "voice_pitch",
+    "voice_quiet_from", "voice_quiet_to",
+})
+
+
+def _mask_bot_id(bot_id: str) -> str:
+    if not bot_id:
+        return ""
+    if len(bot_id) <= 12:
+        return bot_id
+    return f"{bot_id[:6]}…{bot_id[-6:]}"
+
+
+def _wecom_connection() -> dict:
+    from app.core.wecom.listener import wecom_link
+
+    state = {
+        "connected": "online",
+        "relay": "online",
+        "disconnected": "disconnected",
+        "disabled": "disabled",
+    }.get(str(wecom_link.status), "disconnected")
+    return {"state": state, "raw": str(wecom_link.status)}
+
+
+async def _require_agent_config(db: AsyncSession, agent_id: str, user: User) -> AgentModel:
+    """管理员或智能体所有者（含 manage 授权）才能配置企业微信关联。"""
+    agent = await db.get(AgentModel, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not user.is_admin:
+        await require_agent_manage(db, agent, user)
+    return agent
+
+
+async def _wecom_payload(db: AsyncSession, agent_id: str) -> dict:
+    from app.core.wecom.push import load_wecom_config, public_config
+
+    config = public_config(await load_wecom_config(db))
+    row = (
+        await db.execute(select(WecomAgentBinding).where(WecomAgentBinding.agent_id == agent_id))
+    ).scalars().first()
+    bot_id = str(row.bot_id) if row else config["bot_id"]
+    return {
+        "agent_id": agent_id,
+        "bound": row is not None,
+        "bot_id": bot_id,
+        "bot_id_masked": _mask_bot_id(bot_id),
+        "bot_name": "",
+        "enabled": bool(row.enabled) if row else False,
+        "chat_ids": list(row.chat_ids or []) if row else [],
+        "reply_template": str(row.reply_template or "") if row else "",
+        "style": dict(row.style or {}) if row else {},
+        "bot_configured": bool(config["bot_id"] and config["secret_set"]),
+        "bot_config_enabled": bool(config["enabled"]),
+        "receiver_chat_ids": config["chat_ids"],
+        "connection": _wecom_connection(),
+        "conflict_agent": None,
+    }
+
+
+@router.get("/{agent_id}/wecom")
+async def get_agent_wecom(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await _require_agent_config(db, agent_id, user)
+    return await _wecom_payload(db, agent_id)
+
+
+@router.put("/{agent_id}/wecom")
+async def put_agent_wecom(
+    agent_id: str,
+    payload: AgentWecomBindingIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.core.wecom.push import load_wecom_config, public_config
+
+    agent = await _require_agent_config(db, agent_id, user)
+    bot_id = payload.bot_id.strip()
+    config = public_config(await load_wecom_config(db))
+    if not bot_id or bot_id != config["bot_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="该 Bot 未在「设置 → 集成 → 企业微信」中配置，请先完成 BotID 与 Secret 配置",
+        )
+    if payload.enabled and not config["secret_set"]:
+        raise HTTPException(status_code=400, detail="企业微信 Secret 未配置，无法启用关联")
+
+    chat_ids = [str(item).strip() for item in payload.chat_ids if str(item).strip()][:50]
+
+    other = (
+        await db.execute(
+            select(WecomAgentBinding).where(
+                WecomAgentBinding.bot_id == bot_id, WecomAgentBinding.agent_id != agent_id
+            )
+        )
+    ).scalars().first()
+    if other and not payload.force:
+        conflict = await db.get(AgentModel, other.agent_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": f"该企业微信 Bot 已关联「{conflict.name if conflict else '其他智能体'}」，保存后将改绑到当前智能体",
+                "code": "wecom_bot_taken",
+                "conflict_agent": {
+                    "id": other.agent_id,
+                    "name": conflict.name if conflict else "",
+                },
+            },
+        )
+    if other:
+        await db.delete(other)
+        await db.flush()
+
+    rows = (
+        await db.execute(select(WecomAgentBinding).where(WecomAgentBinding.agent_id == agent_id))
+    ).scalars().all()
+    row = rows[0] if rows else None
+    for extra in rows[1:]:
+        await db.delete(extra)
+    # 只保留样式白名单键，部分覆盖；空字典视为继承全局
+    override = {
+        key: value
+        for key, value in (payload.style or {}).items()
+        if key in _STYLE_KEYS and value not in (None, "")
+    }
+    if row:
+        row.bot_id = bot_id
+        row.enabled = bool(payload.enabled)
+        row.chat_ids = chat_ids
+        row.reply_template = (payload.reply_template or "").strip() or None
+        row.style = override or None
+    else:
+        db.add(WecomAgentBinding(
+            id=generate_uuid(),
+            bot_id=bot_id,
+            agent_id=agent_id,
+            enabled=bool(payload.enabled),
+            chat_ids=chat_ids,
+            reply_template=(payload.reply_template or "").strip() or None,
+            style=override or None,
+            created_by=user.id,
+        ))
+    await write_agent_share_audit(
+        db,
+        actor_id=user.id,
+        agent_id=agent_id,
+        action="wecom_bind",
+        details={"bot_id": bot_id, "enabled": bool(payload.enabled), "rebind": bool(other)},
+    )
+    await db.flush()
+    await db.commit()
+    out = await _wecom_payload(db, agent_id)
+    out["agent_name"] = agent.name
+    return out
+
+
+@router.delete("/{agent_id}/wecom", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent_wecom(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await _require_agent_config(db, agent_id, user)
+    await db.execute(delete(WecomAgentBinding).where(WecomAgentBinding.agent_id == agent_id))
+    await write_agent_share_audit(
+        db,
+        actor_id=user.id,
+        agent_id=agent_id,
+        action="wecom_unbind",
+        details={},
+    )
+    await db.commit()
+
+
+@router.post("/{agent_id}/wecom/test")
+async def test_agent_wecom(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.core.wecom.push import load_wecom_config, public_config, push_markdown
+
+    agent = await _require_agent_config(db, agent_id, user)
+    config = public_config(await load_wecom_config(db))
+    if not config["enabled"] or not config["bot_id"] or not config["secret_set"]:
+        raise HTTPException(status_code=400, detail="请先在「设置 → 集成 → 企业微信」启用并保存 BotID 与 Secret")
+    row = (
+        await db.execute(select(WecomAgentBinding).where(WecomAgentBinding.agent_id == agent_id))
+    ).scalars().first()
+    if not row:
+        raise HTTPException(status_code=400, detail="请先保存关联，再测试连接")
+    targets = config["chat_ids"] or list(row.chat_ids or [])
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail="请先在「设置 → 集成 → 企业微信」填写接收人（企微 userid），测试消息会发给他",
+        )
+    content = f"**企业微信关联测试**\n\n当前 Bot 已关联智能体「{agent.name}」，这条是测试消息。"
+    from app.core.wecom.listener import wecom_link
+
+    if wecom_link.status == "connected":
+        result = await wecom_link.send_markdown(targets, content)
+    else:
+        result = await push_markdown(db, targets, content)
+    return {**result, "connection": _wecom_connection()}
+

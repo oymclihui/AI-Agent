@@ -17,6 +17,13 @@ _FORBIDDEN = re.compile(
 )
 _MULTI_STMT = re.compile(r";\s*\S")
 
+# LLM 常写出「AS 交易笔数(客流)」这类带括号的别名 —— 语法非法，sqlglot 直接解析失败。
+# 只处理中文别名，避免误伤 CAST(x AS DECIMAL(10,2)) 之类。
+_ALIAS_PAREN = re.compile(
+    r"\bAS\s+([\u4e00-\u9fa5][^\s,(（]*)\s*[（(]\s*([^（()）]*)\s*[）)]",
+    re.IGNORECASE,
+)
+
 # sqlglot 26 dialect names. vastbase is PostgreSQL-compatible. HANA is not
 # bundled; Oracle is the closest parser for quoted identifiers.
 _DIALECT_MAP = {
@@ -35,6 +42,22 @@ _DIALECT_MAP = {
 def sqlglot_dialect(driver: str | None) -> str:
     key = (driver or "postgres").strip().lower()
     return _DIALECT_MAP.get(key, "postgres")
+
+
+def sanitize_aliases(sql: str) -> str:
+    """把「AS 交易笔数(客流)」这类非法别名规范化成「AS 交易笔数_客流」。
+
+    带括号的别名在 SQL 语法上非法，会让 sqlglot/数据库直接报 Unexpected token，
+    整条问数失败。这里做确定性修复，不依赖模型是否遵守提示词。
+    """
+    text = sql or ""
+
+    def _sub(match: "re.Match[str]") -> str:
+        base = match.group(1).strip()
+        qualifier = re.sub(r"[^0-9A-Za-z\u4e00-\u9fa5_]+", "", match.group(2))
+        return f"AS {base}_{qualifier}" if qualifier else f"AS {base}"
+
+    return _ALIAS_PAREN.sub(_sub, text)
 
 
 def validate_select_sql(
@@ -76,14 +99,15 @@ def disambiguate_subquery_columns(sql: str, dialect: str | None = None) -> str:
     仅当子查询 FROM/JOIN 只有一张表时才安全加前缀；多表 JOIN 保持原样。
     """
     if not _HAS_SQLGLOT:
-        return sql
-    text = (sql or "").strip()
+        return sanitize_aliases(sql)
+    text = sanitize_aliases((sql or "").strip())
     if not text:
         return sql
     try:
         parsed = sqlglot.parse_one(text, read=sqlglot_dialect(dialect))
     except Exception:
-        return sql
+        # 解析失败也保留别名消毒结果，交由后续校验给出最终结论
+        return text
 
     for col in parsed.find_all(exp.Column):
         # 已带表前缀的列不动

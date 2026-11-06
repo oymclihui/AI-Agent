@@ -37,7 +37,13 @@ import app.core.data_ask.factory_tasks  # noqa: F401  # 阶段三智能体工厂
 
 import app.core.data_ask.evaluation.eval_tasks  # noqa: F401  # 阶段四评估进化任务
 
+import app.core.data_ask.train_center_tasks  # noqa: F401  # P1 训练中心统一工单任务
+
 import app.core.dashboard.tasks  # noqa: F401  # 经营分析看板生成任务
+
+import app.core.dashboard.subscribe_tasks  # noqa: F401  # P3 订阅推送与阈值告警任务
+
+import app.core.analysis.preagg  # noqa: F401  # P6 预聚合刷新任务
 
 from celery.schedules import crontab  # noqa: E402
 
@@ -49,5 +55,22 @@ celery_app.conf.beat_schedule = {
     "agent-metric-daily": {
         "task": "ds_distill.materialize_metrics",
         "schedule": crontab(hour=3, minute=10),
+    },
+    "ds-distill-nightly-all": {
+        # 北京时间 02:30（worker/beat 时区为 UTC）
+        "task": "ds_distill.nightly_all_sources",
+        "schedule": crontab(hour=18, minute=30),
+    },
+    "studio-dispatch-subscriptions": {
+        "task": "studio.dispatch_subscriptions",
+        "schedule": crontab(minute="*"),
+    },
+    "studio-check-alerts": {
+        "task": "studio.check_alerts",
+        "schedule": crontab(minute="*"),
+    },
+    "studio-refresh-preaggs": {
+        "task": "studio.refresh_preaggs",
+        "schedule": crontab(minute="*"),
     },
 }

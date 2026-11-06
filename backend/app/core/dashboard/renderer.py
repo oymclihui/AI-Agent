@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import html as _html
 import json
+import os
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -586,6 +587,22 @@ def render_retail_dashboard(
 </body>
 </html>
 '''
+    mode = (os.getenv("DASHBOARD_WIDGET_MODE") or "legacy").strip().lower()
+    if mode in ("shadow", "widget"):
+        try:
+            from app.core.dashboard.manifest import build_manifest
+            from app.core.dashboard.renderer_widgets import render_widgets_dashboard
+
+            manifest = build_manifest(snap, "retail_overview")
+            if mode == "widget" and manifest:
+                html = render_widgets_dashboard(
+                    manifest,
+                    snap,
+                    {"title": title, "source_name": source_name, "generated_at": gen_at},
+                )
+        except Exception:
+            # 新渲染器失败时保留 legacy 输出，绝不影响看板可用性
+            pass
     return html
 
 

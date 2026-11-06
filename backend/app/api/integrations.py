@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -103,30 +104,48 @@ async def dingtalk_events(request: Request, db: AsyncSession = Depends(get_db)):
 
     text = parsed.get("text") or ""
     session_key = parsed.get("session_key") or "dingtalk"
-    reply = await generate_im_group_reply(
-        db,
-        text,
-        bot_user_id=settings.IM_BOT_USER_ID or None,
-        session_key=f"dingtalk:{session_key}",
+    sender_id = str(body.get("senderStaffId") or body.get("senderId") or session_key)
+    # P3-3：问数优先、通用聊天兜底 → P4 super-agent 阶段一：任务化 + 消息纪律
+    from app.core.dingtalk.inbound import dispatch_dingtalk_task
+
+    reply = await dispatch_dingtalk_task(
+        db, text=text, session_key=session_key,
+        sender_id=sender_id, raw_body=body,
     )
     await db.commit()
 
-    try:
-        await send_dingtalk_session_reply(body, reply)
-    except Exception as exc:
-        logger.exception("dingtalk_send_failed", error=str(exc))
-        # Some callbacks have no session webhook — still accept event
-        if body.get("sessionWebhook") or body.get("session_webhook"):
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # 命令类（/help、数据源等）reply 非空，调用方推 sessionWebhook；
+    # 问数/聊天 reply 为空串（inbound 内部已推送 ack + 结果）
+    if reply:
+        try:
+            await send_dingtalk_session_reply(body, reply)
+        except Exception as exc:
+            logger.exception("dingtalk_command_send_failed", error=str(exc))
+            if body.get("sessionWebhook") or body.get("session_webhook"):
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return {"ok": True}
+
+
+@router.get("/im-stats")
+async def im_stats(db: AsyncSession = Depends(get_db)):
+    """IM 月活统计（P3-3 验收：IM 月活 ≥ 全平台 30%）。"""
+    from app.core.dingtalk.inbound import im_monthly_stats
+
+    return await im_monthly_stats(db)
 
 # appended by wecom employee push
 import re
 
 from pydantic import BaseModel, Field
 
-from app.core.wecom.push import load_wecom_config, public_config, push_markdown, save_wecom_config
+from app.core.wecom.push import (
+    load_wecom_config,
+    normalize_style,
+    public_config,
+    push_markdown,
+    save_wecom_config,
+)
 
 _CHAT_ID = re.compile(r"^[\w@.\-]{1,64}$")
 
@@ -137,6 +156,10 @@ class WecomConfigIn(BaseModel):
     secret: str | None = None
     chat_ids: list[str] = Field(default_factory=list)
     bindings: list[str] | None = None
+    corp_id: str = Field(default="", max_length=64)
+    corp_secret: str | None = Field(default=None, max_length=128)
+    auto_sync: bool = False
+    style: dict | None = None
 
 
 class WecomRelayIn(BaseModel):
@@ -144,7 +167,7 @@ class WecomRelayIn(BaseModel):
     content: str = ""
 
 
-def _clean_chat_ids(items: list[str]) -> list[str]:
+def _clean_chat_ids(items: list[str], limit: int = 20) -> list[str]:
     found: list[str] = []
     for raw in items:
         for part in re.split(r"[\s,，]+", raw or ""):
@@ -155,8 +178,8 @@ def _clean_chat_ids(items: list[str]) -> list[str]:
                 raise HTTPException(status_code=400, detail=f"接收人格式不正确: {chat_id[:32]}")
             if chat_id not in found:
                 found.append(chat_id)
-    if len(found) > 20:
-        raise HTTPException(status_code=400, detail="接收人不超过 20 个")
+    if len(found) > limit:
+        raise HTTPException(status_code=400, detail=f"接收人不超过 {limit} 个")
     return found
 
 
@@ -180,8 +203,8 @@ def _clean_bindings(items: list[str] | None) -> list[dict[str, str]] | None:
             row = {"wecom_userid": wecom_userid, "login": login}
             if row not in found:
                 found.append(row)
-    if len(found) > 50:
-        raise HTTPException(status_code=400, detail="绑定不超过 50 条")
+    if len(found) > 1000:
+        raise HTTPException(status_code=400, detail="绑定不超过 1000 条")
     return found
 
 
@@ -207,7 +230,8 @@ async def put_wecom_config(
 ):
     scope = await resolve_data_scope(db, user)
     assert_permission(scope, "org:manage")
-    chats = _clean_chat_ids(payload.chat_ids)
+    style = normalize_style(payload.style)
+    chats = _clean_chat_ids(payload.chat_ids, int(style.get("chat_limit") or 20))
     return await save_wecom_config(
         db,
         enabled=payload.enabled,
@@ -215,7 +239,27 @@ async def put_wecom_config(
         secret=(payload.secret or "").strip() or None,
         chat_ids=chats,
         bindings=_clean_bindings(payload.bindings),
+        corp_id=(payload.corp_id or "").strip() or None,
+        corp_secret=(payload.corp_secret or "").strip() or None,
+        auto_sync=payload.auto_sync,
+        style=payload.style,
     )
+
+
+@router.post("/wecom/sync-contacts")
+async def sync_wecom_contacts(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """按通讯录自动同步企微 userid → 工号/邮箱映射。"""
+    scope = await resolve_data_scope(db, user)
+    assert_permission(scope, "org:manage")
+    from app.core.wecom.contacts import sync_contacts
+
+    try:
+        return await sync_contacts(db)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/wecom/test")
@@ -231,6 +275,68 @@ async def test_wecom_push(
     if not config["chat_ids"]:
         raise HTTPException(status_code=400, detail="请先保存接收人 userid")
     return await push_markdown(db, config["chat_ids"], "数字员工企业微信推送测试")
+
+
+def _mask_bot_id(bot_id: str) -> str:
+    if not bot_id:
+        return ""
+    if len(bot_id) <= 12:
+        return bot_id
+    return f"{bot_id[:6]}…{bot_id[-6:]}"
+
+
+def _connection_state() -> dict:
+    from app.core.wecom.listener import wecom_link
+
+    state = {
+        "connected": "online",
+        "relay": "online",
+        "disconnected": "disconnected",
+        "disabled": "disabled",
+    }.get(str(wecom_link.status), "disconnected")
+    return {"state": state, "raw": str(wecom_link.status)}
+
+
+@router.get("/wecom/bots")
+async def list_wecom_bots(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """可选 Bot 列表（不含明文 Secret），供智能体配置弹窗选择。"""
+    from app.core.wecom.push import load_wecom_config, public_config
+    from app.db.models import Agent as AgentModel, WecomAgentBinding
+
+    config = public_config(await load_wecom_config(db))
+    bots: list[dict] = []
+    if config["bot_id"]:
+        binding = (
+            await db.execute(
+                select(WecomAgentBinding).where(WecomAgentBinding.bot_id == config["bot_id"])
+            )
+        ).scalars().first()
+        bound = None
+        if binding:
+            agent = await db.get(AgentModel, binding.agent_id)
+            bound = {
+                "id": binding.agent_id,
+                "name": agent.name if agent else "",
+                "enabled": bool(binding.enabled),
+            }
+        bots.append({
+            "bot_id": config["bot_id"],
+            "bot_id_masked": _mask_bot_id(config["bot_id"]),
+            "bot_name": "",
+            "secret_set": config["secret_set"],
+            "enabled": config["enabled"],
+            "connection": _connection_state(),
+            "binding": bound,
+        })
+    return {
+        "configured": bool(config["bot_id"] and config["secret_set"]),
+        "enabled": bool(config["enabled"]),
+        "receiver_chat_ids": config["chat_ids"],
+        "bots": bots,
+    }
 
 
 @router.post("/wecom/relay")

@@ -25,6 +25,25 @@ def sanitize_filename(name: str, default: str = "artifact", *, ext: str = ".pptx
     return base[:120]
 
 
+def save_html_artifact(content: str, filename: str = "visual.html") -> dict:
+    """Persist a visual HTML page. Each call gets its own stable public name."""
+    safe = sanitize_filename(filename, default="visual", ext=".html")
+    stem = safe[: -len(".html")][:100]
+    public = f"{stem}-{uuid4().hex[:6]}.html"
+    storage_key = f"{_ARTIFACT_DIR_NAME}/{uuid4().hex}_{public}"
+    full = Path(settings.LOCAL_UPLOADS_DIR) / storage_key
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content, encoding="utf-8")
+    preview_url = artifact_download_url(storage_key, filename=public)
+    return {
+        "filename": public,
+        "storage_key": storage_key,
+        "preview_url": preview_url,
+        "download_url": f"{preview_url}?download=1",
+        "mime_type": "text/html; charset=utf-8",
+    }
+
+
 def save_text_artifact(content: str, filename: str = "report.md") -> dict:
     """Persist plain-text/markdown output and return artifact metadata."""
     safe = sanitize_filename(filename, default="report", ext=".md")
@@ -84,6 +103,8 @@ def collect_artifacts_from_output(text: str | None) -> list[dict]:
             mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         elif filename.lower().endswith(".md"):
             mime = "text/markdown; charset=utf-8"
+        elif filename.lower().endswith(".html"):
+            mime = "text/html; charset=utf-8"
         found.append({
             "filename": filename,
             "download_url": f"/api/v1/artifacts/{filename}",

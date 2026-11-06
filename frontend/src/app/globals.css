@@ -2086,6 +2086,30 @@ body {
 [data-theme="light"] .bg-blue-600\/20 { background-color: rgba(59, 130, 246, 0.12) !important; }
 [data-theme="light"] a.text-blue-400:hover { color: #1d4ed8 !important; }
 
+/* conversation surfaces follow the light theme */
+[data-theme="light"] .bg-black\/20,
+[data-theme="light"] .bg-\[\#11111b\] {
+  background-color: var(--surface-elevated) !important;
+}
+[data-theme="light"] .bg-violet-950\/30 {
+  background-color: #f5f3ff !important;
+}
+[data-theme="light"] .border-slate-600\/40,
+[data-theme="light"] .border-violet-500\/25,
+[data-theme="light"] .border-violet-500\/40,
+[data-theme="light"] .border-\[\#3a3a5e\] {
+  border-color: var(--border) !important;
+}
+[data-theme="light"] .text-slate-100 {
+  color: var(--foreground) !important;
+}
+[data-theme="light"] .text-violet-200,
+[data-theme="light"] .text-violet-200\/85,
+[data-theme="light"] .text-violet-300 {
+  color: #6d28d9 !important;
+}
+
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
@@ -2682,4 +2706,232 @@ body {
 .bubble-with-chart {
   width: 100%;
   max-width: 42rem;
+}
+
+/* ===== 经营看板组件卡（视觉升级）===== */
+.dash-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  padding: 0.75rem 0.85rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: box-shadow 180ms ease, transform 180ms ease, border-color 180ms ease;
+  animation: dash-enter 220ms ease-out;
+}
+@keyframes dash-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dash-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px -16px rgba(15, 23, 42, 0.45);
+}
+
+/* KPI 卡：渐变底 + 顶部强调色条 */
+.dash-kpi {
+  overflow: hidden;
+  padding-top: 0.95rem;
+  background-image: linear-gradient(160deg, var(--surface) 0%, var(--surface-elevated) 100%);
+}
+.dash-kpi::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--kpi-accent, var(--primary));
+  opacity: 0.9;
+}
+
+/* 加载骨架 */
+.dash-skel {
+  border-radius: 8px;
+  background: var(--border);
+  opacity: 0.5;
+  animation: dash-pulse 1.5s ease-in-out infinite;
+}
+@keyframes dash-pulse {
+  0%, 100% { opacity: 0.32; }
+  50% { opacity: 0.68; }
+}
+
+/* recharts 细节统一 */
+.dash-card .recharts-cartesian-axis-tick-value { fill: var(--muted); }
+.dash-card .recharts-cartesian-grid line { stroke: var(--border); }
+.dash-card .recharts-legend-item-text { color: var(--muted) !important; font-size: 11px; }
+.dash-card .recharts-tooltip-cursor { fill: var(--hover); }
+.dash-card .recharts-sector:focus,
+.dash-card .recharts-rectangle:focus { outline: none; }
+
+/* 横向排名：细滚动条 */
+.dash-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.dash-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* 看板筛选面板与输入框（跟随主题） */
+.dash-filter {
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  padding: 0.75rem 0.85rem;
+}
+.dash-filter-input {
+  margin-top: 0.125rem;
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background-color: var(--surface-elevated);
+  color: var(--foreground);
+  padding: 0.3rem 0.5rem;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.dash-filter-input:focus {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-card { transition: none; animation: none; }
+  .dash-card:hover { transform: none; }
+  .dash-skel { animation: none; }
+}
+
+/* ── p2-5 移动端 H5：看板 widget 网格单列堆叠（覆盖 inline span）── */
+@media (max-width: 767px) {
+  .studio-widget-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+  .studio-widget-grid > * {
+    grid-column: span 1 / span 1 !important;
+  }
+}
+
+/* light theme: remaining dark surfaces use the same tokens */
+[data-theme="light"] :is(
+  .bg-\[\#16162a\],
+  .bg-\[\#0f0f22\],
+  .bg-\[\#181834\],
+  .bg-\[\#14142b\],
+  .bg-\[\#14142a\],
+  .bg-\[\#1e1e36\],
+  .bg-\[\#2d2d4e\],
+  .bg-slate-700,
+  .bg-slate-800,
+  .bg-slate-800\/60,
+  .bg-slate-900,
+  .bg-slate-900\/20,
+  .bg-slate-900\/30,
+  .bg-gray-900,
+  .flow-node-card
+) {
+  background-color: var(--surface-elevated) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="light"] .bg-slate-900\/80 {
+  background-color: rgba(30, 58, 95, 0.45) !important;
+}
+[data-theme="light"] :is(
+  .bg-slate-600\/20,
+  .bg-slate-600\/30,
+  .bg-slate-500\/10,
+  .bg-slate-500\/15,
+  .bg-slate-500\/20,
+  .bg-white\/5,
+  .bg-white\/10,
+  .bg-white\/15
+) {
+  background-color: var(--hover) !important;
+}
+[data-theme="light"] :is(
+  .bg-gray-50,
+  .bg-slate-50,
+  .bg-slate-50\/50,
+  .bg-slate-50\/60,
+  .bg-slate-50\/80
+) {
+  background-color: var(--surface) !important;
+}
+[data-theme="light"] :is(
+  .bg-gray-100,
+  .bg-gray-200,
+  .bg-slate-100,
+  .bg-slate-200
+) {
+  background-color: var(--surface-elevated) !important;
+}
+[data-theme="light"] :is(
+  .hover\:bg-slate-600:hover,
+  .hover\:bg-slate-700:hover,
+  .hover\:bg-slate-800:hover,
+  .hover\:bg-slate-900:hover,
+  .hover\:bg-\[\#181834\]:hover,
+  .hover\:bg-\[\#1a1a2e\]:hover,
+  .hover\:bg-\[\#1e1e36\]:hover,
+  .hover\:bg-\[\#2d2d4e\]:hover,
+  .hover\:bg-gray-50:hover,
+  .hover\:bg-gray-100:hover,
+  .hover\:bg-slate-50:hover,
+  .hover\:bg-slate-100:hover
+) {
+  background-color: var(--hover) !important;
+}
+[data-theme="light"] .border-\[\#22224a\] {
+  border-color: var(--border) !important;
+}
+[data-theme="light"] :is(
+  .text-gray-100,
+  .text-gray-200,
+  .text-gray-300,
+  .text-gray-700,
+  .text-gray-800,
+  .text-gray-900
+) {
+  color: var(--foreground) !important;
+}
+[data-theme="light"] :is(.text-gray-400, .text-gray-500, .text-gray-600) {
+  color: var(--muted) !important;
+}
+[data-theme="light"] :is(
+  .flow-node-card,
+  .bg-slate-700,
+  .bg-slate-700\/50,
+  .bg-slate-700\/40,
+  .bg-slate-800,
+  .bg-slate-600,
+  .bg-slate-900
+) :is(
+  .text-white,
+  .text-slate-100,
+  .text-slate-200,
+  .text-slate-300,
+  .text-slate-400,
+  .text-slate-500,
+  .text-slate-600,
+  .text-gray-300,
+  .text-gray-400
+) {
+  color: var(--foreground) !important;
+}
+
+/* bg-[#16162a]/60 light */
+
+[data-theme="light"] .bg-\[\#16162a\]\/60,
+[data-theme="light"] .bg-\[\#15153080\] {
+  background-color: var(--surface-elevated) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="light"] :is(.placeholder-slate-500, .placeholder-slate-600)::placeholder {
+  color: var(--muted) !important;
 }

@@ -20,6 +20,7 @@ _TIME_NAME = ("year", "date", "month", "time", "quarter", "日期", "时间", "�
 _SHARE = ("占比", "比例", "分布", "构成", "share", "distribut", "proportion", "结构")
 _RANK = ("排名", "rank", "top", "前几", "最高", "最低", "最多", "最少", "榜")
 _LIMIT = 15
+_TIME_LIMIT = 60
 
 
 def suggest_chart(columns: list[str], rows: list[list[Any]], question: str = "") -> dict[str, Any] | None:
@@ -37,18 +38,33 @@ def suggest_chart(columns: list[str], rows: list[list[Any]], question: str = "")
     if cat_idx is None or not number_idxs:
         return None
 
-    labels = [str(_cell(row, cat_idx) if _cell(row, cat_idx) is not None else "") for row in preview]
+    question_text = question or ""
+    axis_is_time = kinds[cat_idx] == "time"
+    if axis_is_time:
+        # 时间轴按 SQL 的时序取前 60 个点（日/周序列常见 46+ 点，15 个点会丢趋势）
+        window = rows[:_TIME_LIMIT]
+    elif len(number_idxs) == 1:
+        # 单指标分类图：按数值降序取 Top 15，保证「图表顺序 = 指标大小」；
+        # 用户问最低/最少时改为升序。
+        ascending = _has(question_text, ("最低", "最少", "倒数", "bottom"))
+        window = sorted(
+            rows,
+            key=lambda row: _as_float(_cell(row, number_idxs[0])),
+            reverse=not ascending,
+        )[:_LIMIT]
+    else:
+        window = rows[:_LIMIT]
+
+    labels = [str(_cell(row, cat_idx) if _cell(row, cat_idx) is not None else "") for row in window]
     datasets = []
     for idx in number_idxs:
         datasets.append({
             "label": str(columns[idx]),
-            "data": [_as_float(_cell(row, idx)) for row in preview],
+            "data": [_as_float(_cell(row, idx)) for row in window],
         })
 
-    question_text = question or ""
     chart_type = "bar"
     horizontal = False
-    axis_is_time = kinds[cat_idx] == "time"
     if axis_is_time and len(labels) >= 2:
         chart_type = "line"
     elif (

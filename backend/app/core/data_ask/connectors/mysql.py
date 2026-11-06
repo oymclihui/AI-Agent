@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from app.core.data_ask.connectors.base import ColumnMeta, DataConnector, QueryResult, RelationInfo, TableMeta
@@ -189,7 +190,13 @@ class MySqlConnector(DataConnector):
             try:
                 with conn.cursor() as cur:
                     cur.execute(f"SET SESSION MAX_EXECUTION_TIME = {timeout_s * 1000}")
-                    wrapped = f"SELECT * FROM ({sql.rstrip(';')}) AS _data_ask_q LIMIT {limit + 1}"
+                    # 直接追加 LIMIT 保留 SQL 自身 ORDER BY 的顺序；
+                    # 套一层派生表会让优化器丢弃 ORDER BY，图表/表格行序随机。
+                    base = sql.strip().rstrip(";")
+                    if re.search(r"\bLIMIT\b", base, re.I):
+                        wrapped = f"SELECT * FROM ({base}) AS _data_ask_q LIMIT {limit + 1}"
+                    else:
+                        wrapped = f"{base} LIMIT {limit + 1}"
                     cur.execute(wrapped)
                     rows_raw = cur.fetchall()
                     if not rows_raw:

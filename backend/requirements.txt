@@ -163,3 +163,9 @@ matplotlib
 torch==2.14.1+cpu
 pytesseract==0.3.13
 pymupdf==1.26.4
+
+# 企业微信语音播报（TTS）
+edge-tts==7.3.1
+
+# 企业微信图片消息解密（AES-256-CBC）
+pycryptodome==4.2.0

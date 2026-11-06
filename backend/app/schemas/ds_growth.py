@@ -129,6 +129,7 @@ class TraceOut(BaseModel):
     success: bool = True
     error_message: Optional[str] = None
     analysis_mode: Optional[str] = None
+    answer_mode: Optional[str] = None
     memory_hits: int = 0
     duration_ms: Optional[int] = None
     rewrite_ms: Optional[int] = None
@@ -139,3 +140,29 @@ class TraceOut(BaseModel):
     clarification: bool = False
     cached: bool = False
     created_at: Optional[datetime] = None
+
+
+# ─── 回答模式观测 ───
+
+class ModeStatOut(BaseModel):
+    answer_mode: str
+    count: int
+    ratio: float
+
+
+class FeedbackStatOut(BaseModel):
+    feedback_type: str
+    count: int
+
+
+class TopQuestionOut(BaseModel):
+    question: str
+    count: int
+
+
+class AnswerModeStatsOut(BaseModel):
+    days: int
+    total: int = 0
+    modes: list[ModeStatOut] = []
+    feedback: list[FeedbackStatOut] = []
+    top_questions: list[TopQuestionOut] = []

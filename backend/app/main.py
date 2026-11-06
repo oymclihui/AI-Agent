@@ -1,6 +1,8 @@
 """
 AI-AGENT Platform - Main FastAPI Application
 """
+import asyncio
+
 import structlog
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -16,6 +18,7 @@ from app.db.init_db import (
     seed_template_workflows, seed_template_skills, seed_template_employees,
     seed_platform_knowledge_base, ensure_bundled_skills, seed_default_admin,
     seed_desktop_operator_agent, seed_org_rbac, seed_default_excel_parse_template,
+    seed_runbooks, seed_analysis_operators,
 )
 from app.db.session import AsyncSessionLocal
 from app.core.tools.registry import ToolRegistry
@@ -59,6 +62,8 @@ async def lifespan(app: FastAPI):
                 await seed_platform_knowledge_base(session)
                 await seed_default_admin(session)
                 await seed_org_rbac(session)
+                await seed_runbooks(session)
+                await seed_analysis_operators(session)
             logger.info("default_models_seeded")
         except Exception as exc:
             logger.warning("database_seed_deferred", error=str(exc))
@@ -78,9 +83,51 @@ async def lifespan(app: FastAPI):
             wecom_doc_sync.start()
         except Exception as exc:
             logger.warning("wecom_link_start_failed", error=str(exc))
+        try:
+            # 发件箱派遣循环：pending 消息保序发送、退避重试、重启补发
+            from app.core.tasks.outbox import start_outbox_dispatcher
+
+            start_outbox_dispatcher()
+        except Exception as exc:
+            logger.warning("outbox_dispatcher_start_failed", error=str(exc))
+        try:
+            # 任务化恢复：收尾上次进程遗留的 queued/working 任务并通知用户
+            from app.core.wecom.inbound import recover_interrupted_tasks
+
+            asyncio.create_task(recover_interrupted_tasks())
+        except Exception as exc:
+            logger.warning("task_recover_start_failed", error=str(exc))
+        try:
+            # 主动工作引擎（蓝图阶段三）：定时规则跑 observe/auto
+            from app.core.proactive import start_proactive_engine
+
+            start_proactive_engine()
+            logger.info("proactive_engine_started")
+        except Exception as exc:
+            logger.warning("proactive_engine_start_failed", error=str(exc))
+        try:
+            # 问数热点预计算（蓝图一期 L4）：定时回填结果缓存，首次提问即命中
+            from app.core.data_ask.prewarm import start_prewarm_engine
+
+            start_prewarm_engine()
+            logger.info("dataask_prewarm_started")
+        except Exception as exc:
+            logger.warning("dataask_prewarm_start_failed", error=str(exc))
 
     yield
 
+    try:
+        from app.core.proactive import stop_proactive_engine
+
+        await stop_proactive_engine()
+    except Exception:
+        pass
+    try:
+        from app.core.tasks.outbox import stop_outbox_dispatcher
+
+        await stop_outbox_dispatcher()
+    except Exception:
+        pass
     try:
         await wecom_doc_sync.stop()
         await wecom_link.stop()

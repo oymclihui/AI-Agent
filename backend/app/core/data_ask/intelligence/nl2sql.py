@@ -42,11 +42,11 @@ _ANSWER_FORMAT = {
 2. 不要建表格，不要写要点，不要写「建议」。""",
     MODE_TABLE: """排版要求（Markdown）：
 1. 只输出一个 Markdown 表格，表格前面和后面都不要写任何文字：不要表头说明句、不要解读、不要「建议」，也不要重复用户的问题。
-2. 只输出用户要求的列，列名简短并带单位。按数值从大到小排列；结果多于 10 行时只列前 10 行，此时在表格前用一行注明「共 N 行，展示前 10 行」。
+2. 只输出用户要求的列，列名简短并带单位。第一列是日期/时间时，保持时间从早到晚的顺序，不要按数值重排（保证与上方趋势图的顺序一致）；超过 10 行时只列最近的 10 行，仍按时间升序。其他情况按数值从大到小排列；结果多于 10 行时只列前 10 行，此时在表格前用一行注明「共 N 行，展示前 10 行」。
 3. 禁止无序列表、解读段落、「建议」小节，或任何对数字的额外解释。""",
     MODE_ANALYSIS: """排版要求（Markdown）：
 1. 首句用一句完整的话直接回答并给出关键数值，关键数字用 **加粗**。
-2. 有分组结果时，用一个 Markdown 表格呈现：列名简短并带单位。按数值从大到小排列；结果多于 10 行时只列前 10 行，并在表格上方注明「共 N 行，展示前 10 行」。
+2. 有分组结果时，用一个 Markdown 表格呈现：列名简短并带单位。第一列是日期/时间时，保持时间从早到晚的顺序，不要按数值重排（保证与上方趋势图的顺序一致）；超过 10 行时只列最近的 10 行，仍按时间升序。其他情况按数值从大到小排列；结果多于 10 行时只列前 10 行，并在表格上方注明「共 N 行，展示前 10 行」。
 3. 随后用无序列表写 3-5 条要点，每条都要落到结果里的某个具体数值或对比（最高/最低、差距、集中的分组等）。
 4. 结果里存在数值指标（销售额、毛利、数量等）且确实支持改进行动时，才补一节「建议」，最多 2 条，每条都要落到结果里的具体数值；结果只有文本列或只有一个数时，不写建议。""",
 }
@@ -118,18 +118,29 @@ def _schema_prompt(tables: list[dict[str, Any]], driver: str, join_edges: list[d
         user_edges = [e for e in join_edges if e.get("kind") == "user"]
         inferred_edges = [e for e in join_edges if e.get("kind") != "user"]
         if user_edges:
-            user_txt = "; ".join(
-                f"{e['from']}.{e.get('from_column') or e.get('label', '?')} = {e['to']}.{e.get('to_column') or e.get('label', '?')}"
-                for e in user_edges[:8]
-            )
+            user_txt = "; ".join(_edge_join_text(e) for e in user_edges[:8])
             parts.append(f"Mandatory joins (MUST use exactly these columns, do NOT join on any other columns): {user_txt}")
         if inferred_edges:
-            inf_txt = "; ".join(
-                f"{e['from']}.{e.get('from_column') or e.get('label', '?')} = {e['to']}.{e.get('to_column') or e.get('label', '?')}"
-                for e in inferred_edges[:8]
-            )
+            inf_txt = "; ".join(_edge_join_text(e) for e in inferred_edges[:8])
             parts.append(f"Suggested joins: {inf_txt}")
     return "\n".join(parts)
+
+
+def _edge_join_text(edge: dict[str, Any]) -> str:
+    """把一条关联边渲染成 SQL 条件；复合键用 AND 连接。"""
+    pairs = [
+        p for p in (edge.get("pairs") or [])
+        if isinstance(p, dict) and p.get("from_column") and p.get("to_column")
+    ]
+    if pairs:
+        return " AND ".join(
+            f"{edge['from']}.{p['from_column']} = {edge['to']}.{p['to_column']}"
+            for p in pairs
+        )
+    return (
+        f"{edge['from']}.{edge.get('from_column') or edge.get('label', '?')} = "
+        f"{edge['to']}.{edge.get('to_column') or edge.get('label', '?')}"
+    )
 
 
 def _column_line(col: Any) -> str:
@@ -165,6 +176,11 @@ async def generate_sql(
     system = (
         "You are a senior data analyst. Generate a single read-only SELECT query.\n"
         "Rules: SELECT or WITH only; no DDL/DML; use correct dialect; prefer explicit column names.\n"
+        "Dialect rule: in ORDER BY / GROUP BY / HAVING, never reference a SELECT alias — "
+        "repeat the full expression instead (e.g. ORDER BY COUNT(*) DESC); "
+        "the target database cannot resolve output aliases in those clauses.\n"
+        "Alias rule: aliases must be plain identifiers (Chinese/letters/digits/underscore only). "
+        "Never put parentheses, units or punctuation in an alias — write AS 交易笔数, never AS 交易笔数(客流).\n"
         "When a metric name appears in the question, copy its expression unchanged.\n"
         "When a value hint names a column value, filter with that exact value.\n"
         f"{_RATIO_RULE}"
@@ -205,6 +221,11 @@ async def generate_sql_candidates(
         "You are a senior data analyst. The question may match more than one table.\n"
         "Return two different read-only SELECT queries. Use different tables or filters.\n"
         "Rules: SELECT or WITH only; no DDL/DML; use correct dialect; prefer explicit column names.\n"
+        "Dialect rule: in ORDER BY / GROUP BY / HAVING, never reference a SELECT alias — "
+        "repeat the full expression instead (e.g. ORDER BY COUNT(*) DESC); "
+        "the target database cannot resolve output aliases in those clauses.\n"
+        "Alias rule: aliases must be plain identifiers (Chinese/letters/digits/underscore only). "
+        "Never put parentheses, units or punctuation in an alias — write AS 交易笔数, never AS 交易笔数(客流).\n"
         "When a metric name appears in the question, copy its expression unchanged.\n"
         "When a value hint names a column value, filter with that exact value.\n"
         f"{_RATIO_RULE}"
@@ -257,10 +278,11 @@ def _sql_user_prompt(
         f"{format_semantic_context(semantic_model)}"
         f"{expand_metrics_in_prompt(semantic_model)}"
         f"{format_terms_context(semantic_model)}"
-        f"{format_memory_prompt(memory_examples or [])}"
         f"{format_value_hints(question, tables)}"
         f"{_schema_prompt(tables, driver, join_edges)}\n"
         f"{permission_hint}\n"
+        # 记忆放在最后（紧邻 Question），避免被长 schema 稀释，让模型对「同一提问」优先沿用
+        f"{format_memory_prompt(memory_examples or [])}"
         f"Question: {question}"
     )
 
@@ -342,7 +364,7 @@ async def _invoke_sql_llm(
         provider=llm_provider,
         model=llm_model,
         user_id=user_id,
-        response_style="precise",
+        temperature=0.0,
     )
     resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     text = resp.content if isinstance(resp.content, str) else str(resp.content)
@@ -366,7 +388,7 @@ async def _invoke_text(
         provider=llm_provider,
         model=llm_model,
         user_id=user_id,
-        response_style="precise",
+        temperature=0.0,
     )
     resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     return resp.content if isinstance(resp.content, str) else str(resp.content)
@@ -386,6 +408,7 @@ async def analyze_results(
     agent_goal: str | None = None,
     agent_backstory: str | None = None,
     answer_mode: str | None = None,
+    skill_style: dict[str, Any] | None = None,
 ) -> str:
     preview_rows = rows[:30]
     data_text = json.dumps(
@@ -395,13 +418,37 @@ async def analyze_results(
     )
     facts = chart_facts(chart)
     mode = answer_mode or classify_answer_mode(question, columns, rows)
+    # 蓝图 P0：分析技能覆盖（技能 > 硬编码默认；未命中技能走原三件套，行为零改动）
+    persona = _ANSWER_PERSONA
+    fmt = _ANSWER_FORMAT.get(mode, _ANSWER_FORMAT[MODE_ANALYSIS])
+    grounding = _ANSWER_GROUNDING
+    methodology = ""
+    if isinstance(skill_style, dict) and skill_style:
+        style = skill_style.get("answer_style")
+        style = style if isinstance(style, dict) else {}
+        skill_persona = str(style.get("persona") or "").strip()
+        if skill_persona:
+            persona = skill_persona
+        tpl = str(style.get("format_template") or "").strip()
+        if tpl:
+            fmt = "排版要求（Markdown）：\n" + tpl
+        else:
+            fmode = str(style.get("format_mode") or "").strip()
+            if fmode in _ANSWER_FORMAT:
+                fmt = _ANSWER_FORMAT[fmode]
+        extra = str(style.get("grounding_extra") or "").strip()
+        if extra:
+            grounding = grounding + "\n" + extra
+        methodology = str(skill_style.get("instructions_md") or "").strip()
     system = (
-        _ANSWER_PERSONA
+        persona
         + "\n\n"
-        + _ANSWER_FORMAT.get(mode, _ANSWER_FORMAT[MODE_ANALYSIS])
+        + fmt
         + "\n\n"
-        + _ANSWER_GROUNDING
+        + grounding
     )
+    if methodology:
+        system = "【分析方法论】\n" + methodology[:12000] + "\n\n" + system
     if agent_goal:
         system = (
             "【分析职责与要求】\n" + agent_goal + "\n\n"
@@ -414,12 +461,14 @@ async def analyze_results(
         f"{format_allowed_numbers(preview_rows)}"
         f"图中实际数据: {facts or '这次没有图，只根据结果表解释。'}\n"
     )
+    if isinstance(skill_style, dict) and skill_style:
+        user += "\n（注意：必须严格按上述人设的口吻与排版要求输出结论，包括任何指定的开头标记。）"
     llm = await ModelRouter.get_llm(
         db=db,
         provider=llm_provider,
         model=llm_model,
         user_id=user_id,
-        response_style="precise",
+        temperature=0.0,
     )
     resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     text = resp.content if isinstance(resp.content, str) else str(resp.content)
@@ -429,6 +478,91 @@ async def analyze_results(
         text = _fallback_answer(columns, rows)
     if facts and mode == MODE_ANALYSIS:
         text = f"**图中数据**\n{facts}\n\n{text}"
+    return text
+
+
+async def analyze_facts(
+    db: AsyncSession,
+    *,
+    question: str,
+    facts: list[dict[str, Any]],
+    rows: list[dict[str, Any]] | None = None,
+    step_reports: list[dict[str, Any]] | None = None,
+    final_prompts: list[str] | None = None,
+    llm_provider: str | None,
+    llm_model: str | None,
+    user_id: str | None = None,
+    agent_goal: str | None = None,
+    agent_backstory: str | None = None,
+    skill_style: dict[str, Any] | None = None,
+) -> str:
+    """蓝图 P1-②：基于算子 facts 生成结论（技能步骤编排专用）。
+
+    与 analyze_results 同一套 persona/format/grounding 技能覆盖机制；差异在于
+    数值已由分析算子确定性算好（含同比/环比/占比/预测等派生量），模型只做
+    措辞与洞察，不得再自行计算派生量。
+    """
+    facts_text = json.dumps(facts[:60], ensure_ascii=False, default=str)
+    steps_desc = "\n".join(
+        f"- 步骤{r.get('step')}：{r.get('tool') or 'prompt'}"
+        + (f"（产出 {r['facts']} 条事实）" if r.get("ok") else f"（失败：{r.get('error')}）")
+        for r in (step_reports or []) if isinstance(r, dict)
+    )
+    persona = _ANSWER_PERSONA
+    fmt = _ANSWER_FORMAT[MODE_ANALYSIS]
+    grounding = """硬性约束：
+- 只能引用「事实清单」中出现过的数值，必须原样引用（保留原有小数位），禁止换算成万元/亿元。
+- 同比/环比/占比/预测等派生量已由分析算子算好，直接引用即可，禁止自行重新计算或改算口径。
+- 某步骤失败时，如实说明该步骤未产出数据，不要编造数值填补。
+- 禁止编造事实清单里没有的维度或日期。
+- 不要写「结果中未提供 X，无法分析」这类凑数句子；没有内容的小节直接省略，不要留空标题。"""
+    methodology = ""
+    if isinstance(skill_style, dict) and skill_style:
+        style = skill_style.get("answer_style")
+        style = style if isinstance(style, dict) else {}
+        skill_persona = str(style.get("persona") or "").strip()
+        if skill_persona:
+            persona = skill_persona
+        tpl = str(style.get("format_template") or "").strip()
+        if tpl:
+            fmt = "排版要求（Markdown）：\n" + tpl
+        else:
+            fmode = str(style.get("format_mode") or "").strip()
+            if fmode in _ANSWER_FORMAT:
+                fmt = _ANSWER_FORMAT[fmode]
+        extra = str(style.get("grounding_extra") or "").strip()
+        if extra:
+            grounding = grounding + "\n" + extra
+        methodology = str(skill_style.get("instructions_md") or "").strip()
+    system = persona + "\n\n" + fmt + "\n\n" + grounding
+    if methodology:
+        system = "【分析方法论】\n" + methodology[:12000] + "\n\n" + system
+    if agent_goal:
+        system = "【分析职责与要求】\n" + agent_goal + "\n\n" + system
+    if agent_backstory:
+        system = system + "\n\n【数据背景与先验知识】\n" + agent_backstory + "\n（以上背景供参考，分析时以事实清单为准）"
+    user = (
+        f"问题: {question}\n"
+        f"已执行的分析步骤：\n{steps_desc or '（无）'}\n"
+        f"事实清单（JSON，数值已由算子算好）: {facts_text}\n"
+        f"明细数据（JSON，前30行）: {json.dumps((rows or [])[:30], ensure_ascii=False, default=str)}\n"
+    )
+    if final_prompts:
+        user += "步骤附加要求（必须逐条落实）：\n" + "\n".join(f"- {p}" for p in final_prompts) + "\n"
+    if isinstance(skill_style, dict) and skill_style:
+        user += "\n（注意：必须严格按上述人设的口吻与排版要求输出结论，包括任何指定的开头标记。）"
+    llm = await ModelRouter.get_llm(
+        db=db, provider=llm_provider, model=llm_model, user_id=user_id, temperature=0.0,
+    )
+    resp = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
+    text = resp.content if isinstance(resp.content, str) else str(resp.content)
+    if not str(text).strip() or text == EMPTY_FALLBACK:
+        # 模型输出为空时，用事实清单拼一份确定性文案兜底，绝不留空
+        lines = [
+            f"- {f.get('name')}：{f.get('value')}{f.get('unit') or ''}"
+            for f in facts[:10] if isinstance(f, dict)
+        ]
+        text = "按步骤执行的分析事实：\n" + "\n".join(lines)
     return text
 
 

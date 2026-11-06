@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from app.core.data_ask.connectors.base import QueryResult, RelationInfo
 from app.core.data_ask.connectors.mysql import MySqlConnector
@@ -56,7 +57,12 @@ class DorisConnector(MySqlConnector):
             conn = self._connect()
             try:
                 with conn.cursor() as cur:
-                    wrapped = f"SELECT * FROM ({sql.rstrip(';')}) AS _data_ask_q LIMIT {limit + 1}"
+                    # 同 MySQL：直接追加 LIMIT，避免派生表丢弃 ORDER BY 导致行序随机
+                    base = sql.strip().rstrip(";")
+                    if re.search(r"\bLIMIT\b", base, re.I):
+                        wrapped = f"SELECT * FROM ({base}) AS _data_ask_q LIMIT {limit + 1}"
+                    else:
+                        wrapped = f"{base} LIMIT {limit + 1}"
                     cur.execute(wrapped)
                     rows_raw = cur.fetchall()
                     if not rows_raw:

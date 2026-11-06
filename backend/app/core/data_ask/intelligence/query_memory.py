@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import generate_uuid
@@ -46,14 +46,14 @@ def score_question_similarity(left: str, right: str, use_count: int = 0) -> floa
 def normalized_score(score: float, ref_type: str | None = None) -> float:
     """把两类记忆源的原始相似度归一到 [0,1]，供 P1-C 强沿用/仅参考分档比较。
 
-    - golden（词面打分）：精确匹配=10+ → 1.0；其余由 bigram/token/包含关系构成，
+    - golden / skill（词面打分）：精确匹配=10+ → 1.0；其余由 bigram/token/包含关系构成，
       按 score/2 折半映射、0.99 封顶。归一后 ≥0.85 ≈ 原始分 ≥1.7（措辞高度重合，
-      大概率为同一提问）。
+      大概率为同一提问）。skill 与 golden 同一刻度（技能示例也走词面打分）。
     - example（Milvus 向量余弦）：本就在 [0,1]，截断即可。
     ref_type 缺失时按数值范围启发：>1.0 必为 golden 刻度（向量分不会超 1）。
     """
     s = float(score or 0.0)
-    golden_scale = ref_type == "golden" or (ref_type is None and s > 1.0)
+    golden_scale = ref_type in {"golden", "skill"} or (ref_type is None and s > 1.0)
     if golden_scale:
         if s >= 10.0:
             return 1.0
@@ -69,30 +69,49 @@ async def retrieve_similar_queries(
     top_k: int = 3,
     min_score: float = 0.35,
 ) -> list[dict[str, Any]]:
+    # 同问金标先按整句精确匹配单独取：相似度筛选只扫最近 200 条，
+    # 高频问题可能被挤出窗口而漏掉（纠正后再次提问必须命中，否则会回退旧口径）。
+    asked = (question or "").strip()
+    exact_rows = list((await db.execute(
+        select(DataAskGoldenQuery)
+        .where(
+            DataAskGoldenQuery.data_source_id == data_source_id,
+            func.lower(func.trim(DataAskGoldenQuery.question)) == asked.lower(),
+        )
+        .limit(3)
+    )).scalars().all()) if asked else []
+    exact_ids = {str(row.id) for row in exact_rows}
+
     result = await db.execute(
         select(DataAskGoldenQuery)
         .where(DataAskGoldenQuery.data_source_id == data_source_id)
         .order_by(DataAskGoldenQuery.use_count.desc(), DataAskGoldenQuery.updated_at.desc())
         .limit(200)
     )
-    rows = list(result.scalars().all())
-    if not rows:
-        return []
-
+    rows = [row for row in result.scalars().all() if str(row.id) not in exact_ids]
     scored: list[tuple[float, DataAskGoldenQuery]] = []
     for row in rows:
         score = score_question_similarity(question, row.question, row.use_count or 0)
         scored.append((score, row))
     scored.sort(key=lambda x: -x[0])
+
     out: list[dict[str, Any]] = []
-    for score, row in scored[:top_k]:
+    for row in exact_rows:
+        out.append({
+            "question": row.question, "sql": row.sql_text,
+            "score": round(score_question_similarity(question, row.question, row.use_count or 0), 4),
+            "ref_id": str(row.id), "ref_type": "golden",
+        })
+    for score, row in scored:
+        if len(out) >= top_k:
+            break
         if score < min_score:
             continue
         out.append({
             "question": row.question, "sql": row.sql_text,
             "score": round(score, 4), "ref_id": str(row.id), "ref_type": "golden",
         })
-    return out
+    return out[:top_k]
 
 
 async def save_golden_query(
@@ -102,6 +121,7 @@ async def save_golden_query(
     question: str,
     sql_text: str,
     user_id: str | None,
+    overwrite: bool = True,
 ) -> DataAskGoldenQuery:
     result = await db.execute(
         select(DataAskGoldenQuery).where(
@@ -111,6 +131,9 @@ async def save_golden_query(
     )
     existing = result.scalar_one_or_none()
     if existing:
+        # 点赞/保存示例等弱信号不覆盖已有金标口径（避免旧 SQL 覆盖已纠正的金标）
+        if not overwrite:
+            return existing
         existing.sql_text = sql_text.strip()
         existing.confirmed_by = user_id
         existing.use_count = (existing.use_count or 0) + 1
@@ -188,6 +211,26 @@ async def recommend_questions(
     return pick_recommended(golden, audits, limit)
 
 
+_AGG_CALL = re.compile(r"\b(SUM|AVG|COUNT|MAX|MIN)\s*\(", re.IGNORECASE)
+_PREAGG = re.compile(r"from\s*\(\s*select[\s\S]*?group\s+by", re.IGNORECASE)
+
+
+def _looks_fanout(sql: str) -> bool:
+    """判断历史 SQL 是否是「两表直接 JOIN 后同时汇总两表指标」的放大口径。
+
+    这种写法会把其中一张表的指标按另一张表的行数重复累加，数值必然虚高，
+    不能作为 few-shot 示例复用。已先按关联键分组汇总再关联的写法视为安全。
+    """
+    text = (sql or "").strip()
+    if not text:
+        return False
+    if " join " not in text.lower():
+        return False
+    if _PREAGG.search(text):
+        return False
+    return len(_AGG_CALL.findall(text)) >= 2
+
+
 def format_memory_prompt(examples: list[dict[str, Any]]) -> str:
     """把历史问答（金标 / 蒸馏示例）注入 nl2sql few-shot。
 
@@ -206,6 +249,8 @@ def format_memory_prompt(examples: list[dict[str, Any]]) -> str:
             question = str(ex.get("question") or "").strip()
             sql = str(ex.get("sql") or "").strip()
             if not question or not sql:
+                continue
+            if _looks_fanout(sql):
                 continue
             score = ex.get("score")
             ref = str(ex.get("ref_type") or ex.get("source") or "").strip()
@@ -231,6 +276,10 @@ def format_memory_prompt(examples: list[dict[str, Any]]) -> str:
             "必须直接沿用该条的 SQL 口径与写法（聚合方式、分组维度、过滤条件、字段与别名），"
             "不要按你的默认口径自行改写；若只是主题相近但时间范围 / 口径不同，则忽略该条或仅作参考。"
             "相似度越高越可能是同一提问。"
+            "若某条 Q 与本问题仅空格 / 标点不同（即完全相同），直接原样输出该条 SQL，"
+            "只允许替换其中的日期参数。"
+            "若某条历史 SQL 直接 JOIN 两张明细表并同时汇总两张表的指标（未按关联键先分组汇总再关联），"
+            "该口径本身就是错误（行放大导致数值虚高），无论相似度多高都禁止沿用。"
         )
         out.extend(strong_lines)
     if weak_lines:

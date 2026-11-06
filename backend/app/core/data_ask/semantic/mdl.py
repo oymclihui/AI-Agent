@@ -16,14 +16,28 @@ def format_semantic_context(model: dict[str, Any] | None) -> str:
     for d in model.get("dimensions") or []:
         if isinstance(d, dict):
             sens = f" [敏感:{d.get('sensitivity')}]" if d.get("sensitivity") else ""
+            level = d.get("hierarchy_level")
+            tier = f" [层级:{level}]" if level is not None else ""
+            parent = f" (上级:{d.get('parent')})" if d.get("parent") else ""
+            column = d.get("column") or d.get("column_name") or d.get("expr") or ""
             lines.append(
-                f"- 维度 {d.get('name')}: 列 {d.get('column')} ({d.get('description') or ''}){sens}"
+                f"- 维度 {d.get('name')}: 列 {column} "
+                f"({d.get('description') or ''}){sens}{tier}{parent}"
             )
     for rel in model.get("relationships") or []:
         if isinstance(rel, dict):
-            lines.append(
-                f"- 关联 {rel.get('from')} -> {rel.get('to')} ON {rel.get('on')}"
-            )
+            left = rel.get("from") or rel.get("leftTable") or rel.get("left")
+            right = rel.get("to") or rel.get("rightTable") or rel.get("right")
+            on = rel.get("on") or rel.get("joinCondition") or rel.get("condition") or ""
+            join_type = rel.get("joinType") or rel.get("type") or ""
+            rule = f"- 关联 {left} -> {right}"
+            if join_type:
+                rule += f" {join_type}"
+            if on:
+                rule += f" ON {on}"
+            if "AGG(" in str(on).upper():
+                rule += "。两边必须先按关联键各自聚合，再关联；禁止把明细行直接 JOIN 后对客流求和"
+            lines.append(rule)
     for note in model.get("notes") or []:
         lines.append(f"- {note}")
     return "\n".join(lines) + "\n"
@@ -208,25 +222,32 @@ def format_terms_context(model: dict[str, Any] | None) -> str:
 
 
 def default_semantic_model() -> dict[str, Any]:
+    """默认语义模型：只放与具体业务列无关的通用口径，避免引用不存在的列。
+
+    具体指标 / 维度 / 列需按数据源真实表结构配置（见「真实业务数据接入与口径校准」）。
+    """
     return {
         "metrics": [
-            {"name": "销量", "expr": "SUM(sales_amount)", "definition": "SUM(quantity) 或 SUM(sales_amount)"},
-            {"name": "环比", "expr": "(SUM(this_week)-SUM(last_week))/NULLIF(SUM(last_week),0)*100"},
+            {"name": "记录数", "expr": "COUNT(*)", "definition": "表内明细行数"},
         ],
         "dimensions": [],
         "relationships": [],
         "columns": [],
         "terms": [],
-        "notes": ["只统计用户权限范围内的事业部/国家"],
+        "notes": ["指标表达式须引用该数据源真实表中的列；跨表指标不可在同一规格中混算"],
     }
 
 
 def validate_semantic_model(model: dict[str, Any]) -> dict[str, Any]:
-    """Normalize MDL Lite structure."""
-    out = default_semantic_model()
-    if not model:
-        return out
-    for key in ("metrics", "dimensions", "relationships", "columns", "terms", "notes"):
-        if key in model and model[key] is not None:
-            out[key] = model[key]
+    """Normalize MDL Lite structure - preserve ALL keys from frontend,
+    only guarantee the 6 core keys exist with safe defaults."""
+    out = dict(model) if model else default_semantic_model()
+    core_keys = ('metrics', 'dimensions', 'relationships', 'columns', 'terms')
+    for key in core_keys:
+        if key not in out or out[key] is None:
+            out[key] = []
+    if 'notes' not in out or out['notes'] is None:
+        out['notes'] = default_semantic_model()['notes']
     return out
+
+

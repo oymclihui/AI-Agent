@@ -30,6 +30,9 @@ TOOL_RISK: dict[str, ToolRiskLevel] = {
     "fetch_mail": ToolRiskLevel.L2_EXTERNAL,
     "desktop_replay": ToolRiskLevel.L2_EXTERNAL,
     "desktop_capture": ToolRiskLevel.L2_EXTERNAL,
+    # 纯前端渲染，无外部副作用，可直接执行
+    "ui_render": ToolRiskLevel.L0_READ,
+    "ui_patch": ToolRiskLevel.L0_READ,
 }
 
 # Declared scope for tools that touch the network, the desktop, or user files.
@@ -44,6 +47,8 @@ TOOL_SANDBOX: dict[str, str] = {
     "fetch_mail": "mailbox-confirm",
     "desktop_replay": "desktop-confirm",
     "desktop_capture": "desktop-confirm",
+    "ui_render": "ui-render-only",
+    "ui_patch": "ui-render-only",
 }
 
 

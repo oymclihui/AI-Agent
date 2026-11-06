@@ -6,7 +6,7 @@ import {
   Bot, Workflow, MessageSquare,
   Cpu, Zap, Home, Settings, Languages, BookOpen, Briefcase, Monitor,
   Library, Lightbulb, MousePointer2, Shield,
-  Building2, Crown, Database, FileSpreadsheet, TrendingUp, Layers, Sparkles, Gauge,
+  Building2, Crown, Database, FileSpreadsheet, TrendingUp, Layers, Sparkles, Gauge, Wand2, GraduationCap,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useLangStore } from "@/lib/langStore";
@@ -35,6 +35,8 @@ export default function Sidebar() {
     { href: "/models",      icon: Cpu,            labelKey: "models" as const, show: true },
     { href: "/tools",       icon: Zap,            labelKey: "tools" as const, show: true },
     { href: "/data-sources", icon: Database, labelKey: "dataSources" as const, show: true },
+    { href: "/ask-studio", icon: Wand2, labelKey: "askStudio" as const, show: true },
+    { href: "/training-studio", icon: GraduationCap, labelKey: "trainingStudio" as const, show: true },
     { href: "/ml-evolution", icon: TrendingUp, labelKey: "mlEvolution" as const, show: true },
     { href: "/knowledge-distill", icon: Layers, labelKey: "knowledgeDistill" as const, show: true },
     { href: "/agent-factory", icon: Sparkles, labelKey: "agentFactory" as const, show: true },

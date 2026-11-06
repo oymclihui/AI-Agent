@@ -110,6 +110,21 @@ class TemplateOut(BaseModel):
     hit_count: int = 0
     status: str = "draft"
     source: str = "auto"
+    success_criteria: Optional[str] = None
+    quality_score: float = 0.0
+    created_at: Optional[datetime] = None
+
+
+class RunbookOut(BaseModel):
+    id: str
+    data_source_id: Optional[str] = None
+    slug: str
+    name: str
+    description: Optional[str] = None
+    roster: list[dict[str, Any]] = Field(default_factory=list)
+    trigger: dict[str, Any] = Field(default_factory=dict)
+    status: str = "active"
+    source: str = "manual"
     created_at: Optional[datetime] = None
 
 

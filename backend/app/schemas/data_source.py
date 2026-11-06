@@ -182,12 +182,30 @@ class DataSourceTestOut(BaseModel):
     truncated: bool = False
 
 
-class TableRelationIn(BaseModel):
-    """用户在 ER 图上手动定义的一条表间关联关系。"""
-    from_table: str = Field(..., min_length=1)
+class TableColumnPair(BaseModel):
+    """关联关系中的一个字段对；复合键（如 RQ + FDBH）用多组。"""
     from_column: str = Field(..., min_length=1)
-    to_table: str = Field(..., min_length=1)
     to_column: str = Field(..., min_length=1)
+
+
+class TableRelationIn(BaseModel):
+    """用户在 ER 图上手动定义的一条表间关联关系。
+
+    pairs 支持复合关联键；from_column/to_column 保留单列旧格式兼容。
+    """
+    from_table: str = Field(..., min_length=1)
+    to_table: str = Field(..., min_length=1)
+    from_column: str = ""
+    to_column: str = ""
+    pairs: list[TableColumnPair] = Field(default_factory=list)
+
+    def column_pairs(self) -> list[tuple[str, str]]:
+        """归一化成 (本端列, 对端列) 列表；未填字段时返回空。"""
+        if self.pairs:
+            return [(p.from_column, p.to_column) for p in self.pairs]
+        if self.from_column and self.to_column:
+            return [(self.from_column, self.to_column)]
+        return []
 
 
 class TableRelationsSetIn(BaseModel):
@@ -216,6 +234,9 @@ class DataAskQueryIn(BaseModel):
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     history: list[DataAskHistoryTurn] = Field(default_factory=list)
+    # 蓝图 P0：分析技能路由——employee_id=按数字员工绑定的分析技能匹配；skill_id=显式指定技能
+    employee_id: Optional[str] = None
+    skill_id: Optional[str] = None
 
 
 class DataAskQueryOut(BaseModel):
@@ -236,6 +257,14 @@ class DataAskQueryOut(BaseModel):
     standalone_question: str = ""
     clarification: str = ""
     trace_id: Optional[int] = None
+    # 蓝图 P0：命中的分析技能摘要（未命中为 null）
+    skill_used: Optional[dict[str, Any]] = None
+    # 蓝图 P1-②：技能步骤编排产物（非编排模式为 null）
+    facts: Optional[list[dict[str, Any]]] = None       # 算子产出的结构化事实
+    steps_profile: Optional[list[dict[str, Any]]] = None  # 每步执行报告（含失败原因）
+    detail_rows: Optional[list[dict[str, Any]]] = None    # 各步骤明细行（dict 结构）
+    # 蓝图 P1 末：对话修订草案 / 发布 / 回滚 / 对比的结构化结果
+    skill_revision: Optional[dict[str, Any]] = None
 
 
 class DataAskAuditLogOut(BaseModel):

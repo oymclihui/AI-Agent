@@ -75,8 +75,18 @@ function ChartTooltip({
   );
 }
 
-/* ── 卡片外壳：标题 + 图表体 ─────────────────────────────── */
-function ChartShell({ title, children }: { title?: string; children: ReactNode }) {
+/* ── 卡片外壳：标题 + 图表体（drillable 时显示下钻角标按钮） ── */
+function ChartShell({
+  title,
+  drillable,
+  onBadgeDrill,
+  children,
+}: {
+  title?: string;
+  drillable?: boolean;
+  onBadgeDrill?: () => void;
+  children: ReactNode;
+}) {
   const theme = useQaChartTheme();
   return (
     <div
@@ -89,15 +99,59 @@ function ChartShell({ title, children }: { title?: string; children: ReactNode }
         boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
       }}
     >
-      {title && (
-        <p style={{ color: theme.heading, fontSize: 13.5, fontWeight: 650, margin: "0 0 10px" }}>{title}</p>
+      {(title || drillable) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px" }}>
+          {title && (
+            <p style={{ color: theme.heading, fontSize: 13.5, fontWeight: 650, margin: 0, flex: 1, minWidth: 0 }}>
+              {title}
+            </p>
+          )}
+          {drillable && onBadgeDrill ? (
+            <button
+              type="button"
+              onClick={onBadgeDrill}
+              title="打开下钻面板（默认最近一期）"
+              style={{
+                fontSize: 10.5,
+                color: "#60a5fa",
+                whiteSpace: "nowrap",
+                border: "1px solid rgba(96,165,250,0.45)",
+                borderRadius: 999,
+                padding: "1px 8px",
+                background: "transparent",
+                cursor: "pointer",
+              }}
+            >
+              下钻明细 ↘
+            </button>
+          ) : drillable ? (
+            <span
+              style={{
+                fontSize: 10.5,
+                color: "#60a5fa",
+                whiteSpace: "nowrap",
+                border: "1px solid rgba(96,165,250,0.45)",
+                borderRadius: 999,
+                padding: "1px 8px",
+              }}
+            >
+              点击图形或坐标轴可下钻 ↘
+            </span>
+          ) : null}
+        </div>
       )}
       {children}
     </div>
   );
 }
 
-export function ChartRenderer({ chart }: { chart: ChatChartData }) {
+export function ChartRenderer({
+  chart,
+  onDrill,
+}: {
+  chart: ChatChartData;
+  onDrill?: (label: string) => void;
+}) {
   const theme = useQaChartTheme();
 
   /* labels/datasets → recharts rows: [{name, [seriesLabel]: value}] */
@@ -121,6 +175,86 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
       <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
     ) : undefined;
 
+  /* ── 下钻 v3：三层点击保险 ──────────────────────────────
+     ① 轴标签 tick：纯 SVG text + onClick 闭包（不依赖事件坐标，最可靠）
+     ② chart 级 onClick：读 activeLabel（依赖 pageX/Y，真实鼠标有效）
+     ③ 元素级 onClick：payload.name / labels[index] 兜底 ── */
+  const labelAt = (i: unknown) => (typeof i === "number" ? chart.labels[i] : undefined);
+  const handleElemClick = onDrill
+    ? (data: unknown, index?: unknown) => {
+        const d = data as { payload?: { name?: unknown } } | null;
+        const name = d?.payload?.name ?? labelAt(index);
+        if (typeof name === "string" && name !== "") {
+          console.info("[drill] elem", name);
+          onDrill(name);
+        }
+      }
+    : undefined;
+  const handleChartClick = onDrill
+    ? (state: unknown) => {
+        const s = state as { activeLabel?: unknown; activePayload?: { payload?: { name?: unknown } }[] } | null;
+        const name = s?.activeLabel ?? s?.activePayload?.[0]?.payload?.name;
+        if (typeof name === "string" && name !== "") {
+          console.info("[drill] chart", name);
+          onDrill(name);
+        }
+      }
+    : undefined;
+  const drillTickStyle = { cursor: "pointer" as const, fill: theme.muted, fontSize: 11 };
+  const drillXTick = onDrill
+    ? (p: { x?: number; y?: number; payload?: { value?: unknown } }) => {
+        const v = p.payload?.value;
+        return (
+          <text
+            x={p.x}
+            y={(p.y ?? 0) + 12}
+            textAnchor="middle"
+            style={drillTickStyle}
+            onClick={() => {
+              if (typeof v === "string" && v !== "") {
+                console.info("[drill] tick", v);
+                onDrill(v);
+              }
+            }}
+          >
+            {String(v ?? "")}
+          </text>
+        );
+      }
+    : axisTick;
+  const drillYTick = onDrill
+    ? (p: { x?: number; y?: number; payload?: { value?: unknown } }) => {
+        const v = p.payload?.value;
+        return (
+          <text
+            x={p.x}
+            y={(p.y ?? 0) + 4}
+            textAnchor="end"
+            style={drillTickStyle}
+            onClick={() => {
+              if (typeof v === "string" && v !== "") {
+                console.info("[drill] tick", v);
+                onDrill(v);
+              }
+            }}
+          >
+            {String(v ?? "")}
+          </text>
+        );
+      }
+    : axisTick;
+  const cursorStyle = onDrill ? { cursor: "pointer" as const } : undefined;
+  /* 角标按钮：显式下钻入口（默认最近一期），与图形/坐标轴点击互补 */
+  const badgeDrill = onDrill
+    ? () => {
+        const last = chart.labels[chart.labels.length - 1];
+        if (typeof last === "string" && last !== "") {
+          console.info("[drill] badge", last);
+          onDrill(last);
+        }
+      }
+    : undefined;
+
   /* ── 饼图（环形 + 中心总额 + 百分比标签） ───────────────── */
   if (chart.type === "pie") {
     const pieData = chart.labels.map((label, i) => ({
@@ -130,7 +264,7 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
     const total = pieData.reduce((s, d) => s + d.value, 0);
 
     return (
-      <ChartShell title={chart.title}>
+      <ChartShell title={chart.title} drillable={!!onDrill} onBadgeDrill={badgeDrill}>
         <ResponsiveContainer width="100%" height={250}>
           <PieChart>
             <Pie
@@ -145,6 +279,7 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
               stroke={theme.surface}
               strokeWidth={2}
               animationDuration={700}
+              onClick={handleElemClick}
               label={({ name, percent }: { name?: string; percent?: number }) =>
                 `${name} ${(((percent ?? 0) * 100).toFixed(0))}%`
               }
@@ -176,16 +311,22 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
   if (chart.type === "bar" && chart.horizontal) {
     const height = Math.max(220, chart.labels.length * 36 + 48);
     return (
-      <ChartShell title={chart.title}>
+      <ChartShell title={chart.title} drillable={!!onDrill} onBadgeDrill={badgeDrill}>
         <ResponsiveContainer width="100%" height={height}>
-          <BarChart layout="vertical" data={rows} margin={{ top: 8, right: 28, left: 8, bottom: 4 }}>
+          <BarChart
+            layout="vertical"
+            data={rows}
+            margin={{ top: 8, right: 28, left: 8, bottom: 4 }}
+            onClick={handleChartClick}
+            style={cursorStyle}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
             <XAxis type="number" tick={axisTick} axisLine={{ stroke: theme.grid }} tickLine={false} tickFormatter={(v) => formatChartNum(Number(v))} />
             <YAxis
               type="category"
               dataKey="name"
               width={Math.min(220, Math.max(96, Math.max(...chart.labels.map((label) => label.length)) * 16))}
-              tick={axisTick}
+              tick={drillYTick}
               axisLine={false}
               tickLine={false}
             />
@@ -199,6 +340,7 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
                 radius={[0, 5, 5, 0]}
                 maxBarSize={28}
                 animationDuration={700}
+                onClick={handleElemClick}
               >
                 {showValueLabels && (
                   <LabelList
@@ -218,11 +360,16 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
 
   if (chart.type === "bar") {
     return (
-      <ChartShell title={chart.title}>
+      <ChartShell title={chart.title} drillable={!!onDrill} onBadgeDrill={badgeDrill}>
         <ResponsiveContainer width="100%" height={showValueLabels ? 290 : 260}>
-          <BarChart data={rows} margin={{ top: showValueLabels ? 22 : 10, right: 12, left: 0, bottom: 4 }}>
+          <BarChart
+            data={rows}
+            margin={{ top: showValueLabels ? 22 : 10, right: 12, left: 0, bottom: 4 }}
+            onClick={handleChartClick}
+            style={cursorStyle}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
-            <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: theme.grid }} tickLine={false} interval={0} />
+            <XAxis dataKey="name" tick={drillXTick} axisLine={{ stroke: theme.grid }} tickLine={false} interval={0} />
             <YAxis tick={axisTick} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => formatChartNum(Number(v))} />
             <Tooltip content={tooltipEl} cursor={{ fill: theme.grid, fillOpacity: 0.25 }} />
             {legendEl}
@@ -234,6 +381,7 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
                 radius={[5, 5, 0, 0]}
                 maxBarSize={44}
                 animationDuration={700}
+                onClick={handleElemClick}
               >
                 {showValueLabels && (
                   <LabelList
@@ -254,11 +402,11 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
   /* ── 折线图 ───────────────────────────────────────────── */
   if (chart.type === "line" || chart.type === "scatter") {
     return (
-      <ChartShell title={chart.title}>
+      <ChartShell title={chart.title} drillable={!!onDrill} onBadgeDrill={badgeDrill}>
         <ResponsiveContainer width="100%" height={270}>
-          <LineChart data={rows} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+          <LineChart data={rows} margin={{ top: 12, right: 16, bottom: 4, left: 0 }} onClick={handleChartClick} style={cursorStyle}>
             <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
-            <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: theme.grid }} tickLine={false} />
+            <XAxis dataKey="name" tick={drillXTick} axisLine={{ stroke: theme.grid }} tickLine={false} />
             <YAxis tick={axisTick} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => formatChartNum(Number(v))} />
             <Tooltip content={tooltipEl} />
             {legendEl}
@@ -271,9 +419,10 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
                   dataKey={ds.label}
                   stroke={color}
                   strokeWidth={2.5}
-                  dot={{ r: 3, strokeWidth: 0, fill: color }}
-                  activeDot={{ r: 5 }}
+                  dot={{ r: 4, strokeWidth: 0, fill: color }}
+                  activeDot={{ r: 6 }}
                   animationDuration={700}
+                  onClick={handleElemClick}
                 />
               );
             })}
@@ -286,9 +435,9 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
   /* ── 面积图（渐变填充） ───────────────────────────────── */
   if (chart.type === "area") {
     return (
-      <ChartShell title={chart.title}>
+      <ChartShell title={chart.title} drillable={!!onDrill} onBadgeDrill={badgeDrill}>
         <ResponsiveContainer width="100%" height={270}>
-          <AreaChart data={rows} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+          <AreaChart data={rows} margin={{ top: 12, right: 16, bottom: 4, left: 0 }} onClick={handleChartClick} style={cursorStyle}>
             <defs>
               {chart.datasets.map((ds, idx) => {
                 const color = QA_CHART_PALETTE[idx % QA_CHART_PALETTE.length];
@@ -301,7 +450,7 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
               })}
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
-            <XAxis dataKey="name" tick={axisTick} axisLine={{ stroke: theme.grid }} tickLine={false} />
+            <XAxis dataKey="name" tick={drillXTick} axisLine={{ stroke: theme.grid }} tickLine={false} />
             <YAxis tick={axisTick} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => formatChartNum(Number(v))} />
             <Tooltip content={tooltipEl} />
             {legendEl}
@@ -315,9 +464,10 @@ export function ChartRenderer({ chart }: { chart: ChatChartData }) {
                   stroke={color}
                   strokeWidth={2.5}
                   fill={`url(#cr-grad-${idx})`}
-                  dot={{ r: 3, strokeWidth: 0, fill: color }}
-                  activeDot={{ r: 5 }}
+                  dot={{ r: 4, strokeWidth: 0, fill: color }}
+                  activeDot={{ r: 6 }}
                   animationDuration={700}
+                  onClick={handleElemClick}
                 />
               );
             })}

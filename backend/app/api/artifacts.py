@@ -13,11 +13,43 @@ from app.core.doc_export import (
 
 router = APIRouter(prefix="/artifacts", tags=["Artifacts"])
 
+# Preview is a unique origin: scripts can run, but cannot read the app's storage.
+_HTML_PREVIEW_CSP = (
+    "sandbox allow-scripts allow-forms allow-popups allow-modals; "
+    "default-src 'none'; "
+    "script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com "
+    "https://unpkg.com https://cdn.tailwindcss.com; "
+    "style-src 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com "
+    "https://unpkg.com https://fonts.googleapis.com https://cdn.tailwindcss.com; "
+    "font-src data: https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+    "img-src data: blob: https:; "
+    "media-src data: blob: https:; "
+    "connect-src 'none'; "
+    "frame-src 'none'; "
+    "frame-ancestors 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'"
+)
+
+
+def _html_file(path: Path, filename: str, *, download: bool) -> FileResponse:
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"}
+    if not download:
+        headers["Content-Security-Policy"] = _HTML_PREVIEW_CSP
+    return FileResponse(
+        path,
+        media_type="text/html; charset=utf-8",
+        filename=filename,
+        content_disposition_type="attachment" if download else "inline",
+        headers=headers,
+    )
+
 
 @router.get("/{filename}")
 async def download_artifact(
     filename: str,
     format: str | None = Query(None, alias="format", description="md | docx | xlsx | pptx"),
+    download: bool = Query(False, description="Force a file download for HTML previews"),
 ):
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -42,12 +74,11 @@ async def download_artifact(
     out_name = filename if filename.endswith(f".{target}") else replace_extension(filename, target)
 
     if target == native_ext or format is None:
+        served_name = out_name if out_name.endswith(path.suffix) else path.name.split("_", 1)[-1]
+        if native_ext == "html":
+            return _html_file(path, served_name, download=download)
         media = FORMAT_MEDIA.get(native_ext, "application/octet-stream")
-        return FileResponse(
-            path,
-            media_type=media,
-            filename=out_name if out_name.endswith(path.suffix) else path.name.split("_", 1)[-1],
-        )
+        return FileResponse(path, media_type=media, filename=served_name)
 
     if native_ext not in ("md", "txt", ""):
         raise HTTPException(

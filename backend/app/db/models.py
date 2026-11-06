@@ -1,14 +1,37 @@
 """
 SQLAlchemy ORM models for all AIAGNET entities.
 """
+import datetime
+import decimal
+
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float,
     ForeignKey, JSON, Enum as SAEnum, DateTime, UniqueConstraint, Date,
+    event,
 )
 from sqlalchemy.orm import relationship
 import enum
 
 from app.db.base import Base, TimestampMixin, generate_uuid
+
+
+def _json_safe(v):
+    """递归转 JSON 可序列化：Decimal→float，date/datetime→str，bytes→utf-8。
+
+    在 ORM 持久化边界统一兜底，避免业务侧漏转 Decimal 导致
+    'Object of type Decimal is not JSON serializable'。
+    """
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return v.isoformat()
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    return v
 
 
 # ──────────────────────────────────────────────
@@ -252,6 +275,28 @@ class AgentShareAuditLog(Base, TimestampMixin):
 
 
 # ──────────────────────────────────────────────
+# 企业微信 Bot → 智能体 绑定（一个 Bot 只能绑一个智能体）
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# ──────────────────────────────────────────────
+
+class WecomAgentBinding(Base, TimestampMixin):
+    __tablename__ = "wecom_agent_bindings"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    bot_id = Column(String(128), unique=True, nullable=False, index=True)
+    agent_id = Column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    enabled = Column(Boolean, default=False, nullable=False)
+    chat_ids = Column(JSON, default=list)
+    # 该智能体在企微里的回答模板（Markdown，占位符 {结论}/{明细}/{分析}/{建议}/{行数}），空则用标准版式
+    reply_template = Column(Text, nullable=True)
+    # 该智能体的显示样式覆盖（主题/字号/行数/图表等），空则继承全局配置
+    style = Column(JSON, nullable=True)
+    created_by = Column(String(36), ForeignKey("users.id"), nullable=True)
+
+
+# ──────────────────────────────────────────────
 # Workflow
 # ──────────────────────────────────────────────
 
@@ -304,6 +349,32 @@ class AgentExecution(Base, TimestampMixin):
 
     agent = relationship("Agent", back_populates="executions")
     workflow_execution = relationship("WorkflowExecution", back_populates="agent_executions")
+
+
+class AgentEvent(Base, TimestampMixin):
+    """Append-only session event log for AgentExecution（对标 Harness known-event-types.ts）。
+
+    每种 AgentExecution 对应多条 AgentEvent，按 seq 递增，形成完整可回放的事件流。
+    """
+
+    __tablename__ = "agent_events"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    execution_id = Column(String(36), ForeignKey("agent_executions.id"), nullable=False, index=True)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=True, index=True)
+    turn = Column(Integer, nullable=False, default=1)
+    step = Column(Integer, nullable=False, default=0)
+    seq = Column(Integer, nullable=False, default=0)  # 同 execution 内递增
+    event_type = Column(String(64), nullable=False, index=True)  # 见下方枚举
+    name = Column(String(128), nullable=True)  # tool 名 / agent 名
+    payload = Column(JSON, default=dict)  # 事件载荷
+    source = Column(String(16), nullable=False, default="agent")  # agent / subagent / system / harness
+    level = Column(String(16), nullable=False, default="info")  # info / warning / error
+
+    # event_type 枚举（精简自 Harness 85 种事件）:
+    # turn/start, step/start, tool/call, tool/result,
+    # assistant/stream, assistant/message, step/end, turn/end,
+    # assistant/attempt, deliverables/presented, feedback/record
 
 
 # ──────────────────────────────────────────────
@@ -949,6 +1020,7 @@ class AskTrace(Base, TimestampMixin):
     success = Column(Boolean, default=True, nullable=False)
     error_message = Column(Text, nullable=True)
     analysis_mode = Column(String(20), nullable=True)  # sql/overview/ml/excel/clarification
+    answer_mode = Column(String(8), nullable=True)  # L1 直答 / L2 表格 / L3 深度分析
     memory_hits = Column(Integer, default=0, nullable=False)
     duration_ms = Column(Integer, nullable=True)
     rewrite_ms = Column(Integer, nullable=True)
@@ -958,6 +1030,12 @@ class AskTrace(Base, TimestampMixin):
     result_signature = Column(String(64), nullable=True)
     clarification = Column(Boolean, default=False, nullable=False)
     cached = Column(Boolean, default=False, nullable=False)
+    # 实体归一结果：问题里点名的门店/维度值 → 数据里的规范值（含打分与候选）
+    entities = Column(JSON, nullable=True)
+    # 蓝图 P1-④：命中的分析技能与步骤回放（未命中为空）
+    skill_id = Column(String(36), nullable=True, index=True)
+    skill_version = Column(String(16), nullable=True)
+    steps_profile = Column(JSON, nullable=True)
 
 
 class DataAskTreeNode(Base, TimestampMixin):
@@ -1074,6 +1152,8 @@ class AskExample(Base, TimestampMixin):
     active = Column(Boolean, default=True, nullable=False)
     indexed = Column(Boolean, default=False, nullable=False)  # 是否已向量化入 Milvus
     note = Column(String(500), nullable=True)
+    # 蓝图 P1-③：非空 = 该分析技能的专属示例（技能命中时优先检索，再回落全源金标）
+    skill_id = Column(String(36), ForeignKey("skills.id"), nullable=True, index=True)
 
 
 class AskTemplate(Base, TimestampMixin):
@@ -1092,6 +1172,28 @@ class AskTemplate(Base, TimestampMixin):
     hit_count = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="draft", nullable=False, index=True)  # draft/active
     source = Column(String(20), default="auto", nullable=False)  # auto/manual
+    # 验收标准：产出必须满足的可核对条件（模板—验收—反馈闭环）
+    success_criteria = Column(Text, nullable=True)
+    # 反馈评分：由 ask_feedback 赞踩/纠错按同类问题计算（0~1，Laplace 平滑）
+    quality_score = Column(Float, default=0.0, nullable=False)
+
+
+class DsRunbook(Base, TimestampMixin):
+    """分析套餐：场景 → 角色编队 → 步骤编排（配置化，不做独立前端页）"""
+
+    __tablename__ = "ds_runbook"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=True, index=True)  # 空 = 全数据源通用
+    slug = Column(String(64), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    # 角色编队：[{"step":1,"role":"...","agent_slug":"...","output":"..."}]
+    roster = Column(JSON, default=list)
+    # 触发配置：{"kind":"daily","cron":"18:00","scene":"经营分析日巡检"}
+    trigger = Column(JSON, default=dict)
+    status = Column(String(20), default="active", nullable=False, index=True)  # active/disabled
+    source = Column(String(20), default="manual", nullable=False)
 
 
 class DsBusinessRule(Base, TimestampMixin):
@@ -1327,6 +1429,7 @@ class DashboardArtifact(Base, TimestampMixin):
     verify_report = Column(JSON, default=dict)
     error = Column(Text, nullable=True)
     message_id = Column(String(36), nullable=True)  # 卡片消息 id
+    dashboard_id = Column(String(36), nullable=True, index=True)  # 关联自助看板（可空，兼容旧产物）
 
 
 class DashboardEvent(Base, TimestampMixin):
@@ -1338,3 +1441,440 @@ class DashboardEvent(Base, TimestampMixin):
     stage = Column(String(32), nullable=False)
     status = Column(String(16), nullable=False)  # start/ok/warn/fail
     detail = Column(JSON, default=dict)
+
+
+# ──────────────────────────────────────────────
+# 高级分析（AnalysisSpec）：分析定义 / 执行记录 / 自助看板 / 维度
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# ──────────────────────────────────────────────
+
+class AnalysisSpec(Base, TimestampMixin):
+    """可复用的分析定义：LLM 只产出规格，数值由算子计算。"""
+    __tablename__ = "analysis_specs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    owner_id = Column(String(36), nullable=True, index=True)
+    name = Column(String(120), nullable=False, default="")
+    spec_json = Column(JSON, nullable=False, default=dict)
+    spec_hash = Column(String(32), nullable=False, default="")
+    version = Column(Integer, nullable=False, default=1)
+
+
+class AnalysisRun(Base, TimestampMixin):
+    """一次分析执行记录（审计与回放）。"""
+    __tablename__ = "analysis_runs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    spec_id = Column(String(36), nullable=True, index=True)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="ok")  # ok/failed
+    result_snapshot = Column(JSON, nullable=True)
+    facts_json = Column(JSON, nullable=True)
+    row_count = Column(Integer, nullable=False, default=0)
+    elapsed_ms = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+
+
+class Dashboard(Base, TimestampMixin):
+    """自助看板主体：卡片列表 + 筛选器 + 版本。"""
+    __tablename__ = "dashboards"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    owner_id = Column(String(36), nullable=True, index=True)
+    name = Column(String(120), nullable=False, default="")
+    template = Column(String(64), nullable=True)  # 非空表示由模板派生（retail_overview）
+    layout_json = Column(JSON, nullable=False, default=dict)
+    filters_json = Column(JSON, nullable=False, default=list)
+    status = Column(String(16), nullable=False, default="draft")  # draft/published
+    version = Column(Integer, nullable=False, default=1)
+
+
+class DashboardWidget(Base, TimestampMixin):
+    """看板卡片：引用 analysis_specs，不内联 SQL。"""
+    __tablename__ = "dashboard_widgets"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    dashboard_id = Column(String(36), nullable=False, index=True)
+    spec_id = Column(String(36), nullable=True, index=True)
+    widget_type = Column(String(32), nullable=False)
+    title = Column(String(120), nullable=False, default="")
+    layout_json = Column(JSON, nullable=False, default=dict)   # {x,y,w,h}
+    binding_json = Column(JSON, nullable=False, default=list)  # ["filter.store"]
+    drill_json = Column(JSON, nullable=False, default=dict)
+    options_json = Column(JSON, nullable=False, default=dict)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+
+class DashboardSnapshot(Base, TimestampMixin):
+    """看板发布快照：保证历史版本可回溯。"""
+    __tablename__ = "dashboard_snapshots"
+    __table_args__ = (UniqueConstraint("dashboard_id", "version", name="ux_dashboard_snapshots_ver"),)
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    dashboard_id = Column(String(36), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    snapshot_json = Column(JSON, nullable=True)
+    html = Column(Text, nullable=True)
+    anchor_status = Column(String(8), nullable=True)  # pass/warn/fail
+
+
+class MetricDimension(Base, TimestampMixin):
+    """语义层维度（下钻依赖）：物化 semantic_model.dimensions。"""
+    __tablename__ = "metric_dimensions"
+    __table_args__ = (UniqueConstraint("data_source_id", "name", name="ux_metric_dimensions_ds_name"),)
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    name = Column(String(64), nullable=False)
+    column_name = Column(String(64), nullable=False)
+    data_type = Column(String(16), nullable=False, default="string")
+    hierarchy_level = Column(Integer, nullable=False, default=0)
+    parent_id = Column(String(36), nullable=True)
+
+
+class DsDimAlias(Base, TimestampMixin):
+    """维度值别名（实体归一字典）：数据里的规范值 ↔ 用户的各种说法。
+
+    例：canonical=西安广场超市，alias=西安店 / 西安广场 / 西安。
+    source=auto 由 FDMC 等维度值自动派生，source=user 由企微候选按钮确认；
+    确认过的写法下次直接命中，不再反问（自学习闭环）。
+    表由 init_db 的 create_all 在应用启动时自动创建。
+    """
+
+    __tablename__ = "ds_dim_alias"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    dim_table = Column(String(128), nullable=True)
+    dim_column = Column(String(64), nullable=False, index=True)
+    canonical = Column(String(128), nullable=False)
+    alias = Column(String(128), nullable=False)
+    # canonical/strip/city：自动派生；user：人工确认的写法；pending：反问中的待选候选
+    alias_type = Column(String(16), nullable=False, default="canonical")
+    confidence = Column(Float, nullable=False, default=1.0)
+    source = Column(String(16), nullable=False, default="auto")  # auto/user
+    status = Column(String(16), nullable=False, default="active")  # active/pending/rejected
+    token = Column(String(16), nullable=True, index=True)  # 反问候选按钮的回执token
+    hit_count = Column(Integer, nullable=False, default=0)
+
+
+# ── P3：订阅推送 / 阈值告警 / 嵌入分享 ──
+
+# 表由 init_db 的 create_all 在应用启动时自动创建
+
+
+class DashboardSubscription(Base, TimestampMixin):
+    """看板订阅：按周期生成快照并向指定渠道投递。"""
+    __tablename__ = "dashboard_subscriptions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    dashboard_id = Column(String(36), nullable=False, index=True)
+    owner_id = Column(String(36), nullable=False, index=True)
+    period = Column(String(16), nullable=False, default="daily")  # hourly/daily/weekly
+    hour = Column(Integer, nullable=False, default=8)             # 投递小时（北京时间）
+    minute = Column(Integer, nullable=False, default=0)
+    weekday = Column(Integer, nullable=False, default=0)          # weekly 时生效，0=周一
+    channel = Column(String(16), nullable=False, default="message")  # message/webhook/feishu/email
+    target = Column(String(512), nullable=False, default="")      # 会话ID / webhook URL / chat_id / 邮箱
+    link_base = Column(String(255), nullable=False, default="")   # 创建时捕获的站点 origin，用于拼接绝对链接
+    active = Column(Boolean, nullable=False, default=True)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    next_run_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class SubscriptionRun(Base, TimestampMixin):
+    """一次订阅投递：保存当次快照 HTML 与投递结果。"""
+    __tablename__ = "subscription_runs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    subscription_id = Column(String(36), nullable=False, index=True)
+    dashboard_id = Column(String(36), nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="ok")  # ok/failed
+    summary_json = Column(JSON, nullable=True)                 # KPI 摘要 [{label, value}]
+    html = Column(Text, nullable=True)
+    channel = Column(String(16), nullable=False, default="message")
+    target = Column(String(512), nullable=False, default="")
+    delivered = Column(Boolean, nullable=False, default=False)
+    error = Column(Text, nullable=True)
+    opened = Column(Boolean, nullable=False, default=False)        # 快照链接被打开（打开率追踪）
+    opened_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AlertRule(Base, TimestampMixin):
+    """阈值告警规则：对聚合指标做周期检查，越界触发通知。"""
+    __tablename__ = "alert_rules"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    owner_id = Column(String(36), nullable=False, index=True)
+    name = Column(String(120), nullable=False, default="")
+    metric_name = Column(String(64), nullable=False, default="")
+    metric_expr = Column(String(255), nullable=False, default="")
+    time_field = Column(String(64), nullable=False, default="RQ")
+    lookback = Column(String(16), nullable=False, default="today")  # today/yesterday/this_month/last_7d
+    op = Column(String(4), nullable=False, default="<")             # > >= < <= == !=
+    threshold = Column(Float, nullable=False, default=0.0)
+    detect = Column(String(16), nullable=False, default="threshold")  # P3-2：threshold=阈值 / zscore=异常检测
+    zscore_window = Column(Integer, nullable=False, default=28)       # P3-2：z-score 基线窗口（天）
+    zscore_sigma = Column(Float, nullable=False, default=3.0)         # P3-2：z 触发倍数（|z|>=sigma）
+    interval_minutes = Column(Integer, nullable=False, default=60)
+    cooldown_hours = Column(Integer, nullable=False, default=24)
+    channel = Column(String(16), nullable=False, default="message")
+    target = Column(String(512), nullable=False, default="")
+    active = Column(Boolean, nullable=False, default=True)
+    last_checked_at = Column(DateTime(timezone=True), nullable=True)
+    last_value = Column(Float, nullable=True)
+    last_triggered_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AlertEvent(Base, TimestampMixin):
+    """告警事件记录（越界即记录，通知与否均可追溯）。"""
+    __tablename__ = "alert_events"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    rule_id = Column(String(36), nullable=False, index=True)
+    value = Column(Float, nullable=True)
+    threshold = Column(Float, nullable=True)
+    message = Column(Text, nullable=False, default="")
+    notified = Column(Boolean, nullable=False, default=False)
+
+
+class RowPermission(Base, TimestampMixin):
+    """行级权限：按用户 × 数据源 × 维度字段限定可见维度值集合。
+
+    在 AnalysisSpec 的 SQL 出口统一注入（execute_spec），管理员不受限。
+    """
+    __tablename__ = "row_permissions"
+    __table_args__ = (
+        UniqueConstraint("data_source_id", "user_id", "dimension_field", name="ux_row_perm_ds_user_field"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    dimension_field = Column(String(64), nullable=False)
+    allowed_values = Column(JSON, nullable=False, default=list)  # 可见维度值列表；空列表=该用户不可见任何行
+    note = Column(String(255), nullable=False, default="")
+    active = Column(Boolean, nullable=False, default=True)
+
+
+class PreAggregate(Base, TimestampMixin):
+    """预聚合注册：维度 × 指标 × 时间粒度的本地物化（P6，蓝图「预聚合视图 / 缓存」）。
+
+    远端源按 GROUP BY 拉取后落到元数据库本地表 analysis_preagg_{id 前 8 位}，
+    beat 定时刷新；execute_spec 命中注册规格时直接查本地表（秒开）。
+    仅登记可重聚合指标（SUM/COUNT/MIN/MAX），AVG 等不可重算指标拒绝登记。
+    """
+    __tablename__ = "pre_aggregates"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    source_table = Column(String(128), nullable=False, default="")
+    dimensions = Column(JSON, nullable=False, default=list)   # ["FL1MC", ...]
+    metrics = Column(JSON, nullable=False, default=list)      # [{"name","expr","alias"}]
+    time_field = Column(String(64), nullable=False, default="")  # 空 = 无时间维度
+    granularity = Column(String(16), nullable=False, default="")  # day/month/空
+    refresh_interval_min = Column(Integer, nullable=False, default=60)
+    active = Column(Boolean, nullable=False, default=True)
+    last_refresh_at = Column(DateTime(timezone=True), nullable=True)
+    last_status = Column(String(255), nullable=False, default="")
+    last_rows = Column(Integer, nullable=False, default=0)
+
+
+# ──────────────────────────────────────────────
+# 训练中心 P1：统一训练工单（跨蒸馏 / 建考题 / 候选 / 评测 / 晋升五步）
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# target_id 统一 String 不带 FK（对齐 ml_* 与阶段一~四表风格）
+# ──────────────────────────────────────────────
+
+
+class TrainJob(Base, TimestampMixin):
+    """训练工单：一条用户发起的训练流水线，stages 记录每个阶段的可见进度。"""
+
+    __tablename__ = "train_job"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    target_type = Column(String(16), nullable=False, default="ds")  # ds/agent
+    target_id = Column(String(64), nullable=False, index=True)
+    kind = Column(String(20), nullable=False, default="full")  # distill/eval/full/prompt
+    status = Column(String(16), nullable=False, default="queued", index=True)  # queued/running/done/partial/failed
+    stage = Column(String(32), nullable=False, default="queued")
+    progress = Column(Integer, nullable=False, default=0)
+    stages = Column(JSON, default=list)  # [{key,label,status,progress,message,detail,started_at,finished_at}]
+    detail = Column(JSON, default=dict)  # 各阶段产物汇总（评测分数 / 候选版本 / 晋升结果）
+    error = Column(Text, nullable=True)
+    note = Column(String(500), nullable=True)
+    created_by = Column(String(36), nullable=True, index=True)
+
+
+# ──────────────────────────────────────────────
+# 训练中心 P2：GEPA 式提示词候选 —— 反思改写 goal / role / backstory，
+# 必须经评测对比 + promote 门禁才允许采纳，否则保守保留现版。
+# ──────────────────────────────────────────────
+
+
+class PromptCandidate(Base, TimestampMixin):
+    """P2：提示词自动优化产物（GEPA 反思式）。"""
+
+    __tablename__ = "prompt_candidate"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    agent_id = Column(String(64), nullable=False, index=True)
+    data_source_id = Column(String(64), nullable=True, index=True)
+    base_version_id = Column(Integer, nullable=True, index=True)
+    field = Column(String(24), nullable=False)  # role / goal / backstory
+    before = Column(Text, nullable=False)
+    after = Column(Text, nullable=False)
+    reason = Column(Text, nullable=True)  # LLM 反思生成的改进理由
+    failure_clusters = Column(JSON, default=list)  # 触发改写的失败样本聚类摘要
+    score_delta = Column(Float, nullable=True)  # 经 eval run 对比基线的综合分差
+    status = Column(String(16), nullable=False, default="pending", index=True)  # pending/evaluated/accepted/rejected
+    eval_run_id = Column(Integer, nullable=True)
+    train_job_id = Column(String(36), nullable=True, index=True)
+    model = Column(String(64), nullable=True)  # 生成候选时用的 LLM
+    created_by = Column(String(36), nullable=True, index=True)
+
+
+# ──────────────────────────────────────────────
+# 训练中心 P3：多轮与工具轨迹 —— 把 data_ask_tree_node 的一次问答标准化为
+# 问题 → 计划 → 工具调用 → 观测 → 结果 → 奖励，供指标计算与沙箱回放对比。
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# ──────────────────────────────────────────────
+
+
+class TrainTrajectory(Base, TimestampMixin):
+    """P3 标准化训练轨迹：一次问答一行（按 run_id 去重）。"""
+
+    __tablename__ = "train_trajectory"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    trace_id = Column(Integer, nullable=True, index=True)
+    run_id = Column(String(64), nullable=False, index=True)
+    question = Column(Text, nullable=True)
+    standalone_question = Column(Text, nullable=True)
+    mode = Column(String(20), nullable=True)  # sql/overview/clarification/error
+    plan = Column(JSON, nullable=True)  # intent 节点（记忆命中 / sql_override）
+    tool_calls = Column(JSON, default=list)  # 候选 SQL（index/mode/sql/error/won）
+    observation = Column(JSON, nullable=True)  # execution 节点（ok/row_count/sql）
+    result = Column(JSON, nullable=True)  # result 节点（ok/mode/duration/澄清）
+    reward = Column(Float, nullable=False, default=0.0)
+    success = Column(Boolean, nullable=False, default=False)
+    n_candidates = Column(Integer, nullable=False, default=0)
+    n_invalid_calls = Column(Integer, nullable=False, default=0)
+    n_rounds = Column(Integer, nullable=False, default=1)
+    source = Column(String(16), default="tree", nullable=False)  # tree/backfill
+    train_job_id = Column(String(36), nullable=True, index=True)
+
+
+class TrainRlExport(Base, TimestampMixin):
+    """P4 RL 训练数据导出记录：把 train_trajectory 按规则奖励打成 JSONL。"""
+
+    __tablename__ = "train_rl_export"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    data_source_id = Column(String(64), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    range = Column(String(32), nullable=False, default="all")  # all/failed/success/last:N
+    format = Column(String(16), nullable=False, default="jsonl")
+    reward_rule = Column(String(200), nullable=False, default="success=+1.0;invalid=-0.5;clarify=+0.2")
+    row_count = Column(Integer, nullable=False, default=0)
+    uri = Column(String(500), nullable=True)  # 服务器相对路径
+    train_job_id = Column(String(36), nullable=True, index=True)
+    created_by = Column(String(64), nullable=True)
+
+
+# ──────────────────────────────────────────────
+# 任务化（对标 super-agent 阶段一）：跨渠道任务句柄，企微问数先行。
+# 状态机：queued → working → person/answer（待澄清）
+#                          → person/review（待确认）→ done；异常 → failed。
+# 表由 init_db 的 create_all 在应用启动时自动创建
+# ──────────────────────────────────────────────
+
+
+class TaskRecord(Base, TimestampMixin):
+    """一次用户请求的持久化任务：状态机 + 结构化报告 + 重启恢复依据。
+
+    person/* 是「等用户」挂起态：澄清待选 / 结果待反馈，点卡片后推进到 done。
+    进程重启时 queued/working 由 recover_inflight_tasks 统一收尾为 failed。
+    """
+
+    __tablename__ = "tasks"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(64), nullable=False, index=True)  # 渠道侧用户标识（企微 userid）
+    channel = Column(String(20), nullable=False, default="wecom", index=True)
+    conversation_id = Column(String(36), nullable=True, index=True)
+    chattype = Column(String(20), nullable=True)
+    target = Column(JSON, nullable=True)  # 主动推送目标 [chatid/userid]
+    question = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    ack_text = Column(Text, nullable=True)  # 已发出的确认文案
+    report = Column(JSON, nullable=True)  # 结构化结果 {reply, trace_id, rows, images...}
+    trace_id = Column(Integer, nullable=True, index=True)  # 关联 ask_trace，反馈闭环用
+    error = Column(Text, nullable=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)  # 终态时间（done/failed）
+
+
+class OutboxMessage(Base, TimestampMixin):
+    """事务性发件箱（蓝图阶段二）：外发消息先落库再发送，有序、可重试、可补发。
+
+    写库与任务状态同事务；派遣循环按创建顺序发送（同任务天然保序）；
+    失败按 5s→30s→300s 退避，三次连败置 failed 并告警；
+    目标会话失效置 dropped（保留记录）。重启后 pending 行由派遣循环补发。
+    """
+
+    __tablename__ = "outbox"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    task_id = Column(String(36), nullable=True, index=True)  # 关联 tasks.id（系统通知可空）
+    channel = Column(String(20), nullable=False, default="wecom", index=True)
+    target = Column(JSON, nullable=False)  # 推送目标 [chatid/userid]
+    kind = Column(String(20), nullable=False, default="markdown")  # markdown/text
+    payload = Column(JSON, nullable=False, default=dict)  # {"content": "..."}
+    status = Column(String(16), nullable=False, default="pending", index=True)  # pending/sent/failed/dropped
+    attempts = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    error = Column(Text, nullable=True)
+
+
+class ConfigVersion(Base, TimestampMixin):
+    """配置版本快照（蓝图阶段四）：版本化配置的每次变更留档，可回滚可归因。
+
+    当前值仍存 SystemSetting（读取路径不变）；变更经 snapshot_config() 写入：
+    version 单调递增，Task 的 mandate.policy_version 即归因到这里的某一行。
+    """
+
+    __tablename__ = "config_versions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    key = Column(String(120), nullable=False, index=True)      # 如 wecom_bot.policy
+    version = Column(Integer, nullable=False)
+    value = Column(JSON, nullable=True)                        # 该版本完整快照
+    actor = Column(String(120), nullable=True)                 # 操作人（login）
+    note = Column(Text, nullable=True)
+
+
+# ── JSON 列持久化兜底：Decimal/date 等统一转可序列化类型 ──
+_DASHBOARD_JSON_COLS = ("snapshot", "kpis", "anchor_detail", "verify_report")
+
+
+@event.listens_for(DashboardArtifact, "before_insert")
+@event.listens_for(DashboardArtifact, "before_update")
+def _normalize_dashboard_artifact_json(mapper, connection, target):
+    for col in _DASHBOARD_JSON_COLS:
+        val = getattr(target, col, None)
+        if val is not None:
+            setattr(target, col, _json_safe(val))
+
+
+@event.listens_for(DashboardEvent, "before_insert")
+@event.listens_for(DashboardEvent, "before_update")
+def _normalize_dashboard_event_json(mapper, connection, target):
+    if target.detail is not None:
+        target.detail = _json_safe(target.detail)

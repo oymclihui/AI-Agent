@@ -1,1395 +1,3119 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
 from fastapi.responses import Response, StreamingResponse
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from sqlalchemy import select, delete
+
 import asyncio
+
 import json
+
 import structlog
 
 from app.db.session import get_db
+
 from app.db.models import (
+
     Conversation, Message, Agent as AgentModel, MessageRole, User, ModelConfig,
+
 )
+
 from app.db.base import generate_uuid
+
 from app.schemas.chat import (
+
     ConversationCreate, ConversationResponse, ConversationContextUpdate, ConversationUpdate,
+
     MessageResponse, ChatRequest, SuggestQuestionsResponse, TranscribeResponse,
+
     SaveAsSkillRequest, SaveToKnowledgeRequest, DeleteOkResponse,
+
     DepositSuggestRequest, DepositSuggestResponse, DepositConfirmRequest, DepositConfirmResponse,
+
     DepositSuggestionItem, DepositDraftPreview, DepositTaskPreview,
+
 )
+
 from app.core.auth.deps import get_current_user
+
 from app.core.auth.scoping import scope_owned_only, assert_mutable_by_user
+
 from app.core.auth.agent_access import require_agent_use
+
 from app.core.chat.cleanup import cleanup_stale_conversations
+
 from app.core.chat.export import (
+
     export_conversation_to_skill,
+
     export_conversation_to_knowledge,
+
     export_conversation_document,
+
 )
+
 from app.core.agents.base import AgentDefinition, Task
+
 from app.core.skills.factory import build_agent_executor
+
 from app.core.dialogue.manager import DialogueManager
+
 from app.core.memory.manager import MemoryManager
+
 from app.core.skills.injector import SkillInjector, merge_skill_bindings, collect_knowledge_base_ids
+
 from app.knowledge.retriever import build_multi_kb_retriever
+
 from app.core.chat.attachments import build_attachment_context
+
 from app.core.chat.storage import save_attachment_bytes, delete_conversation_uploads
+
 from app.core.chat.suggestions import generate_attachment_questions
+
 from app.core.speech.transcriber import transcribe_audio
+
 from app.core.chat.connectors import build_connector_messages
+
 from app.core.chat.web_context import build_web_search_messages
+
 from app.core.anti_hallucination import anti_hallucination_messages
+
 from app.core.chat.chart_parser import extract_chart_data, extract_charts_data, strip_chart_blocks
+
 from app.core.chat.deposit import analyze_conversation_deposit, confirm_conversation_deposit as execute_deposit_confirm
+
 from app.core.group_chat.orchestrator import GroupChatOrchestrator, get_group_config_from_conversation
+
 from app.models_hub.response_style import resolve_conversation_style
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+
 logger = structlog.get_logger(__name__)
 
-
 def _friendly_llm_error(exc: Exception) -> str:
+
     msg = str(exc).strip() or exc.__class__.__name__
+
     lower = msg.lower()
+
     if "getaddrinfo failed" in lower or "connection error" in lower or "connecterror" in lower:
+
         return (
+
             "无法连接大模型服务（请确认已接入公司内网/VPN，或在「模型配置」中将默认模型切换为 Ollama）。"
+
             f" 详情: {msg}"
+
         )
+
     if "401" in lower or "unauthorized" in lower:
+
         return (
+
             "模型鉴权失败（401）。Ollama 云端模型请在「模型中心 → 我的模型 API Key」配置 Ollama Key，"
+
             "或在「模型配置」中为该模型填写 API Key 后重试。"
+
             f" 详情: {msg}"
+
         )
+
     return f"大模型调用失败: {msg}"
 
 _memory_managers: dict[str, MemoryManager] = {}
 
-
 def get_memory_manager(conversation_id: str, memory_type: str = "buffer") -> MemoryManager:
+
     if conversation_id not in _memory_managers:
+
         _memory_managers[conversation_id] = MemoryManager(memory_type=memory_type)
+
     return _memory_managers[conversation_id]
 
-
 async def _ensure_memory_loaded(conv_id: str, memory_type: str, db: AsyncSession) -> MemoryManager:
+
     memory = get_memory_manager(conv_id, memory_type)
+
     if getattr(memory, "_loaded_from_db", False):
+
         return memory
 
     result = await db.execute(
+
         select(Message)
+
         .where(Message.conversation_id == conv_id)
+
         .order_by(Message.created_at.asc())
+
     )
+
     messages = result.scalars().all()
+
     for i in range(0, len(messages) - 1, 2):
+
         if messages[i].role == MessageRole.user and messages[i + 1].role == MessageRole.assistant:
+
             await memory.add_exchange(
+
                 session_id=conv_id,
+
                 human_message=messages[i].content,
+
                 ai_message=messages[i + 1].content,
+
             )
+
     memory._loaded_from_db = True  # type: ignore[attr-defined]
+
     return memory
 
-
 async def _resolve_effective_context(db: AsyncSession, conv: Conversation, user: User):
+
     """Merge conversation + agent skills/KBs for runtime injection."""
+
     agent_definition = None
+
     agent_model = None
+
     if conv.agent_id:
+
         agent_model = await db.get(AgentModel, conv.agent_id)
+
         if agent_model:
+
             agent_definition = AgentDefinition(
+
                 id=agent_model.id,
+
                 name=agent_model.name,
+
                 role=agent_model.role,
+
                 goal=agent_model.goal,
+
                 backstory=agent_model.backstory or "",
+
                 llm_provider=agent_model.llm_provider,
+
                 llm_model=agent_model.llm_model,
+
                 temperature=agent_model.temperature,
+
                 max_iterations=agent_model.max_iterations,
+
             )
 
     effective_skills = merge_skill_bindings(
+
         conv.skills_config,
+
         agent_model.skills_config if agent_model else None,
+
     )
+
     skill_messages = await SkillInjector.build_messages(db, effective_skills)
 
     kb_ids = await collect_knowledge_base_ids(db, conv.knowledge_base_ids, effective_skills)
+
     retriever = await build_multi_kb_retriever(db, kb_ids, caller_user=user)
 
     meta = conv.metadata_ or {}
+
     model_config_id = meta.get("model_config_id")
+
     if model_config_id:
+
         cfg = await db.get(ModelConfig, model_config_id)
+
         if cfg and cfg.is_active:
+
             agent_definition = _assign_chat_llm(
+
                 agent_definition, agent_model, cfg.provider, cfg.model_id,
+
             )
+
     personal_provider = str(meta.get("personal_provider") or "")
+
     personal_model = str(meta.get("personal_model_id") or "")
+
     if personal_provider and personal_model and user is not None:
+
         from app.models_hub.user_credentials import resolve_user_credentials
+
         owned_key, _owned_url = await resolve_user_credentials(
+
             user.id, personal_provider, personal_model, db,
+
         )
+
         if owned_key:
+
             agent_definition = _assign_chat_llm(
+
                 agent_definition, agent_model, personal_provider, personal_model,
+
             )
 
     return agent_definition, skill_messages, agent_model, retriever
 
-
-
 def _split_personal_model(model_config_id):  # -> tuple | None
+
     if not model_config_id or not str(model_config_id).startswith("mine:"):
+
         return None
+
     parts = str(model_config_id).split(":", 2)
+
     if len(parts) != 3 or not parts[1] or not parts[2]:
+
         return None
+
     return parts[1], parts[2]
 
-
 def _assign_chat_llm(agent_definition, agent_model, provider: str, model_id: str):
+
     from sqlalchemy.orm.attributes import set_committed_value
 
     if agent_definition:
+
         agent_definition.llm_provider = provider
+
         agent_definition.llm_model = model_id
+
     elif agent_model is None:
+
         agent_definition = AgentDefinition(
+
             id="chat-session",
+
             name="Assistant",
+
             role="AI Assistant",
+
             goal="Help the user with their questions and tasks",
+
             llm_provider=provider,
+
             llm_model=model_id,
+
         )
+
     if agent_model is not None:
+
         set_committed_value(agent_model, "llm_provider", provider)
+
         set_committed_value(agent_model, "llm_model", model_id)
+
     return agent_definition
 
-
 def _agent_has_tools(agent_model: AgentModel | None) -> bool:
+
     if not agent_model:
+
         return False
+
     tools = agent_model.tools_config or []
+
     return any(isinstance(t, dict) and t.get("tool_name") for t in tools)
 
-
 def _conversation_response_style(conv: Conversation, agent_model: AgentModel | None = None) -> str:
+
     meta = conv.metadata_ or {}
+
     agent_temp = agent_model.temperature if agent_model else None
+
     return resolve_conversation_style(meta, agent_temperature=agent_temp).value
 
-
 def _merge_conversation_preferences(
-    conv: Conversation,
-    *,
-    model_config_id: str | None = None,
-    connector_id: str | None = None,
-    web_search_enabled: bool | None = None,
-    response_style: str | None = None,
-) -> None:
-    meta = dict(conv.metadata_ or {})
-    if model_config_id is not None:
-        personal = _split_personal_model(model_config_id)
-        if personal:
-            meta["personal_provider"], meta["personal_model_id"] = personal
-            meta.pop("model_config_id", None)
-        elif model_config_id:
-            meta["model_config_id"] = model_config_id
-            meta.pop("personal_provider", None)
-            meta.pop("personal_model_id", None)
-        else:
-            meta.pop("model_config_id", None)
-            meta.pop("personal_provider", None)
-            meta.pop("personal_model_id", None)
-    if connector_id is not None:
-        if connector_id:
-            meta["connector_id"] = connector_id
-        else:
-            meta.pop("connector_id", None)
-    if web_search_enabled is not None:
-        if web_search_enabled:
-            meta["web_search_enabled"] = True
-        else:
-            meta.pop("web_search_enabled", None)
-    if response_style is not None:
-        if response_style in ("precise", "balanced", "creative"):
-            meta["response_style"] = response_style
-        else:
-            meta.pop("response_style", None)
-    conv.metadata_ = meta
 
+    conv: Conversation,
+
+    *,
+
+    model_config_id: str | None = None,
+
+    connector_id: str | None = None,
+
+    web_search_enabled: bool | None = None,
+
+    response_style: str | None = None,
+
+) -> None:
+
+    meta = dict(conv.metadata_ or {})
+
+    if model_config_id is not None:
+
+        personal = _split_personal_model(model_config_id)
+
+        if personal:
+
+            meta["personal_provider"], meta["personal_model_id"] = personal
+
+            meta.pop("model_config_id", None)
+
+        elif model_config_id:
+
+            meta["model_config_id"] = model_config_id
+
+            meta.pop("personal_provider", None)
+
+            meta.pop("personal_model_id", None)
+
+        else:
+
+            meta.pop("model_config_id", None)
+
+            meta.pop("personal_provider", None)
+
+            meta.pop("personal_model_id", None)
+
+    if connector_id is not None:
+
+        if connector_id:
+
+            meta["connector_id"] = connector_id
+
+        else:
+
+            meta.pop("connector_id", None)
+
+    if web_search_enabled is not None:
+
+        if web_search_enabled:
+
+            meta["web_search_enabled"] = True
+
+        else:
+
+            meta.pop("web_search_enabled", None)
+
+    if response_style is not None:
+
+        if response_style in ("precise", "balanced", "creative"):
+
+            meta["response_style"] = response_style
+
+        else:
+
+            meta.pop("response_style", None)
+
+    conv.metadata_ = meta
 
 def _apply_chat_mode(
+
     conv: Conversation,
+
     *,
+
     chat_mode: str | None = None,
+
     group_config: dict | None = None,
+
     data_source_id: str | None = None,
+
 ) -> None:
+
     meta = dict(conv.metadata_ or {})
+
     if chat_mode is not None:
+
         if chat_mode == "group":
+
             meta["chat_mode"] = "group"
+
             if group_config:
+
                 meta["group"] = group_config
+
             meta.pop("data_source_id", None)
+
         elif chat_mode == "data_ask":
+
             meta["chat_mode"] = "data_ask"
+
             meta["response_style"] = "precise"
+
             meta.pop("group", None)
+
             if data_source_id:
+
                 meta["data_source_id"] = data_source_id
+
         else:
+
             meta["chat_mode"] = "single"
+
             meta.pop("group", None)
+
     elif group_config is not None:
+
         meta["group"] = group_config
+
     if data_source_id is not None:
+
         meta["data_source_id"] = data_source_id
+
     conv.metadata_ = meta
 
-
 def _parse_bool(value: object) -> bool | None:
+
     if value is None:
+
         return None
+
     if isinstance(value, bool):
+
         return value
+
     text = str(value).strip().lower()
+
     if text in ("true", "1", "yes", "on"):
+
         return True
+
     if text in ("false", "0", "no", "off", ""):
+
         return False
+
     return None
 
-
 async def _get_user_conversation(db: AsyncSession, conv_id: str, user: User) -> Conversation:
+
     conv = await db.get(Conversation, conv_id)
+
     if not conv or not conv.is_active:
+
         raise HTTPException(status_code=404, detail="Conversation not found")
+
     if conv.owner_id != user.id:
+
         raise HTTPException(status_code=404, detail="Conversation not found")
+
     return conv
 
-
 async def _remove_conversation(db: AsyncSession, conv: Conversation) -> None:
+
     conv_id = conv.id
+
     _memory_managers.pop(conv_id, None)
+
     try:
+
         delete_conversation_uploads(conv_id)
+
     except Exception as exc:
+
         logger.warning("conversation_upload_cleanup_failed", conversation_id=conv_id, error=str(exc))
+
     await db.execute(delete(Message).where(Message.conversation_id == conv_id))
+
     await db.delete(conv)
+
     await db.flush()
 
-
 async def _parse_request_body(
+
     request: Request,
+
 ) -> tuple[str, bool, list[tuple[str, bytes]], str | None, str | None, bool | None]:
+
     content_type = request.headers.get("content-type", "")
+
     if "multipart/form-data" in content_type:
+
         form = await request.form()
+
         message = str(form.get("message") or "").strip()
+
         stream = str(form.get("stream", "false")).lower() in ("true", "1", "yes")
+
         model_config_id = str(form.get("model_config_id") or "").strip() or None
+
         connector_id = str(form.get("connector_id") or "").strip() or None
+
         web_search_enabled = _parse_bool(form.get("web_search_enabled"))
+
         file_items: list[tuple[str, bytes]] = []
+
         for item in form.getlist("files"):
+
             if hasattr(item, "read"):
+
                 data = await item.read()
+
                 if not data:
+
                     continue
+
                 name = getattr(item, "filename", None) or "attachment"
+
                 file_items.append((name, data))
+
         if not message and not file_items:
+
             raise HTTPException(status_code=400, detail="message or files required")
+
         if not message:
+
             message = "请分析以上附件内容，给出结构化的分析结论与建议。"
+
         return message, stream, file_items, model_config_id, connector_id, web_search_enabled
 
     try:
-        payload = ChatRequest(**await request.json())
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {exc}") from exc
-    return (
-        payload.message.strip(),
-        payload.stream,
-        [],
-        payload.model_config_id,
-        payload.connector_id,
-        payload.web_search_enabled,
-    )
 
+        payload = ChatRequest(**await request.json())
+
+    except Exception as exc:
+
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {exc}") from exc
+
+    return (
+
+        payload.message.strip(),
+
+        payload.stream,
+
+        [],
+
+        payload.model_config_id,
+
+        payload.connector_id,
+
+        payload.web_search_enabled,
+
+    )
 
 async def _parse_suggest_form(request: Request) -> tuple[str, str | None, list[tuple[str, bytes]]]:
+
     form = await request.form()
+
     lang = str(form.get("lang") or "zh").strip().lower()
+
     if lang not in ("zh", "en"):
+
         lang = "zh"
+
     agent_id = str(form.get("agent_id") or "").strip() or None
+
     file_items: list[tuple[str, bytes]] = []
+
     for item in form.getlist("files"):
+
         if hasattr(item, "read"):
+
             data = await item.read()
+
             if not data:
+
                 continue
+
             name = getattr(item, "filename", None) or "attachment"
+
             file_items.append((name, data))
+
     if not file_items:
+
         raise HTTPException(status_code=400, detail="files required")
+
     return lang, agent_id, file_items
 
-
 async def _agent_definition_from_id(db: AsyncSession, agent_id: str | None, user: User | None = None):
-    if not agent_id:
-        return None
-    agent_model = await db.get(AgentModel, agent_id)
-    if not agent_model:
-        return None
-    if user is not None:
-        try:
-            await require_agent_use(db, agent_model, user)
-        except HTTPException:
-            return None
-    return AgentDefinition(
-        id=agent_model.id,
-        name=agent_model.name,
-        role=agent_model.role,
-        goal=agent_model.goal,
-        backstory=agent_model.backstory or "",
-        llm_provider=agent_model.llm_provider,
-        llm_model=agent_model.llm_model,
-        temperature=agent_model.temperature,
-    )
 
+    if not agent_id:
+
+        return None
+
+    agent_model = await db.get(AgentModel, agent_id)
+
+    if not agent_model:
+
+        return None
+
+    if user is not None:
+
+        try:
+
+            await require_agent_use(db, agent_model, user)
+
+        except HTTPException:
+
+            return None
+
+    return AgentDefinition(
+
+        id=agent_model.id,
+
+        name=agent_model.name,
+
+        role=agent_model.role,
+
+        goal=agent_model.goal,
+
+        backstory=agent_model.backstory or "",
+
+        llm_provider=agent_model.llm_provider,
+
+        llm_model=agent_model.llm_model,
+
+        temperature=agent_model.temperature,
+
+    )
 
 @router.post("/suggest-questions", response_model=SuggestQuestionsResponse)
+
 async def suggest_questions(
+
     request: Request,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     """Analyze uploaded attachments and return 3 suggested user questions."""
+
     lang, agent_id, file_items = await _parse_suggest_form(request)
+
     attachment_context, attachment_meta = await build_attachment_context(file_items)
+
     agent_definition = await _agent_definition_from_id(db, agent_id, user)
+
     result = await generate_attachment_questions(
+
         attachment_context,
+
         attachment_meta,
+
         lang=lang,
+
         agent_definition=agent_definition,
+
         db=db,
+
         user_id=user.id,
+
     )
+
     return SuggestQuestionsResponse(**result)
 
-
 @router.post("/transcribe", response_model=TranscribeResponse)
+
 async def transcribe_voice(
+
     request: Request,
+
     user: User = Depends(get_current_user),
+
 ):
+
     """Convert recorded speech to text (Ollama Whisper / OpenAI STT)."""
+
     del user
+
     content_type = request.headers.get("content-type", "")
+
     if "multipart/form-data" not in content_type:
+
         raise HTTPException(status_code=400, detail="multipart/form-data with audio file required")
 
     form = await request.form()
+
     lang = str(form.get("lang") or "").strip().lower()
+
     if lang not in ("zh", "en"):
+
         lang = "zh"
 
     audio_item = form.get("file")
+
     if audio_item is None or not hasattr(audio_item, "read"):
+
         raise HTTPException(status_code=400, detail="file required")
 
     data = await audio_item.read()
+
     if not data:
+
         raise HTTPException(status_code=400, detail="empty audio file")
+
     if len(data) > 25 * 1024 * 1024:
+
         raise HTTPException(status_code=400, detail="audio file too large (max 25MB)")
 
     filename = getattr(audio_item, "filename", None) or "recording.webm"
+
     try:
+
         text, source = await transcribe_audio(data, filename=filename, lang=lang)
+
     except Exception as exc:
+
         logger.exception("transcribe_failed")
+
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return TranscribeResponse(text=text, source=source)
 
-
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
+
 async def create_conversation(
+
     payload: ConversationCreate,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     if payload.agent_id:
+
         agent = await db.get(AgentModel, payload.agent_id)
+
         await require_agent_use(db, agent, user)
+
     if payload.workflow_id:
+
         from app.db.models import Workflow as WorkflowModel
+
         wf = await db.get(WorkflowModel, payload.workflow_id)
+
         if not wf:
+
             raise HTTPException(status_code=404, detail=f"Workflow not found: {payload.workflow_id}")
 
     if payload.chat_mode == "group":
+
         if not payload.group_config:
+
             raise HTTPException(status_code=400, detail="group_config required for group chat")
+
         for aid in payload.group_config.agent_ids:
+
             agent = await db.get(AgentModel, aid)
+
             await require_agent_use(db, agent, user)
 
     if payload.chat_mode == "data_ask" and not payload.data_source_id:
+
         raise HTTPException(status_code=400, detail="data_source_id required for data_ask mode")
 
     conv = Conversation(
-        id=generate_uuid(),
-        owner_id=user.id,
-        title=payload.title,
-        agent_id=payload.agent_id or None,
-        workflow_id=payload.workflow_id or None,
-        knowledge_base_ids=payload.knowledge_base_ids or [],
-        skills_config=[s.model_dump() for s in payload.skills_config],
-        memory_type=payload.memory_type,
-        metadata_={},
-    )
-    create_style = "precise" if payload.chat_mode == "data_ask" else payload.response_style
-    _merge_conversation_preferences(
-        conv,
-        model_config_id=payload.model_config_id,
-        connector_id=payload.connector_id,
-        web_search_enabled=payload.web_search_enabled,
-        response_style=create_style,
-    )
-    if payload.chat_mode == "group" and payload.group_config:
-        _apply_chat_mode(
-            conv,
-            chat_mode="group",
-            group_config=payload.group_config.model_dump(),
-        )
-    elif payload.chat_mode == "data_ask":
-        _apply_chat_mode(
-            conv,
-            chat_mode="data_ask",
-            data_source_id=payload.data_source_id,
-        )
-    else:
-        _apply_chat_mode(conv, chat_mode="single")
-    db.add(conv)
-    await db.flush()
-    await db.refresh(conv)
-    return ConversationResponse.from_conversation(conv)
 
+        id=generate_uuid(),
+
+        owner_id=user.id,
+
+        title=payload.title,
+
+        agent_id=payload.agent_id or None,
+
+        workflow_id=payload.workflow_id or None,
+
+        knowledge_base_ids=payload.knowledge_base_ids or [],
+
+        skills_config=[s.model_dump() for s in payload.skills_config],
+
+        memory_type=payload.memory_type,
+
+        metadata_={},
+
+    )
+
+    create_style = "precise" if payload.chat_mode == "data_ask" else payload.response_style
+
+    _merge_conversation_preferences(
+
+        conv,
+
+        model_config_id=payload.model_config_id,
+
+        connector_id=payload.connector_id,
+
+        web_search_enabled=payload.web_search_enabled,
+
+        response_style=create_style,
+
+    )
+
+    if payload.chat_mode == "group" and payload.group_config:
+
+        _apply_chat_mode(
+
+            conv,
+
+            chat_mode="group",
+
+            group_config=payload.group_config.model_dump(),
+
+        )
+
+    elif payload.chat_mode == "data_ask":
+
+        _apply_chat_mode(
+
+            conv,
+
+            chat_mode="data_ask",
+
+            data_source_id=payload.data_source_id,
+
+        )
+
+    else:
+
+        _apply_chat_mode(conv, chat_mode="single")
+
+    db.add(conv)
+
+    await db.flush()
+
+    await db.refresh(conv)
+
+    return ConversationResponse.from_conversation(conv)
 
 @router.get("/conversations", response_model=list[ConversationResponse])
+
 async def list_conversations(
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     await cleanup_stale_conversations()
+
     result = await db.execute(
+
         select(Conversation)
+
         .where(Conversation.is_active == True, scope_owned_only(Conversation, user.id))
+
         .order_by(Conversation.created_at.desc())
+
     )
+
     return [ConversationResponse.from_conversation(c) for c in result.scalars().all()]
 
-
 @router.get("/conversations/{conv_id}", response_model=ConversationResponse)
-async def get_conversation(
-    conv_id: str,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    conv = await _get_user_conversation(db, conv_id, user)
-    return ConversationResponse.from_conversation(conv)
 
+async def get_conversation(
+
+    conv_id: str,
+
+    db: AsyncSession = Depends(get_db),
+
+    user: User = Depends(get_current_user),
+
+):
+
+    conv = await _get_user_conversation(db, conv_id, user)
+
+    return ConversationResponse.from_conversation(conv)
 
 @router.patch("/conversations/{conv_id}", response_model=ConversationResponse)
+
 async def rename_conversation(
+
     conv_id: str,
+
     payload: ConversationUpdate,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     if payload.title is not None:
+
         title = payload.title.strip()
+
         if not title:
+
             raise HTTPException(status_code=400, detail="Title cannot be empty")
+
         conv.title = title[:128]
+
     await db.commit()
+
     await db.refresh(conv)
+
     return ConversationResponse.from_conversation(conv)
 
-
 @router.get("/conversations/{conv_id}/export")
+
 async def export_conversation(
+
     conv_id: str,
+
     format: str = Query("md", alias="format"),
+
     lang: str = Query("zh"),
+
     attachments: bool = Query(False),
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     lang = lang if lang in ("zh", "en") else "zh"
+
     try:
+
         data, filename, media_type = await export_conversation_document(
+
             db,
+
             conv,
+
             user.id,
+
             fmt=format,
+
             lang=lang,
+
             include_attachments=attachments,
+
         )
+
     except ValueError as exc:
+
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return Response(
+
         content=data,
+
         media_type=media_type,
+
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+
     )
 
-
 @router.patch("/conversations/{conv_id}/context", response_model=ConversationResponse)
+
 async def update_conversation_context(
+
     conv_id: str,
+
     payload: ConversationContextUpdate,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     unset = payload.model_dump(exclude_unset=True)
 
     if "agent_id" in unset:
+
         agent_id = unset["agent_id"]
+
         if agent_id:
+
             agent = await db.get(AgentModel, agent_id)
+
             await require_agent_use(db, agent, user)
+
         conv.agent_id = agent_id or None
 
     if "knowledge_base_ids" in unset:
+
         conv.knowledge_base_ids = unset["knowledge_base_ids"] or []
 
     if "skills_config" in unset:
+
         raw_skills = unset["skills_config"] or []
+
         conv.skills_config = [
+
             s.model_dump() if hasattr(s, "model_dump") else s for s in raw_skills
+
         ]
 
     pref_keys = ("model_config_id", "connector_id", "web_search_enabled", "response_style")
+
     if any(k in unset for k in pref_keys):
+
         _merge_conversation_preferences(
+
             conv,
+
             model_config_id=unset.get("model_config_id") if "model_config_id" in unset else None,
+
             connector_id=unset.get("connector_id") if "connector_id" in unset else None,
+
             web_search_enabled=unset.get("web_search_enabled") if "web_search_enabled" in unset else None,
+
             response_style=unset.get("response_style") if "response_style" in unset else None,
+
         )
 
     if "chat_mode" in unset or "group_config" in unset or "data_source_id" in unset:
+
         gc = unset.get("group_config")
+
         if gc is not None and hasattr(gc, "model_dump"):
+
             gc = gc.model_dump()
+
         if gc is not None:
+
             for aid in gc.get("agent_ids") or []:
+
                 agent = await db.get(AgentModel, aid)
+
                 await require_agent_use(db, agent, user)
+
         _apply_chat_mode(
+
             conv,
+
             chat_mode=unset.get("chat_mode") if "chat_mode" in unset else None,
+
             group_config=gc if "group_config" in unset else None,
+
             data_source_id=unset.get("data_source_id") if "data_source_id" in unset else None,
+
         )
 
     await db.flush()
+
     await db.refresh(conv)
+
     return ConversationResponse.from_conversation(conv)
 
-
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageResponse])
+
 async def get_messages(
+
     conv_id: str,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     await _get_user_conversation(db, conv_id, user)
+
     result = await db.execute(
+
         select(Message)
+
         .where(Message.conversation_id == conv_id)
+
         .order_by(Message.created_at.asc())
+
     )
+
     rows = result.scalars().all()
+
     return [
+
         MessageResponse(
+
             id=m.id,
+
             conversation_id=m.conversation_id,
+
             role=m.role.value,
+
             content=m.content,
+
             charts_data=(m.metadata_ or {}).get("charts_data"),
+
             created_at=m.created_at,
+
             metadata_=m.metadata_ or {},
+
         )
+
         for m in rows
+
     ]
 
-
 @router.delete("/conversations/{conv_id}", response_model=DeleteOkResponse)
+
 async def delete_conversation(
+
     conv_id: str,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     await _remove_conversation(db, conv)
+
     return DeleteOkResponse(ok=True, deleted=1)
 
-
 @router.delete("/conversations", response_model=DeleteOkResponse)
+
 async def delete_all_conversations(
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     result = await db.execute(
+
         select(Conversation).where(
+
             Conversation.is_active == True,
+
             scope_owned_only(Conversation, user.id),
+
         )
+
     )
+
     convs = result.scalars().all()
+
     for conv in convs:
+
         await _remove_conversation(db, conv)
+
     return DeleteOkResponse(ok=True, deleted=len(convs))
+
+def _normalize_ui_tree(node):
+
+    """把 LLM 输出的嵌套组件树 {type, props, children} 扁平化成 {root, components}。"""
+
+    if not isinstance(node, dict) or not isinstance(node.get("type"), str):
+
+        return None
+
+    if isinstance(node.get("components"), list):
+
+        return node
+
+    components = []
+
+    counter = [0]
+
+
+
+    def walk(n, nid):
+
+        kids = []
+
+        for child in (n.get("children") or []):
+
+            if not isinstance(child, dict) or not isinstance(child.get("type"), str):
+
+                continue
+
+            counter[0] += 1
+
+            cid = child.get("id") if isinstance(child.get("id"), str) and child.get("id") else "n%d" % counter[0]
+
+            kids.append(walk(child, cid))
+
+        comp = {"id": nid, "type": n.get("type"), "props": n.get("props") or {}}
+
+        if kids:
+
+            comp["children"] = kids
+
+        components.append(comp)
+
+        return nid
+
+
+
+    walk(node, "root")
+
+    return {"root": "root", "components": components}
+
+
+
+
+
+def _try_extract_ui_patch(text):
+
+    """从纯文本里提取 ui_patch(...) 的参数（兼容 op/type/operation 与单 op 写法）。"""
+
+    if not text or "ui_patch" not in text.lower():
+
+        return None
+
+    import re as _re
+
+    import json as _json
+
+    m = _re.search(r"ui_patch\s*\(", text, _re.IGNORECASE)
+
+    if not m:
+
+        return None
+
+    start, depth, in_str, esc, end = m.end(), 1, False, False, -1
+
+    for i in range(start, len(text)):
+
+        ch = text[i]
+
+        if esc:
+
+            esc = False
+
+            continue
+
+        if ch == "\\" and in_str:
+
+            esc = True
+
+            continue
+
+        if ch == '"':
+
+            in_str = not in_str
+
+            continue
+
+        if in_str:
+
+            continue
+
+        if ch == "(":
+
+            depth += 1
+
+        elif ch == ")":
+
+            depth -= 1
+
+            if depth == 0:
+
+                end = i
+
+                break
+
+    if end < 0:
+
+        return None
+
+    js = text[start:end].strip()
+
+    js = _re.sub(r"^```(?:json|javascript)?\s*", "", js)
+
+    js = _re.sub(r"\s*```$", "", js)
+
+    js = _re.sub(r'(?<=[,{])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'"\1":', js)
+
+    try:
+
+        data = _json.loads(js)
+
+    except _json.JSONDecodeError:
+
+        return None
+
+    if isinstance(data, list):
+
+        return {"ops": data}
+
+    if not isinstance(data, dict):
+
+        return None
+
+    if isinstance(data.get("ops"), list):
+
+        return data
+
+    if data.get("op") or data.get("type") or data.get("operation"):
+
+        return {"ops": [data]}
+
+    if isinstance(data.get("content"), dict) and isinstance(data["content"].get("ops"), list):
+
+        return data["content"]
+
+    return None
+
+
+
+
+
+def _merge_ui_patch(data, patch):
+
+    """在服务端先把补丁合并进 ui_render 数据，刷新后仍能看到最新看板。"""
+
+    if not isinstance(data, dict) or not isinstance(data.get("components"), list):
+
+        return data
+
+    ops = patch.get("ops") if isinstance(patch, dict) else None
+
+    if not isinstance(ops, list):
+
+        return data
+
+    comps = [dict(x) if isinstance(x, dict) else x for x in data["components"]]
+
+    idx = {x.get("id"): i for i, x in enumerate(comps) if isinstance(x, dict)}
+
+    root = data.get("root")
+
+    for raw_op in ops:
+
+        if not isinstance(raw_op, dict):
+
+            continue
+
+        kind = raw_op.get("op") or raw_op.get("type") or raw_op.get("operation") or ""
+
+        cid = (raw_op.get("id") or raw_op.get("target") or raw_op.get("targetId")
+
+               or raw_op.get("componentId") or "")
+
+        if kind == "setProps" and isinstance(raw_op.get("props"), dict):
+
+            i = idx.get(cid, idx.get(root))
+
+            if i is None:
+
+                continue
+
+            comps[i]["props"] = {**(comps[i].get("props") or {}), **raw_op["props"]}
+
+        elif kind == "removeNode":
+
+            i = idx.get(cid)
+
+            if i is None or cid == root:
+
+                continue
+
+            comps.pop(i)
+
+            idx = {x.get("id"): k for k, x in enumerate(comps) if isinstance(x, dict)}
+
+            for x in comps:
+
+                if isinstance(x.get("children"), list) and cid in x["children"]:
+
+                    x["children"] = [y for y in x["children"] if y != cid]
+
+    out = dict(data)
+
+    out["components"] = comps
+
+    return out
+
+
+
+
+
+def _extract_ui_calls(text):
+
+    """默认对话未挂工具时：从纯文本里提取 ui_render / ui_patch 参数。"""
+
+    if not text:
+
+        return None, None
+
+    render_args = None
+
+    try:
+
+        from app.core.agents.executor import _try_extract_ui_render
+
+        raw = _try_extract_ui_render(text)
+
+        if raw:
+
+            render_args = _normalize_ui_tree(raw)
+
+    except Exception:
+
+        render_args = None
+
+    patch_args = _try_extract_ui_patch(text)
+
+    return render_args, patch_args
+
+
+
+
+
+def _ui_meta(render_args, patch_args):
+
+    if not render_args:
+
+        return None
+
+    data = _merge_ui_patch(render_args, patch_args) if patch_args else render_args
+
+    return {"ui_render": data}
+
+
+
+
+
+def _strip_ui_calls(text):
+
+    """把正文里的 ui_render(...)/ui_patch(...) 调用块去掉，避免刷新后露出原始 JSON。"""
+
+    if not text:
+
+        return text
+
+    import re as _re
+
+    out = text
+
+    for name in ("ui_render", "ui_patch"):
+
+        for _ in range(10):
+
+            m = _re.search(name + r"\s*\(", out, _re.IGNORECASE)
+
+            if not m:
+
+                break
+
+            start, depth, in_str, esc, end = m.start(), 0, False, False, -1
+
+            for i in range(m.end() - 1, len(out)):
+
+                ch = out[i]
+
+                if esc:
+
+                    esc = False
+
+                    continue
+
+                if ch == "\\" and in_str:
+
+                    esc = True
+
+                    continue
+
+                if ch == '"':
+
+                    in_str = not in_str
+
+                    continue
+
+                if in_str:
+
+                    continue
+
+                if ch == "(":
+
+                    depth += 1
+
+                elif ch == ")":
+
+                    depth -= 1
+
+                    if depth == 0:
+
+                        end = i + 1
+
+                        break
+
+            if end < 0:
+
+                break
+
+            out = out[:start] + out[end:]
+
+    return _re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+
 
 
 async def _save_streamed_assistant_message(
+
     conv_id: str,
+
     content: str,
+
     thinking: str,
+
     harness_trace: list | None = None,
+
+    ui_meta: dict | None = None,
+
 ) -> None:
-    if not content and not thinking and not harness_trace:
+
+    if not content and not thinking and not harness_trace and not ui_meta:
+
         return
+
     from app.db.session import AsyncSessionLocal
 
     async with AsyncSessionLocal() as session:
+
         meta = {}
+
         if thinking:
+
             meta["thinking"] = thinking
+
         if harness_trace:
+
             meta["harness_trace"] = harness_trace
+
+        if ui_meta:
+
+            meta.update(ui_meta)
+
         from app.knowledge.quality import get_citations
+
         if get_citations():
+
             meta["citations"] = get_citations()
+
         assistant_msg = Message(
+
             id=generate_uuid(),
+
             conversation_id=conv_id,
+
             role=MessageRole.assistant,
+
             content=content,
+
             metadata_=meta,
+
         )
+
         session.add(assistant_msg)
+
         await session.commit()
 
-
 @router.post("/conversations/{conv_id}/messages")
+
 async def send_message(
+
     conv_id: str,
+
     request: Request,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
 
     message, stream, file_items, model_config_id, connector_id, web_search_enabled = await _parse_request_body(request)
+
     _merge_conversation_preferences(
+
         conv,
+
         model_config_id=model_config_id,
+
         connector_id=connector_id,
+
         web_search_enabled=web_search_enabled,
+
     )
+
     await db.flush()
 
     agent_definition, skill_messages, agent_model, retriever = await _resolve_effective_context(db, conv, user)
+
     skill_messages = [*anti_hallucination_messages(), *skill_messages]
+
     response_style = _conversation_response_style(conv, agent_model)
+
     meta = conv.metadata_ or {}
+
     connector_id_active = meta.get("connector_id")
+
     if connector_id_active:
+
         skill_messages = [
+
             *skill_messages,
+
             *await build_connector_messages(
+
                 connector_id_active,
+
                 user_id=user.id,
+
                 db=db,
+
             ),
+
         ]
 
     web_search_active = bool(meta.get("web_search_enabled"))
+
     web_search_used = False
+
     if web_search_active:
+
         web_messages, web_search_used = await build_web_search_messages(message)
+
         skill_messages = [*skill_messages, *web_messages]
+
     memory = await _ensure_memory_loaded(conv_id, conv.memory_type, db)
+
     dialogue = DialogueManager(memory_manager=memory, knowledge_retriever=retriever)
 
     attachment_context = ""
+
     attachment_meta: list[dict] = []
+
     if file_items:
+
         attachment_context, attachment_meta = await build_attachment_context(file_items)
 
     user_msg_id = generate_uuid()
+
     stored_attachments: list[dict] = []
+
     for filename, data in file_items:
+
         storage_key = save_attachment_bytes(
+
             conv_id,
+
             filename=filename,
+
             data=data,
+
             message_id=user_msg_id,
+
         )
+
         stored_attachments.append({
+
             **next((m for m in attachment_meta if m.get("filename") == filename), {"filename": filename}),
+
             "storage_key": storage_key,
+
         })
 
     user_msg = Message(
+
         id=user_msg_id,
+
         conversation_id=conv_id,
+
         role=MessageRole.user,
+
         content=message,
+
         metadata_={"attachments": stored_attachments} if stored_attachments else {},
+
     )
+
     db.add(user_msg)
+
     await db.flush()
 
     group_cfg = get_group_config_from_conversation(conv)
+
     if group_cfg:
+
         if file_items and attachment_context:
+
             message = f"{message}\n\n{attachment_context}"
+
         if not stream:
+
             raise HTTPException(status_code=400, detail="Group chat requires stream=true")
 
         async def sse_group_stream():
+
             orchestrator = GroupChatOrchestrator(
+
                 db, conv, user, group_cfg, extra_skill_messages=skill_messages,
+
             )
+
             try:
+
                 async for ev in orchestrator.stream(
+
                     message,
+
                     disconnected=request.is_disconnected,
+
                 ):
+
                     if await request.is_disconnected():
+
                         break
+
                     yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
             except Exception as exc:
+
                 detail = _friendly_llm_error(exc)
+
                 logger.exception("group_chat_stream_failed", conversation_id=conv_id)
+
                 yield f"data: {json.dumps({'event': 'error', 'error': detail}, ensure_ascii=False)}\n\n"
+
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_group_stream(), media_type="text/event-stream")
 
     from app.core.data_ask.experience.chat_bridge import (
+
         resolve_data_source_for_chat,
+
         format_data_ask_for_chat,
+
         recent_question_turns,
+
     )
+
     from app.core.data_ask.service import run_data_ask, stream_data_ask
 
     data_source = await resolve_data_source_for_chat(
+
         db, agent_id=conv.agent_id, conversation_meta=meta,
+
     )
+
     # ---- S1 Socratic pre-check: non data-ask conversations only ----
+
     if data_source is None:
+
         from app.core.socratic.engine import socratic_precheck
 
         _decision = None
+
         try:
+
             _decision = await socratic_precheck(
+
                 db, message=message, conv=conv, agent_id=conv.agent_id)
+
         except Exception:
+
             logger.exception("socratic_precheck_failed")
+
         if _decision:
+
             if _decision.get("message"):
+
                 message = _decision["message"]
+
             _clarify = _decision.get("clarify")
+
             if _clarify:
+
                 try:
+
                     from app.db.models import AgentSocraticTrace
+
                     db.add(AgentSocraticTrace(
+
                         conversation_id=str(conv.id),
+
                         agent_id=str(conv.agent_id) if conv.agent_id else None,
+
                         user_id=str(user.id) if user else None,
+
                         question=message[:2000],
+
                         clarify_questions=_clarify.get("questions", []),
+
                         round=_clarify.get("round", 1),
+
                     ))
+
                 except Exception:
+
                     logger.exception("socratic_trace_failed")
+
                 try:
+
                     await db.commit()
+
                 except Exception:
+
                     await db.rollback()
+
                 if stream:
+
                     async def sse_clarify_stream():
+
                         try:
+
                             yield f"data: {json.dumps({'event': 'clarify', **_clarify}, ensure_ascii=False)}\n\n"
+
                         except Exception:
+
                             logger.exception("socratic_clarify_stream_failed")
+
                         yield "data: [DONE]\n\n"
 
                     return StreamingResponse(sse_clarify_stream(), media_type="text/event-stream")
+
                 from fastapi.responses import JSONResponse
+
                 return JSONResponse({"event": "clarify", **_clarify})
 
     if data_source and meta.get("chat_mode", "single") in ("single", "data_ask"):
+
         if str(data_source.driver) in ("excel_folder", "excel_template"):
+
             from app.core.data_ask.excel.session_cache import ensure_ready, get_load_status
 
             if str(data_source.driver) == "excel_template":
+
                 ds_meta = data_source.metadata_ or {}
+
                 if ds_meta.get("parse_status") != "ready":
+
                     raise HTTPException(
+
                         status_code=409,
+
                         detail="Excel 模板解析尚未完成，请先在数据源中执行批量解析",
+
                     )
 
             load_status = get_load_status(data_source.id)
+
             if load_status.get("status") != "ready":
+
                 detail = load_status.get("error") or "Excel 数据尚未完成全量加载，请稍候"
+
                 raise HTTPException(status_code=409, detail=detail)
+
             try:
+
                 ensure_ready(data_source.id)
+
             except ValueError as exc:
+
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         ask_message = message
+
         if attachment_context:
+
             ask_message = f"{message}\n\n{attachment_context}"
+
         history_turns = await recent_question_turns(db, conv_id, exclude_id=user_msg_id)
+
+        # ── p2-4 订阅日报：意图命中 → 订阅最新看板或引导生成（确定性）──
+        sub_result = None
+        try:
+            from app.core.data_ask.dashboard_gen import match_subscribe_intent, subscribe_daily
+
+            if match_subscribe_intent(ask_message):
+                _origin = f"{request.url.scheme}://{request.headers.get('host') or ''}"
+                sub_result = await subscribe_daily(
+                    db, data_source, ask_message, user, conv_id, _origin
+                )
+        except Exception as exc:
+            logger.warning("subscribe_intent_failed", error=str(exc)[:300])
+            sub_result = None
+        if sub_result is not None:
+            sub_text = str(sub_result.get("answer") or "")
+            _sub_meta = {
+                k: sub_result.get(k)
+                for k in ("subscription_id", "dashboard_id", "hour", "already", "subscribed")
+                if sub_result.get(k) is not None
+            }
+            if stream:
+                async def sse_subscribe():
+                    try:
+                        for i in range(0, len(sub_text), 80):
+                            yield "data: " + json.dumps(
+                                {"event": "token", "token": sub_text[i:i + 80]}, ensure_ascii=False
+                            ) + "\n\n"
+                        yield "data: " + json.dumps(
+                            {"event": "done", "row_count": 0, "answer_mode": "subscription",
+                             "route": "subscribe_gen", "confidence": "high", "suggestions": []},
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                        _m = Message(
+                            id=generate_uuid(),
+                            conversation_id=conv_id,
+                            role=MessageRole.assistant,
+                            content=sub_text,
+                            metadata_={
+                                "data_ask": True,
+                                "data_source_id": data_source.id,
+                                "question": ask_message,
+                                "subscription": _sub_meta,
+                                "answer_mode": "subscription",
+                                "route": "subscribe_gen",
+                                "confidence": "high",
+                            },
+                        )
+                        db.add(_m)
+                        await db.commit()
+                    except Exception as exc:
+                        yield "data: " + json.dumps(
+                            {"event": "error", "error": str(exc)[:500]}, ensure_ascii=False
+                        ) + "\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(sse_subscribe(), media_type="text/event-stream")
+
+            _m = Message(
+                id=generate_uuid(),
+                conversation_id=conv_id,
+                role=MessageRole.assistant,
+                content=sub_text,
+                metadata_={
+                    "data_ask": True,
+                    "data_source_id": data_source.id,
+                    "question": ask_message,
+                    "subscription": _sub_meta,
+                    "answer_mode": "subscription",
+                    "route": "subscribe_gen",
+                    "confidence": "high",
+                },
+            )
+            db.add(_m)
+            await db.commit()
+            return MessageResponse(
+                id=_m.id,
+                conversation_id=conv_id,
+                role=_m.role.value,
+                content=_m.content,
+                charts_data=None,
+                created_at=_m.created_at,
+                metadata_=_m.metadata_ or {},
+            )
+
+        # ── p2-3 一句话看板：意图命中 → 确定性生成（不经过 LLM），失败交还常规问数 ──
+        dash_payload = None
+        try:
+            from app.core.data_ask.dashboard_gen import generate_dashboard, match_dashboard_intent
+
+            if match_dashboard_intent(ask_message):
+                dash_payload = await generate_dashboard(db, data_source, ask_message, user)
+        except Exception as exc:
+            logger.warning("dashboard_generate_failed", error=str(exc)[:300])
+            dash_payload = None
+        if dash_payload is not None:
+            dash_meta = {
+                "id": dash_payload.get("id"),
+                "name": dash_payload.get("name"),
+                "widget_count": dash_payload.get("widget_count", 0),
+                "data_source_id": data_source.id,
+            }
+            dash_card = dash_payload.get("dashboard_card")
+            dash_text = str(dash_payload.get("answer") or "")
+            if stream:
+                async def sse_dashboard():
+                    try:
+                        for i in range(0, len(dash_text), 80):
+                            yield "data: " + json.dumps(
+                                {"event": "token", "token": dash_text[i:i + 80]}, ensure_ascii=False
+                            ) + "\n\n"
+                        if dash_card:
+                            yield "data: " + json.dumps(
+                                {"event": "dashboard", "dashboard": dash_meta, "dashboard_card": dash_card},
+                                ensure_ascii=False, default=str,
+                            ) + "\n\n"
+                        yield "data: " + json.dumps(
+                            {"event": "done", "row_count": 0, "answer_mode": "dashboard",
+                             "route": "dashboard_gen", "confidence": "high", "suggestions": []},
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                        _m = Message(
+                            id=generate_uuid(),
+                            conversation_id=conv_id,
+                            role=MessageRole.assistant,
+                            content=dash_text,
+                            metadata_={
+                                "data_ask": True,
+                                "data_source_id": data_source.id,
+                                "question": ask_message,
+                                "dashboard": dash_meta,
+                                **({"dashboard_card": dash_card} if dash_card else {}),
+                                "answer_mode": "dashboard",
+                                "route": "dashboard_gen",
+                                "confidence": "high",
+                            },
+                        )
+                        db.add(_m)
+                        await db.commit()
+                    except Exception as exc:
+                        yield "data: " + json.dumps(
+                            {"event": "error", "error": str(exc)[:500]}, ensure_ascii=False
+                        ) + "\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(sse_dashboard(), media_type="text/event-stream")
+
+            _m = Message(
+                id=generate_uuid(),
+                conversation_id=conv_id,
+                role=MessageRole.assistant,
+                content=dash_text,
+                metadata_={
+                    "data_ask": True,
+                    "data_source_id": data_source.id,
+                    "question": ask_message,
+                    "dashboard": dash_meta,
+                    **({"dashboard_card": dash_card} if dash_card else {}),
+                    "answer_mode": "dashboard",
+                    "route": "dashboard_gen",
+                    "confidence": "high",
+                },
+            )
+            db.add(_m)
+            await db.commit()
+            return MessageResponse(
+                id=_m.id,
+                conversation_id=conv_id,
+                role=_m.role.value,
+                content=_m.content,
+                charts_data=None,
+                created_at=_m.created_at,
+                metadata_=_m.metadata_ or {},
+            )
 
         if stream:
             async def sse_data_ask():
+
                 full = ""
+
                 stream_sql = None
+
                 stream_trace_id = None
+
                 stream_memory_hits = 0
+
+                stream_answer_mode = None
+
+                stream_route = None
+
+                stream_confidence = None
+
+                stream_suggestions = []
+
                 try:
+
                     async for line in stream_data_ask(
+
                         db,
+
                         data_source_id=data_source.id,
+
                         question=ask_message,
+
                         user=user,
+
                         history=history_turns,
+
                     ):
+
                         ev = json.loads(line)
+
                         if ev.get("event") == "token":
+
                             full += ev.get("token") or ""
+
                         elif ev.get("event") == "sql":
+
                             stream_sql = ev.get("sql") or stream_sql
+
                         elif ev.get("event") == "done":
+
                             stream_trace_id = ev.get("trace_id")
+
                             stream_memory_hits = int(ev.get("memory_hits") or 0)
+
+                            stream_answer_mode = ev.get("answer_mode")
+
+                            stream_route = ev.get("route")
+
+                            stream_confidence = ev.get("confidence")
+
+                            stream_suggestions = ev.get("suggestions") or []
+
                         yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+
                     assistant_msg = Message(
+
                         id=generate_uuid(),
+
                         conversation_id=conv_id,
+
                         role=MessageRole.assistant,
+
                         content=full,
+
                         metadata_={
+
                             "data_ask": True,
+
                             "data_source_id": data_source.id,
+
                             "question": ask_message,
+
                             "sql": stream_sql,
+
                             "trace_id": stream_trace_id,
+
                             "memory_hits": stream_memory_hits,
+
+                            "answer_mode": stream_answer_mode,
+
+                            "route": stream_route,
+
+                            "confidence": stream_confidence,
+
+                            "suggestions": stream_suggestions,
+
                         },
+
                     )
+
                     db.add(assistant_msg)
+
                     await db.commit()
+
                 except Exception as exc:
+
                     detail = str(exc)[:500]
+
                     yield f"data: {json.dumps({'event': 'error', 'error': detail}, ensure_ascii=False)}\n\n"
+
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(sse_data_ask(), media_type="text/event-stream")
 
         try:
+
             result = await run_data_ask(
+
                 db,
+
                 data_source_id=data_source.id,
+
                 question=ask_message,
+
                 user=user,
+
                 history=history_turns,
+
             )
+
             content = await format_data_ask_for_chat(result, user)
+
         except Exception as exc:
+
             raise HTTPException(status_code=400, detail=str(exc)[:500]) from exc
+
         charts_data = result.get("charts") or None
+
         if not charts_data and result.get("chart"):
+
             try:
+
                 from app.core.data_ask.service import _chat_chart
+
                 _c = _chat_chart(result["chart"])
+
                 charts_data = [_c] if _c else None
+
             except Exception:
+
                 charts_data = None
+
         content = strip_chart_blocks(content)
+
         assistant_msg = Message(
+
             id=generate_uuid(),
+
             conversation_id=conv_id,
+
             role=MessageRole.assistant,
+
             content=content,
+
             metadata_={
+
                 "data_ask": True,
+
                 "data_source_id": data_source.id,
+
                 "question": ask_message,
+
                 "sql": result.get("sql"),
+
                 "charts_data": charts_data,
+
                 "trace_id": result.get("trace_id"),
+
                 "memory_hits": int(result.get("memory_hits") or 0),
+
+                "answer_mode": result.get("answer_mode"),
+
+                "route": result.get("route"),
+
+                "confidence": result.get("confidence"),
+
+                "suggestions": result.get("suggestions") or [],
+
             },
+
         )
+
         db.add(assistant_msg)
+
         await db.commit()
+
         return MessageResponse(
+
             id=assistant_msg.id,
+
             conversation_id=conv_id,
+
             role=assistant_msg.role.value,
+
             content=assistant_msg.content,
+
             charts_data=charts_data,
+
             created_at=assistant_msg.created_at,
+
             metadata_=assistant_msg.metadata_ or {},
+
         )
 
     use_agent_tools = _agent_has_tools(agent_model)
 
     if use_agent_tools and agent_model:
+
         if retriever is not None:
+
             try:
+
                 from langchain_core.messages import SystemMessage
+
                 from app.knowledge.quality import citations_of, context_of, history_text, set_citations
+
                 docs = await retriever.aretrieve(
+
                     message,
+
                     history_text=history_text(await memory.get_history(conv_id)),
+
                 )
+
                 set_citations(citations_of(docs))
+
                 rag = context_of(docs)
+
                 if rag:
+
                     skill_messages.append(SystemMessage(
+
                         content="资料库内容，回答时依据这些片段，不要编造：\n" + rag
+
                     ))
+
             except Exception as exc:
+
                 logger.warning("kb_agent_retrieve_failed", error=str(exc))
+
         from app.core.auth.context import set_current_user_id, reset_current_user_id
+
         from app.core.harness.context import (
+
             HarnessContext,
+
             ensure_session_directory,
+
             get_harness_context,
+
             reset_harness_context,
+
             set_harness_context,
+
         )
 
         if stream:
+
+            
+
             # lg3: Real streaming with tool calls via LangGraph astream_events
+
             async def sse_agent_stream():
+
                 full = ""
+
                 thinking = ""
+
                 client_gone = False
+
                 # Set context vars INSIDE the generator (same context as reset)
+
                 ctx_token = set_current_user_id(user.id)
+
                 harness_token = set_harness_context(
+
                     HarnessContext(
+
                         user_id=user.id,
+
                         source="chat",
+
                         source_id=conv_id,
+
                         working_directory=ensure_session_directory(conv_id),
+
                     )
+
                 )
+
                 try:
+
                     executor = await build_agent_executor(
+
                         db, agent_model, memory_manager=memory, response_style=response_style,
+
                     )
+
                     if skill_messages:
+
                         executor.skill_messages = [*executor.skill_messages, *skill_messages]
+
                     task_prompt = message
+
                     if attachment_context:
+
                         task_prompt = f"{message}\n\n{attachment_context}"
+
                     stream_gen = executor.stream_with_tools(
+
                         Task(description=task_prompt),
+
                         memory_session_id=conv_id,
+
                         db=db,
+
                     )
+
                     from app.knowledge.quality import get_citations
+
                     _cites = get_citations()
+
                     if _cites:
+
                         yield f"data: {json.dumps({'citations': _cites}, ensure_ascii=False)}\n\n"
+
                     stream_iter = stream_gen.__aiter__()
+
                     while True:
+
                         nxt = asyncio.create_task(stream_iter.__anext__())
+
                         while not nxt.done():
+
                             if await request.is_disconnected():
+
                                 client_gone = True
+
                                 hctx = get_harness_context()
+
                                 if hctx is not None:
+
                                     hctx.cancel("client_disconnect")
+
                                 nxt.cancel()
+
                                 try:
+
                                     await nxt
+
                                 except (asyncio.CancelledError, Exception):
+
                                     pass
+
                                 try:
+
                                     await stream_gen.aclose()
+
                                 except Exception:
+
                                     pass
+
                                 break
+
                             await asyncio.wait({nxt}, timeout=0.5)
+
                         if client_gone:
+
                             break
+
                         try:
+
                             event = nxt.result()
+
                         except StopAsyncIteration:
+
                             break
+
                         except asyncio.CancelledError:
+
                             client_gone = True
+
                             break
+
                         if event.get("thinking"):
+
                             thinking += event["thinking"]
+
                             yield f"data: {json.dumps({'thinking': event['thinking']})}\n\n"
+
                         if event.get("token"):
+
                             full += event["token"]
+
                             yield f"data: {json.dumps({'token': event['token']})}\n\n"
+
                         if event.get("tool_call"):
+
                             yield f"data: {json.dumps({'tool_call': event['tool_call']}, ensure_ascii=False, default=str)}\n\n"
+
                         if event.get("tool_result"):
+
                             yield f"data: {json.dumps({'tool_result': event['tool_result']}, ensure_ascii=False, default=str)}\n\n"
+
                         if event.get("error"):
+
                             yield f"data: {json.dumps({'error': event['error']})}\n\n"
+
                 except Exception as exc:
+
                     detail = _friendly_llm_error(exc)
+
                     logger.exception("chat_agent_stream_failed", conversation_id=conv_id)
+
                     yield f"data: {json.dumps({'error': detail})}\n\n"
+
                     yield "data: [DONE]\n\n"
+
                     return
+
                 finally:
+
                     hctx = get_harness_context()
+
                     trace = list(hctx.trace) if hctx else []
+
                     if full or thinking or trace:
+
                         try:
+
                             await _save_streamed_assistant_message(
+
                                 conv_id,
+
                                 strip_chart_blocks(full),
+
                                 thinking,
+
                                 harness_trace=trace,
+
                             )
+
                         except Exception as exc:
+
                             logger.warning("chat_stream_persist_failed", conversation_id=conv_id, error=str(exc))
+
                     reset_current_user_id(ctx_token)
+
                     reset_harness_context(harness_token)
 
                 if not client_gone:
+
                     _charts = extract_charts_data(full)
+
                     for _chart in _charts:
+
                         yield f"data: {json.dumps({'chart_data': _chart}, ensure_ascii=False)}\n\n"
+
                     yield "data: [DONE]\n\n"
 
             return StreamingResponse(sse_agent_stream(), media_type="text/event-stream")
 
+        
+
         # Non-streaming path: executor.run()
+
         ctx_token = set_current_user_id(user.id)
+
         harness_token = set_harness_context(
+
             HarnessContext(
+
                 user_id=user.id,
+
                 source="chat",
+
                 source_id=conv_id,
+
                 working_directory=ensure_session_directory(conv_id),
+
             )
+
         )
+
         try:
+
             executor = await build_agent_executor(
+
                 db, agent_model, memory_manager=memory, response_style=response_style,
+
             )
+
             if skill_messages:
+
                 executor.skill_messages = [*executor.skill_messages, *skill_messages]
+
             task_prompt = message
+
             if attachment_context:
+
                 task_prompt = f"{message}\n\n{attachment_context}"
+
             result = await executor.run(
+
                 Task(description=task_prompt),
+
                 memory_session_id=conv_id,
+
                 db=db,
+
             )
+
             assistant_content = str(result.get("output") or "").strip()
+
             token_usage = result.get("token_usage", {})
+
             harness_trace = result.get("harness_trace", [])
+
+            ui_render = result.get("ui_render")
+
         except Exception as exc:
+
             logger.exception("chat_agent_tools_failed", conversation_id=conv_id)
+
             raise HTTPException(status_code=502, detail=_friendly_llm_error(exc)) from exc
+
         finally:
+
             reset_current_user_id(ctx_token)
+
             reset_harness_context(harness_token)
 
         assistant_msg = Message(
+
             id=generate_uuid(),
+
             conversation_id=conv_id,
+
             role=MessageRole.assistant,
+
             content=assistant_content,
+
             token_usage=token_usage,
-            metadata_={"harness_trace": harness_trace} if harness_trace else {},
+
+            metadata_={"harness_trace": harness_trace, "ui_render": ui_render} if harness_trace or ui_render else {},
+
         )
+
         db.add(assistant_msg)
+
         await db.flush()
 
         return {
+
             "message_id": assistant_msg.id,
+
             "content": strip_chart_blocks(assistant_content),
+
             "token_usage": token_usage,
+
             "rag_used": False,
+
             "web_search_used": web_search_used,
+
             "attachments": stored_attachments,
+
             "agent_tools_used": True,
+
             "charts_data": extract_charts_data(assistant_content),
+
             "harness_trace": harness_trace,
+
+            "ui_render": ui_render,
+
         }
 
     if stream:
+
         async def sse_stream():
+
             full = ""
+
             thinking = ""
+
             client_gone = False
+
             try:
+
                 async for event in dialogue.stream(
+
                     session_id=conv_id,
+
                     user_message=message,
+
                     agent_definition=agent_definition,
+
                     extra_system_messages=skill_messages,
+
                     attachment_context=attachment_context or None,
+
                     response_style=response_style,
+
                     db=db,
+
                     user_id=user.id,
+
                 ):
+
                     if await request.is_disconnected():
+
                         client_gone = True
+
                         break
+
                     if event.get("citations"):
+
                         yield f"data: {json.dumps({'citations': event['citations']}, ensure_ascii=False)}\n\n"
+
                     if event.get("thinking"):
+
                         thinking += event["thinking"]
+
                         yield f"data: {json.dumps({'thinking': event['thinking']})}\n\n"
+
                     if event.get("token"):
+
                         full += event["token"]
+
                         yield f"data: {json.dumps({'token': event['token']})}\n\n"
+
             except Exception as exc:
+
                 detail = _friendly_llm_error(exc)
+
                 logger.exception("chat_stream_failed", conversation_id=conv_id)
+
                 yield f"data: {json.dumps({'error': detail})}\n\n"
+
                 yield "data: [DONE]\n\n"
+
                 return
+
             finally:
+
+                _ui_render_args, _ui_patch_args = _extract_ui_calls(full)
+
                 try:
-                    await _save_streamed_assistant_message(conv_id, full, thinking)
+
+                    await _save_streamed_assistant_message(
+
+                        conv_id,
+
+                        _strip_ui_calls(full),
+
+                        thinking,
+
+                        ui_meta=_ui_meta(_ui_render_args, _ui_patch_args),
+
+                    )
+
                 except Exception as exc:
+
                     logger.warning(
+
                         "chat_stream_persist_failed",
+
                         conversation_id=conv_id,
+
                         error=str(exc),
+
                     )
 
             if not client_gone:
+
+                if _ui_render_args:
+
+                    yield f"data: {json.dumps({'tool_call': {'name': 'ui_render', 'args': _ui_render_args}}, ensure_ascii=False)}\n\n"
+
+                    yield f"data: {json.dumps({'tool_result': {'name': 'ui_render', 'content': 'UI 展示完成'}}, ensure_ascii=False)}\n\n"
+
+                if _ui_patch_args:
+
+                    yield f"data: {json.dumps({'tool_call': {'name': 'ui_patch', 'args': _ui_patch_args}}, ensure_ascii=False)}\n\n"
+
+                    yield f"data: {json.dumps({'tool_result': {'name': 'ui_patch', 'content': 'UI 已更新'}}, ensure_ascii=False)}\n\n"
+
                 _charts = extract_charts_data(full)
+
                 for _chart in _charts:
+
                     yield f"data: {json.dumps({'chart_data': _chart}, ensure_ascii=False)}\n\n"
+
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_stream(), media_type="text/event-stream")
 
     try:
+
         result = await dialogue.chat(
+
             session_id=conv_id,
+
             user_message=message,
+
             agent_definition=agent_definition,
+
             extra_system_messages=skill_messages,
+
             attachment_context=attachment_context or None,
+
             response_style=response_style,
+
             db=db,
+
             user_id=user.id,
+
         )
+
     except Exception as exc:
+
         logger.exception("chat_failed", conversation_id=conv_id)
+
         raise HTTPException(status_code=502, detail=_friendly_llm_error(exc)) from exc
 
     thinking = result.get("thinking")
+
     assistant_msg = Message(
+
         id=generate_uuid(),
+
         conversation_id=conv_id,
+
         role=MessageRole.assistant,
+
         content=result["message"],
+
         token_usage=result.get("token_usage"),
+
         metadata_={
+
             **({"thinking": thinking} if thinking else {}),
+
             **({"citations": __import__("app.knowledge.quality", fromlist=["get_citations"]).get_citations()} if __import__("app.knowledge.quality", fromlist=["get_citations"]).get_citations() else {}),
+
         },
+
     )
+
     db.add(assistant_msg)
+
     await db.flush()
 
     return {
-        "message_id": assistant_msg.id,
-        "content": assistant_msg.content,
-        "thinking": thinking,
-        "token_usage": result.get("token_usage"),
-        "rag_used": result.get("rag_used", False),
-        "web_search_used": web_search_used,
-        "attachments": stored_attachments,
-        "charts_data": extract_charts_data(result["message"]),
-    }
 
+        "message_id": assistant_msg.id,
+
+        "content": assistant_msg.content,
+
+        "thinking": thinking,
+
+        "token_usage": result.get("token_usage"),
+
+        "rag_used": result.get("rag_used", False),
+
+        "web_search_used": web_search_used,
+
+        "attachments": stored_attachments,
+
+        "charts_data": extract_charts_data(result["message"]),
+
+    }
 
 @router.post("/conversations/{conv_id}/save-as-skill")
+
 async def save_conversation_as_skill(
+
     conv_id: str,
+
     payload: SaveAsSkillRequest,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     try:
+
         skill = await export_conversation_to_skill(db, conv, user.id, title=payload.title)
+
     except Exception as exc:
+
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return {"skill_id": skill.id, "slug": skill.slug, "display_name": skill.display_name}
 
-
 @router.post("/conversations/{conv_id}/save-to-knowledge")
+
 async def save_conversation_to_knowledge(
+
     conv_id: str,
+
     payload: SaveToKnowledgeRequest,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     try:
+
         kb, doc = await export_conversation_to_knowledge(
+
             db, conv, user.id, kb_id=payload.kb_id, kb_name=payload.kb_name,
+
         )
+
     except ValueError as exc:
+
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     except Exception as exc:
+
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return {
+
         "knowledge_base_id": kb.id,
+
         "knowledge_base_name": kb.name,
+
         "document_id": doc.id,
+
         "filename": doc.filename,
+
     }
 
-
 @router.post("/conversations/{conv_id}/suggest-deposit", response_model=DepositSuggestResponse)
+
 async def suggest_conversation_deposit(
+
     conv_id: str,
+
     payload: DepositSuggestRequest,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     lang = payload.lang if payload.lang in ("zh", "en") else "zh"
+
     try:
+
         raw = await analyze_conversation_deposit(db, conv, user.id, lang=lang)
+
     except ValueError as exc:
+
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     except Exception as exc:
+
         logger.exception("deposit_suggest_failed", conversation_id=conv_id)
+
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     draft_preview = None
+
     if raw.get("draft"):
+
         d = raw["draft"]
+
         draft_preview = DepositDraftPreview(
+
             skill_title=d.get("skill_title"),
+
             knowledge_title=d.get("knowledge_title"),
+
             agent_name=d.get("agent_name"),
+
             employee_name=d.get("employee_name"),
+
             employee_title=d.get("employee_title"),
+
             employee_description=d.get("employee_description"),
+
             tasks=[DepositTaskPreview(**t) for t in d.get("tasks") or []],
+
         )
 
     suggestions = [
+
         DepositSuggestionItem(**s) for s in raw.get("suggestions") or []
+
         if isinstance(s, dict) and s.get("type")
+
     ]
+
     return DepositSuggestResponse(
+
         worth_deposit=bool(raw.get("worth_deposit")),
+
         draft_id=raw.get("draft_id"),
+
         suggestions=suggestions,
+
         draft=draft_preview,
+
     )
 
-
 @router.post("/conversations/{conv_id}/deposit/confirm", response_model=DepositConfirmResponse)
+
 async def confirm_conversation_deposit_route(
+
     conv_id: str,
+
     payload: DepositConfirmRequest,
+
     db: AsyncSession = Depends(get_db),
+
     user: User = Depends(get_current_user),
+
 ):
+
     conv = await _get_user_conversation(db, conv_id, user)
+
     allowed = {"skill", "knowledge", "agent", "employee"}
+
     types = [t for t in payload.types if t in allowed]
+
     if not types:
+
         raise HTTPException(status_code=400, detail="At least one valid deposit type required")
+
     try:
+
         result = await execute_deposit_confirm(
+
             db,
+
             conv,
+
             user.id,
+
             draft_id=payload.draft_id,
+
             types=types,  # type: ignore[arg-type]
+
             activate_employee=payload.activate_employee,
+
             kb_id=payload.kb_id,
+
             kb_name=payload.kb_name,
+
             skill_title=payload.skill_title,
+
         )
+
     except ValueError as exc:
+
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     except Exception as exc:
+
         logger.exception("deposit_confirm_failed", conversation_id=conv_id)
+
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return DepositConfirmResponse(**result)
 
-
 @router.post("/quick")
+
 async def quick_chat(payload: ChatRequest):
+
     memory = MemoryManager()
+
     session_id = generate_uuid()
+
     dialogue = DialogueManager(memory_manager=memory)
 
     if payload.stream:
+
         async def sse_stream():
+
             async for token in dialogue.stream(
+
                 session_id=session_id,
+
                 user_message=payload.message,
+
             ):
+
                 yield f"data: {json.dumps({'token': token})}\n\n"
+
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_stream(), media_type="text/event-stream")
 
     result = await dialogue.chat(session_id=session_id, user_message=payload.message)
+
     return {"content": strip_chart_blocks(result["message"]), "token_usage": result.get("token_usage")}
+

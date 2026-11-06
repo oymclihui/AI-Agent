@@ -3,6 +3,7 @@ from app.core.tools.builtin.web_search import WebSearchTool
 from app.core.tools.builtin.http_request import HttpRequestTool
 from app.core.tools.builtin.datetime_tool import DatetimeTool
 from app.core.tools.builtin.create_presentation import CreatePresentationTool
+from app.core.tools.builtin.create_html import CreateHtmlTool
 
 __all__ = [
     "CalculatorTool",
@@ -10,4 +11,5 @@ __all__ = [
     "HttpRequestTool",
     "DatetimeTool",
     "CreatePresentationTool",
+    "CreateHtmlTool",
 ]

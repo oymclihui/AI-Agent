@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Plus, BookOpen, Trash2, RefreshCw, Pencil, Loader2, CloudDownload, Search,
 } from "lucide-react";
-import { skillsApi } from "@/lib/api";
+import { dataSourcesApi, skillsApi, toolsApi } from "@/lib/api";
 import { useLangStore } from "@/lib/langStore";
 import { useAuthStore } from "@/lib/authStore";
 import { canDeleteAgentsOrSkills } from "@/lib/permissions";
@@ -24,6 +24,7 @@ interface Skill {
   auto_invoke: boolean;
   version: number;
   tags: string[];
+  metadata?: { category?: string };
 }
 
 const EMPTY_FORM = {
@@ -81,6 +82,122 @@ const SKILL_SCENES: Array<{
 
 const STATUS_FILTERS: StatusFilter[] = ["all", "active", "draft", "archived"];
 
+type EditorTab = "method" | "steps" | "style" | "memory";
+interface OperatorProp { type?: string; description?: string }
+interface OperatorInfo {
+  name: string;
+  display_name?: string;
+  description: string;
+  parameters_schema?: { properties?: Record<string, OperatorProp> };
+}
+interface StepDraft {
+  key: string;
+  kind: "tool" | "prompt";
+  tool: string;
+  params: Record<string, string>;
+  prompt: string;
+}
+interface AnalysisDraft {
+  enabled: boolean;
+  keywords: string;
+  persona: string;
+  formatMode: string;
+  grounding: string;
+  steps: StepDraft[];
+}
+interface MemoryItem { id: string; question: string; source?: string; use_count?: number }
+interface SourceOption { id: string; name: string }
+
+const EMPTY_ANALYSIS: AnalysisDraft = {
+  enabled: false, keywords: "", persona: "", formatMode: "analysis_v2", grounding: "", steps: [],
+};
+
+function stepKey() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function analysisFromMeta(meta: Record<string, unknown> | null | undefined): AnalysisDraft {
+  const raw = meta || {};
+  const trigger = (raw.trigger || {}) as { keywords?: string[] };
+  const style = (raw.answer_style || {}) as { persona?: string; format_mode?: string; grounding_extra?: string };
+  const steps = Array.isArray(raw.steps) ? raw.steps : [];
+  return {
+    enabled: raw.category === "analysis",
+    keywords: (trigger.keywords || []).join(", "),
+    persona: style.persona || "",
+    formatMode: style.format_mode || "analysis_v2",
+    grounding: style.grounding_extra || "",
+    steps: steps.filter((item) => item && typeof item === "object").map((step) => {
+      const row = step as { tool?: string; prompt?: string; params?: Record<string, unknown> };
+      if (row.prompt && !row.tool) {
+        return { key: stepKey(), kind: "prompt" as const, tool: "", params: {}, prompt: String(row.prompt) };
+      }
+      const params: Record<string, string> = {};
+      Object.entries(row.params || {}).forEach(([key, value]) => {
+        params[key] = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+      });
+      return { key: stepKey(), kind: "tool" as const, tool: row.tool || "metric_query", params, prompt: "" };
+    }),
+  };
+}
+
+function composeMetadata(base: Record<string, unknown>, draft: AnalysisDraft, operators: OperatorInfo[]) {
+  const steps = draft.steps.map((step) => {
+    if (step.kind === "prompt") {
+      const prompt = step.prompt.trim();
+      return prompt ? { prompt } : null;
+    }
+    const props = operators.find((op) => op.name === step.tool)?.parameters_schema?.properties || {};
+    const params: Record<string, unknown> = {};
+    Object.entries(step.params).forEach(([key, raw]) => {
+      const text = raw.trim();
+      if (!text) return;
+      const kind = props[key]?.type;
+      if (kind === "array") params[key] = text.split(/[,，]/).map((part) => part.trim()).filter(Boolean);
+      else if (kind === "integer") params[key] = Number.parseInt(text, 10);
+      else if (kind === "number") params[key] = Number(text);
+      else params[key] = text;
+    });
+    return step.tool ? { tool: step.tool, params } : null;
+  }).filter(Boolean);
+  return {
+    ...base,
+    category: "analysis",
+    trigger: {
+      ...((typeof base.trigger === "object" && base.trigger) ? base.trigger as object : {}),
+      keywords: draft.keywords.split(/[,，]/).map((part) => part.trim()).filter(Boolean),
+    },
+    answer_style: {
+      persona: draft.persona,
+      format_mode: draft.formatMode || "analysis_v2",
+      grounding_extra: draft.grounding,
+    },
+    steps,
+  };
+}
+
+function SkillBoard() {
+  const { lang } = useLangStore();
+  const [rows, setRows] = useState<Array<{ skill_id: string; display_name: string; asks: number; success_rate: number; scope: string }>>([]);
+  useEffect(() => {
+    skillsApi.leaderboard().then(({ data }) => setRows(data.items || [])).catch(() => setRows([]));
+  }, []);
+  if (!rows.length) return null;
+  return (
+    <section className="mb-4 rounded-xl border theme-border theme-surface p-4">
+      <h2 className="mb-2 text-sm font-medium">{lang === "zh" ? "技能评测榜（近 30 天问数）" : "Skill board, last 30 days"}</h2>
+      <div className="space-y-1 text-xs">
+        {rows.map((row) => (
+          <div key={row.skill_id} className="flex justify-between gap-3">
+            <span>{row.display_name}{row.scope === "org" ? (lang === "zh" ? " · 组织共享" : " · org") : ""}</span>
+            <span className="theme-muted">{row.asks} · {Math.round(row.success_rate * 100)}%</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function SkillsPage() {
   const { lang } = useLangStore();
   const user = useAuthStore((s) => s.user);
@@ -108,6 +225,16 @@ export default function SkillsPage() {
   const [libSyncing, setLibSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [analysis, setAnalysis] = useState<AnalysisDraft>(EMPTY_ANALYSIS);
+  const [metaBase, setMetaBase] = useState<Record<string, unknown>>({});
+  const [editorTab, setEditorTab] = useState<EditorTab>("method");
+  const [operators, setOperators] = useState<OperatorInfo[]>([]);
+  const [sources, setSources] = useState<SourceOption[]>([]);
+  const [trialSource, setTrialSource] = useState("");
+  const [trialQuestions, setTrialQuestions] = useState("");
+  const [trialResult, setTrialResult] = useState("");
+  const [examples, setExamples] = useState<MemoryItem[]>([]);
+  const [trialing, setTrialing] = useState(false);
 
   const load = async () => {
     try {
@@ -126,9 +253,32 @@ export default function SkillsPage() {
     if (showLibrary) loadLibrary(libSource, libCategory, libQuery);
   }, [lang]);
 
+  useEffect(() => {
+    if (!showModal || !analysis.enabled) return;
+    if (operators.length === 0) {
+      toolsApi.analysis().then(({ data }) => setOperators(Array.isArray(data) ? data : [])).catch(() => {});
+    }
+    if (sources.length === 0) {
+      dataSourcesApi.list().then((res) => {
+        const rows = (res.data?.items || res.data || []) as SourceOption[];
+        setSources(Array.isArray(rows) ? rows : []);
+        setTrialSource((current) => current || rows[0]?.id || "");
+      }).catch(() => {});
+    }
+  }, [showModal, analysis.enabled, operators.length, sources.length]);
+
+  const resetAnalysis = () => {
+    setAnalysis(EMPTY_ANALYSIS);
+    setMetaBase({});
+    setEditorTab("method");
+    setTrialResult("");
+    setExamples([]);
+  };
+
   const openCreate = () => {
     setEditingId(null);
     setForm(EMPTY_FORM);
+    resetAnalysis();
     setShowModal(true);
   };
 
@@ -136,6 +286,9 @@ export default function SkillsPage() {
     setEditingId(skill.id);
     try {
       const { data } = await skillsApi.get(skill.id, { raw: true });
+      const meta = (data.metadata || {}) as Record<string, unknown>;
+      setMetaBase(meta);
+      setAnalysis(analysisFromMeta(meta));
       setForm({
         slug: data.slug,
         display_name: data.display_name,
@@ -146,6 +299,7 @@ export default function SkillsPage() {
         tags: (data.tags ?? []).join(", "),
       });
     } catch {
+      resetAnalysis();
       setForm({
         slug: skill.slug,
         display_name: skill.display_name,
@@ -162,7 +316,7 @@ export default function SkillsPage() {
   const save = async () => {
     if (!form.display_name.trim() || !form.description.trim()) return;
     setSaving(true);
-    const payload = {
+    const payload: Record<string, unknown> = {
       slug: form.slug.trim() || undefined,
       display_name: form.display_name.trim(),
       description: form.description.trim(),
@@ -171,6 +325,14 @@ export default function SkillsPage() {
       auto_invoke: form.auto_invoke,
       tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
     };
+    if (analysis.enabled) {
+      payload.metadata = composeMetadata(metaBase, analysis, operators);
+      payload.tools_required = analysis.steps.filter((step) => step.kind === "tool" && step.tool).map((step) => step.tool);
+    } else if (metaBase.category === "analysis") {
+      const next = { ...metaBase };
+      delete next.category;
+      payload.metadata = next;
+    }
     try {
       if (editingId) {
         await skillsApi.update(editingId, payload);
@@ -186,6 +348,59 @@ export default function SkillsPage() {
       toast.error(detail ?? s.saveFailed[lang]);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const loadExamples = async (skillId: string) => {
+    try {
+      const { data } = await skillsApi.examples(skillId);
+      setExamples((data.items || []) as MemoryItem[]);
+    } catch {
+      setExamples([]);
+    }
+  };
+
+  const runTrial = async (kind: "dry" | "regress" | "ab") => {
+    if (!editingId) {
+      toast.error(lang === "zh" ? "请先保存技能，再试运行" : "Save the skill before a trial");
+      return;
+    }
+    if (!trialSource) {
+      toast.error(lang === "zh" ? "请选择数据源" : "Choose a data source");
+      return;
+    }
+    const questions = trialQuestions.split("\n").map((line) => line.trim()).filter(Boolean);
+    if (kind === "dry" && questions.length === 0) {
+      toast.error(lang === "zh" ? "请填写至少一条样例问题" : "Add at least one sample question");
+      return;
+    }
+    setTrialing(true);
+    try {
+      if (kind === "dry") {
+        const { data } = await skillsApi.dryRun(editingId, {
+          data_source_id: trialSource,
+          questions,
+          include_answer: false,
+          metadata: composeMetadata(metaBase, analysis, operators),
+        });
+        const lines = ((data.items || []) as { ok?: boolean; question?: string; error?: string; facts?: unknown[] }[])
+          .map((item) => `${item.ok ? "OK" : "FAIL"} ${item.question || ""} ${item.error || ""} facts:${(item.facts || []).length}`);
+        setTrialResult(lines.join("\n") || (lang === "zh" ? "无结果" : "No result"));
+      } else if (kind === "regress") {
+        const { data } = await skillsApi.regress(editingId, { data_source_id: trialSource });
+        setTrialResult(data.warning || (lang === "zh"
+          ? `回归 ${data.passed}/${data.total} 通过`
+          : `Regression ${data.passed}/${data.total} passed`));
+      } else {
+        const { data } = await skillsApi.compareVersions(editingId, { data_source_id: trialSource });
+        if (!data.ready) setTrialResult(data.reason || "");
+        else setTrialResult(`${data.note || ""} ${data.decision || ""}`);
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || (lang === "zh" ? "试运行失败" : "Trial failed"));
+    } finally {
+      setTrialing(false);
     }
   };
 
@@ -351,6 +566,7 @@ export default function SkillsPage() {
 
   return (
     <div className="agents-hub">
+      <SkillBoard />
       <div className="agents-hub-header">
         <div>
           <h1>{s.title[lang]}</h1>
@@ -469,6 +685,9 @@ export default function SkillsPage() {
               <p className="agents-card-desc">{skill.description}</p>
               <div className="agents-card-tags">
                 <span className="agents-tag">{s.version[lang]} v{skill.version}</span>
+                {skill.metadata?.category === "analysis" && (
+                  <span className="agents-tag">{lang === "zh" ? "分析技能" : "Analysis"}</span>
+                )}
                 {(skill.tags ?? []).map((tag) => (
                   <span key={tag} className="agents-tag">{tag}</span>
                 ))}
@@ -675,16 +894,234 @@ export default function SkillsPage() {
                   onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 />
               </div>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={analysis.enabled}
+                  onChange={(e) => setAnalysis((prev) => ({ ...prev, enabled: e.target.checked }))}
+                />
+                {lang === "zh" ? "分析技能（方法论、步骤、结论规范、记忆库）" : "Analysis skill"}
+              </label>
+              {analysis.enabled && (
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    ["method", lang === "zh" ? "方法论" : "Method"],
+                    ["steps", lang === "zh" ? "步骤编排" : "Steps"],
+                    ["style", lang === "zh" ? "结论规范" : "Answer style"],
+                    ["memory", lang === "zh" ? "记忆库" : "Memory"],
+                  ] as [EditorTab, string][]).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        setEditorTab(id);
+                        if (id === "memory" && editingId) void loadExamples(editingId);
+                      }}
+                      className={`rounded-full px-3 py-1 text-xs ${editorTab === id ? "bg-blue-600 text-white" : "bg-[#1a1a2e] text-slate-300"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(!analysis.enabled || editorTab === "method") && (
               <div>
                 <label className="mb-1 block text-xs text-slate-400">{s.instructions[lang]}</label>
                 <textarea
                   className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
-                  rows={12}
+                  rows={analysis.enabled ? 8 : 12}
                   placeholder={s.instructionsHint[lang]}
                   value={form.instructions_md}
                   onChange={(e) => setForm((f) => ({ ...f, instructions_md: e.target.value }))}
                 />
               </div>
+              )}
+              {analysis.enabled && editorTab === "steps" && (
+                <div className="space-y-3">
+                  {analysis.steps.map((step, index) => {
+                    const props = operators.find((op) => op.name === step.tool)?.parameters_schema?.properties || {};
+                    return (
+                      <div key={step.key} className="rounded-lg border border-[#2d2d4e] p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-xs text-slate-400">{index + 1}</span>
+                          <button
+                            type="button"
+                            className="text-xs text-red-400"
+                            onClick={() => setAnalysis((prev) => ({ ...prev, steps: prev.steps.filter((item) => item.key !== step.key) }))}
+                          >
+                            {lang === "zh" ? "删除" : "Remove"}
+                          </button>
+                        </div>
+                        {step.kind === "prompt" ? (
+                          <textarea
+                            className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                            rows={2}
+                            value={step.prompt}
+                            placeholder={lang === "zh" ? "这一步要模型解释什么" : "What the model should explain"}
+                            onChange={(e) => setAnalysis((prev) => ({
+                              ...prev,
+                              steps: prev.steps.map((item) => item.key === step.key ? { ...item, prompt: e.target.value } : item),
+                            }))}
+                          />
+                        ) : (
+                          <div className="space-y-2">
+                            <select
+                              className="w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                              value={step.tool}
+                              onChange={(e) => setAnalysis((prev) => ({
+                                ...prev,
+                                steps: prev.steps.map((item) => item.key === step.key ? { ...item, tool: e.target.value, params: {} } : item),
+                              }))}
+                            >
+                              {(operators.length ? operators : [{ name: step.tool || "metric_query", description: "" }]).map((op) => (
+                                <option key={op.name} value={op.name}>{op.display_name || op.name}</option>
+                              ))}
+                            </select>
+                            {Object.entries(props).map(([key, spec]) => (
+                              <label key={key} className="block text-xs text-slate-400">
+                                {key}
+                                <input
+                                  className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                                  value={step.params[key] || ""}
+                                  placeholder={spec.description || ""}
+                                  onChange={(e) => setAnalysis((prev) => ({
+                                    ...prev,
+                                    steps: prev.steps.map((item) => item.key === step.key
+                                      ? { ...item, params: { ...item.params, [key]: e.target.value } }
+                                      : item),
+                                  }))}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="rounded-lg bg-[#1a1a2e] px-3 py-1 text-xs text-slate-200"
+                      onClick={() => setAnalysis((prev) => ({
+                        ...prev,
+                        steps: [...prev.steps, { key: stepKey(), kind: "tool", tool: operators[0]?.name || "metric_query", params: {}, prompt: "" }],
+                      }))}
+                    >
+                      {lang === "zh" ? "加算子" : "Add operator"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg bg-[#1a1a2e] px-3 py-1 text-xs text-slate-200"
+                      onClick={() => setAnalysis((prev) => ({
+                        ...prev,
+                        steps: [...prev.steps, { key: stepKey(), kind: "prompt", tool: "", params: {}, prompt: "" }],
+                      }))}
+                    >
+                      {lang === "zh" ? "加结论提示" : "Add prompt"}
+                    </button>
+                  </div>
+                  <div className="rounded-lg border border-[#2d2d4e] p-3">
+                    <p className="mb-2 text-xs text-slate-400">{lang === "zh" ? "试运行（先保存再跑当前步骤）" : "Dry run the saved skill with these steps"}</p>
+                    <select
+                      className="mb-2 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      value={trialSource}
+                      onChange={(e) => setTrialSource(e.target.value)}
+                    >
+                      <option value="">{lang === "zh" ? "选择数据源" : "Data source"}</option>
+                      {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+                    </select>
+                    <textarea
+                      className="mb-2 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      rows={3}
+                      placeholder={lang === "zh" ? "每行一个样例问题" : "One sample question per line"}
+                      value={trialQuestions}
+                      onChange={(e) => setTrialQuestions(e.target.value)}
+                    />
+                    <div className="flex gap-2">
+                      <button type="button" disabled={trialing} onClick={() => runTrial("dry")} className="rounded-lg bg-blue-600 px-3 py-1 text-xs text-white disabled:opacity-40">
+                        {lang === "zh" ? "试运行" : "Dry run"}
+                      </button>
+                      <button type="button" disabled={trialing} onClick={() => runTrial("regress")} className="rounded-lg bg-[#1a1a2e] px-3 py-1 text-xs text-slate-200 disabled:opacity-40">
+                        {lang === "zh" ? "金标回归" : "Regression"}
+                      </button>
+                      <button type="button" disabled={trialing} onClick={() => runTrial("ab")} className="rounded-lg bg-[#1a1a2e] px-3 py-1 text-xs text-slate-200 disabled:opacity-40">
+                        {lang === "zh" ? "对比上一版" : "Compare"}
+                      </button>
+                      <button type="button" disabled={trialing} onClick={async () => {
+                        if (!editingId) return;
+                        try { await skillsApi.submitReview(editingId); toast.success(lang === "zh" ? "已提交审批" : "Submitted"); }
+                        catch { toast.error(lang === "zh" ? "提交失败" : "Submit failed"); }
+                      }} className="rounded-lg bg-[#1a1a2e] px-3 py-1 text-xs text-slate-200">
+                        {lang === "zh" ? "提交审批" : "Submit"}
+                      </button>
+                    </div>
+                    {trialResult && <pre className="mt-2 whitespace-pre-wrap text-xs text-slate-300">{trialResult}</pre>}
+                  </div>
+                </div>
+              )}
+              {analysis.enabled && editorTab === "style" && (
+                <div className="space-y-2">
+                  <label className="block text-xs text-slate-400">
+                    {lang === "zh" ? "触发词，逗号分隔" : "Trigger keywords"}
+                    <input
+                      className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      value={analysis.keywords}
+                      onChange={(e) => setAnalysis((prev) => ({ ...prev, keywords: e.target.value }))}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    {lang === "zh" ? "结论人设" : "Persona"}
+                    <textarea
+                      className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      rows={3}
+                      value={analysis.persona}
+                      onChange={(e) => setAnalysis((prev) => ({ ...prev, persona: e.target.value }))}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    {lang === "zh" ? "排版" : "Format"}
+                    <input
+                      className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      value={analysis.formatMode}
+                      onChange={(e) => setAnalysis((prev) => ({ ...prev, formatMode: e.target.value }))}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    {lang === "zh" ? "口径约束" : "Grounding"}
+                    <textarea
+                      className="mt-1 w-full rounded-lg border border-[#2d2d4e] bg-[#0d0d1a] px-3 py-2 text-sm text-white"
+                      rows={3}
+                      value={analysis.grounding}
+                      onChange={(e) => setAnalysis((prev) => ({ ...prev, grounding: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              )}
+              {analysis.enabled && editorTab === "memory" && (
+                <div className="space-y-2">
+                  {!editingId && <p className="text-xs text-slate-400">{lang === "zh" ? "保存后才能管理记忆。" : "Save the skill to manage memory."}</p>}
+                  {examples.length === 0 && editingId && <p className="text-xs text-slate-400">{lang === "zh" ? "还没有沉淀示例。" : "No examples yet."}</p>}
+                  {examples.map((item) => (
+                    <div key={item.id} className="flex items-start justify-between gap-2 rounded-lg border border-[#2d2d4e] p-2">
+                      <div>
+                        <p className="text-sm text-white">{item.question}</p>
+                        <p className="text-[11px] text-slate-400">{item.source || ""} · {item.use_count || 0}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-xs text-red-400"
+                        onClick={async () => {
+                          if (!editingId) return;
+                          await skillsApi.deleteExample(editingId, item.id);
+                          void loadExamples(editingId);
+                        }}
+                      >
+                        {lang === "zh" ? "删除" : "Delete"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs text-slate-400">{c.status[lang]}</label>

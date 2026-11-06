@@ -43,6 +43,9 @@ def ambiguous_metrics(question: str, semantic_model: dict[str, Any] | None) -> l
     - 若多个匹配项互为子串（如"毛利" ⊂ "毛利率"），只保留最具体（最长）的那个。
     - 不做激进的前缀模糊匹配，避免"销售"这类通用词误命中
       "销售金额/销售成本/销售数量"而误触发澄清。
+    - 用户以列表方式明确点名多个指标（指标名之间只隔「、/和/与/及/逗号」等
+      连接符，如「展示销售、毛利、优惠、折扣」「对比毛利和优惠」）时，
+      意图就是全都要，不构成歧义。
     """
     names = _metric_names(semantic_model)
     if len(names) < 2:
@@ -50,7 +53,28 @@ def ambiguous_metrics(question: str, semantic_model: dict[str, Any] | None) -> l
     full = [name for name in names if name in question]
     if len(full) > 1:
         full = [n for n in full if not any(n != m and n in m for m in full)]
+    if len(full) >= 2 and _listed_together(question, full):
+        return []
     return full
+
+
+# 指标名之间允许出现的连接符（仅空白与顿号/逗号/和与及）
+_CONNECTOR_BETWEEN = re.compile(r"^[\s、，,和与及]*$")
+
+
+def _listed_together(question: str, names: list[str]) -> bool:
+    """判断多个指标名是否以列表形式相邻出现（中间只隔连接符）。"""
+    spots: list[tuple[int, int]] = []
+    for n in names:
+        i = question.find(n)
+        if i < 0:
+            return False
+        spots.append((i, i + len(n)))
+    spots.sort()
+    for (_, e1), (s2, _) in zip(spots, spots[1:]):
+        if _CONNECTOR_BETWEEN.match(question[e1:s2] or ""):
+            return True
+    return False
 
 
 def _metric_names(model: dict[str, Any] | None) -> list[str]:

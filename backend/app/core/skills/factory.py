@@ -18,6 +18,13 @@ async def build_agent_executor(
 ) -> AgentExecutor:
     tool_names = [t.get("tool_name") for t in (agent_model.tools_config or [])]
     registry = ToolRegistry.get_instance()
+    # ui_render 对所有 agent 可用（对标 Harness 前端组件自渲染）
+    if "ui_render" not in tool_names and registry.get("ui_render"):
+        tool_names.append("ui_render")
+    if "ui_patch" not in tool_names and registry.get("ui_patch"):
+        tool_names.append("ui_patch")
+    if "create_html" not in tool_names and registry.get("create_html"):
+        tool_names.append("create_html")
     tools = registry.get_tools_for_agent(tool_names)
 
     definition = AgentDefinition(

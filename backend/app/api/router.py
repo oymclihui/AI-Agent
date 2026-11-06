@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import agents, workflows, chat, knowledge, models, tools, orchestrator, skills, employees, dashboard, artifacts, auth, desktop_automation, harness, organization, integrations, database, setup, group_chat, data_sources, excel_parser, system, ml_evolution, ds_growth, ds_distill, ds_factory, ds_eval, ds_replay, socratic_eval, ds_dashboard
+from app.api import agents, workflows, chat, knowledge, models, tools, orchestrator, skills, employees, dashboard, artifacts, auth, desktop_automation, harness, organization, integrations, database, setup, group_chat, data_sources, excel_parser, system, ml_evolution, ds_growth, ds_distill, ds_factory, ds_eval, ds_replay, socratic_eval, ds_dashboard, analysis, studio, studio_p3, studio_p4, studio_p6, train_center, tasks_api, config_api, health_api, analysis_studio
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -32,7 +32,17 @@ api_router.include_router(ds_growth.router)
 api_router.include_router(ds_distill.router)
 api_router.include_router(ds_factory.router)
 api_router.include_router(ds_eval.router)
+api_router.include_router(train_center.router)
 api_router.include_router(ds_replay.router)
 api_router.include_router(socratic_eval.router)
 api_router.include_router(ds_dashboard.router)
+api_router.include_router(analysis.router)
+api_router.include_router(studio.router)
+api_router.include_router(studio_p3.router)
+api_router.include_router(studio_p4.router)
+api_router.include_router(studio_p6.router)
+api_router.include_router(tasks_api.router)
+api_router.include_router(config_api.router)
+api_router.include_router(health_api.router)
+api_router.include_router(analysis_studio.router)
 api_router.include_router(system.router)
